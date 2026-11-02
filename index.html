@@ -50,11 +50,11 @@
 <header>
   <p class="sup">SUNAT · Intendencia de Aduana de Tarapoto · Equipo de Gestión de Riesgo</p>
   <h1 id="titulo">Circunscripción territorial de la Intendencia de Aduana de Tarapoto</h1>
-  <p class="sub" id="sub">Mapa 1 de 3 · A0 vertical (841 × 1189 mm) · Escala 1:625 000 · Noviembre 2026</p>
+  <p class="sub" id="sub">A0 vertical (841 × 1189 mm) · Escala 1:625 000 · Noviembre 2026</p>
   <div class="pestanas" role="tablist" aria-label="Elegir mapa">
-    <button class="pestana" role="tab" data-mapa="1" aria-selected="true">Mapa 1<small>Circunscripción</small></button>
-    <button class="pestana" role="tab" data-mapa="2" aria-selected="false">Mapa 2<small>Corredores ZTE → ZTC</small></button>
-    <button class="pestana" role="tab" data-mapa="3" aria-selected="false">Mapa 3<small>Frontera norte</small></button>
+    <button class="pestana" role="tab" data-mapa="1" aria-selected="true">Circunscripción<small>IA Tarapoto</small></button>
+    <button class="pestana" role="tab" data-mapa="2" aria-selected="false">Corredores<small>ZTE → ZTC</small></button>
+    <button class="pestana" role="tab" data-mapa="3" aria-selected="false">Frontera norte<small>Red fluvial</small></button>
   </div>
   <div class="acciones">
     <a class="btn principal" id="pdf" href="descargas/Mapa1_Circunscripcion_IA_Tarapoto.pdf" download>Descargar PDF <small id="pdf-tam">A0 vectorial para plotter</small></a>
@@ -63,26 +63,26 @@
 </header>
 
 <div id="visor" role="img" aria-label="Visor del mapa seleccionado"></div>
-<noscript><p class="ayuda">El visor necesita JavaScript. Puedes descargar los PDF: <a href="descargas/Mapa1_Circunscripcion_IA_Tarapoto.pdf">mapa 1</a>, <a href="descargas/Mapa2_Corredores_ZTE_ZTC.pdf">mapa 2</a>, <a href="descargas/Mapa3_Frontera_Norte_Red_Fluvial.pdf">mapa 3</a>.</p></noscript>
+<noscript><p class="ayuda">El visor necesita JavaScript. Puedes descargar los PDF: <a href="descargas/Mapa1_Circunscripcion_IA_Tarapoto.pdf">circunscripción</a>, <a href="descargas/Mapa2_Corredores_ZTE_ZTC.pdf">corredores</a>, <a href="descargas/Mapa3_Frontera_Norte_Red_Fluvial.pdf">frontera norte</a>.</p></noscript>
 <p class="ayuda">Para acercar, pellizca con dos dedos o usa la rueda del ratón; doble toque o doble clic también amplía. El recuadro de abajo a la derecha muestra qué parte del mapa estás viendo.</p>
 <footer>Fuentes: INEI 2019 (límites y capitales distritales) · R.S. N.° 000980 y modificatorias (circunscripciones) · Ley N.° 27037 (ZTE) · © colaboradores de OpenStreetMap (ODbL) · OSRM (rutas) · AWS Terrain Tiles. Visor: OpenSeadragon.</footer>
 
-<script src="js/openseadragon.min.js?v=20261102d"></script>
+<script src="js/openseadragon.min.js?v=20261102e"></script>
 <script>
-  var V = "20261102d";
+  var V = "20261102e";
   var MAPAS = {
     "1": { titulo: "Circunscripción territorial de la Intendencia de Aduana de Tarapoto",
-           sub: "Mapa 1 de 3 · A0 vertical (841 × 1189 mm) · Escala 1:625 000 · Noviembre 2026",
+           sub: "A0 vertical (841 × 1189 mm) · Escala 1:625 000 · Noviembre 2026",
            tiles: "tiles/mapa1.dzi", pdf: "descargas/Mapa1_Circunscripcion_IA_Tarapoto.pdf", pdfTam: "47 MB",
            vista: "descargas/Mapa1_Circunscripcion_IA_Tarapoto_vista.png", vistaTam: "14 MB" },
     "2": { titulo: "Corredores de salida de mercancías de la ZTE hacia la ZTC",
-           sub: "Mapa 2 de 3 · A0 vertical (841 × 1189 mm) · Escala 1:1 000 000 · Noviembre 2026",
-           tiles: "tiles/mapa2.dzi", pdf: "descargas/Mapa2_Corredores_ZTE_ZTC.pdf", pdfTam: "79 MB",
-           vista: "descargas/Mapa2_Corredores_ZTE_ZTC_vista.png", vistaTam: "13 MB" },
+           sub: "A0 vertical (841 × 1189 mm) · Escala 1:1 000 000 · Noviembre 2026",
+           tiles: "tiles/mapa2.dzi", pdf: "descargas/Mapa2_Corredores_ZTE_ZTC.pdf", pdfTam: "77 MB",
+           vista: "descargas/Mapa2_Corredores_ZTE_ZTC_vista.png", vistaTam: "15 MB" },
     "3": { titulo: "Frontera norte y red fluvial: de Condorcanqui al Datem del Marañón",
-           sub: "Mapa 3 de 3 · A0 vertical (841 × 1189 mm) · Escala 1:550 000 · Noviembre 2026",
-           tiles: "tiles/mapa3.dzi", pdf: "descargas/Mapa3_Frontera_Norte_Red_Fluvial.pdf", pdfTam: "41 MB",
-           vista: "descargas/Mapa3_Frontera_Norte_Red_Fluvial_vista.png", vistaTam: "11 MB" }
+           sub: "A0 vertical (841 × 1189 mm) · Escala 1:550 000 · Noviembre 2026",
+           tiles: "tiles/mapa3.dzi", pdf: "descargas/Mapa3_Frontera_Norte_Red_Fluvial.pdf", pdfTam: "39 MB",
+           vista: "descargas/Mapa3_Frontera_Norte_Red_Fluvial_vista.png", vistaTam: "10 MB" }
   };
   var visor = OpenSeadragon({
     id: "visor", prefixUrl: "js/images/", showNavigator: true, navigatorPosition: "BOTTOM_RIGHT",
