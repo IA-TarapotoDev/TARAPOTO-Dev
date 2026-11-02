@@ -2,6 +2,8 @@
 
 Tres mapas en formato A0 vertical (841 × 1189 mm), con un PDF vectorial para plotter y un PNG de 300 dpi por mapa.
 
+**Página web (GitHub Pages):** https://ia-tarapotodev.github.io/TARAPOTO-Dev/ (visor con zoom y descarga del PDF y del PNG; se publica desde la rama `gh-pages`, con teselas generadas por `scripts/09_dzi.py`).
+
 **Ver en GitHub (mapa 1):** [vista rápida](png/Mapa1_Circunscripcion_IA_Tarapoto_vista.png) (100 dpi, para el celular) · [PNG 300 dpi](png/Mapa1_Circunscripcion_IA_Tarapoto_300dpi.png) · [PDF para plotter](Mapa1_Circunscripcion_IA_Tarapoto.pdf)
 
 El mapa 1 tiene la distribución de mural nueva: el mapa ocupa todo el recuadro, con el título arriba a la izquierda, la ubicación arriba a la derecha, la leyenda abajo a la izquierda, y el zoom de Tarapoto con la tabla de provincias abajo a la derecha. Los mapas 2 y 3 siguen en su versión anterior y se rehacen con la misma distribución cuando se apruebe el mapa 1. El PNG de 300 dpi se obtiene rasterizando el PDF (`pdftoppm -r 300`), así ambos son idénticos.
