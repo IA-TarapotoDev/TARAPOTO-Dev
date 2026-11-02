@@ -139,48 +139,64 @@ class MapFrame:
 
     # -------- relieve
     def relief(self, dem="/home/user/data_base/dem_z11.tif", res=75, land=None, veil=None, veil_alpha=0.45,
-               tint=True, z=0, exag=1.6, shade=(0.55, 0.52)):
+               tint=True, z=0, exag=1.6, shade=(0.55, 0.52), src_res=76):
+        """Relieve sombreado multidireccional con tintas hipsométricas (src_res: resolución del MDE de origen, m)."""
+        from rasterio.features import rasterize
         nx = int((self.x1 - self.x0) / res); ny = int((self.y1 - self.y0) / res)
         tr = from_origin(self.x0, self.y1, res, res)
         z_ = np.full((ny, nx), np.nan, np.float32)
+        rs = Resampling.average if res > src_res * 1.2 else Resampling.bilinear
         with rasterio.open(dem) as src:
-            reproject(rasterio.band(src, 1), z_, dst_transform=tr, dst_crs="EPSG:32718", resampling=Resampling.bilinear)
-        z_ = np.where(z_ < -400, 0, z_); z_ = np.nan_to_num(z_, nan=0)
-        if res < 30:  # recuadros de gran escala: suavizar el remuestreo del MDE (~76 m)
+            reproject(rasterio.band(src, 1), z_, dst_transform=tr, dst_crs="EPSG:32718", resampling=rs)
+        np.nan_to_num(z_, copy=False, nan=0); z_[z_ < -400] = 0
+        if res < src_res * 0.6:  # gran escala: suavizar el remuestreo del MDE
             from scipy.ndimage import gaussian_filter
-            z_ = gaussian_filter(z_, sigma=76 / res * 0.6)
+            z_ = gaussian_filter(z_, sigma=src_res / res * 0.6)
         self.dem = (z_, tr)
-        # hillshade multidireccional
-        gy, gx = np.gradient(z_ * exag, res)
+        # hillshade multidireccional (float32 para contener la memoria)
+        gy, gx = np.gradient(z_, res)
+        gy *= exag; gx *= exag
         slope = np.arctan(np.hypot(gx, gy)); aspect = np.arctan2(-gx, gy)
+        del gx, gy
+        sin_s, cos_s = np.sin(slope), np.cos(slope)
+        del slope
         hs = np.zeros_like(z_)
+        alt = np.radians(42)
         for az, wgt in [(315, 0.45), (270, 0.2), (0, 0.15), (225, 0.2)]:
-            a = np.radians(360 - az + 90); alt = np.radians(42)
-            hs += wgt * (np.sin(alt) * np.cos(slope) + np.cos(alt) * np.sin(slope) * np.cos(a - aspect))
-        hs = np.clip(hs, 0, 1)
+            a = np.radians(360 - az + 90)
+            hs += np.float32(wgt) * (np.float32(np.sin(alt)) * cos_s + np.float32(np.cos(alt)) * sin_s * np.cos(np.float32(a) - aspect))
+        del sin_s, cos_s, aspect
+        np.clip(hs, 0, 1, out=hs)
+        sh = np.float32(shade[0]) + np.float32(shade[1]) * hs
+        del hs
         stops = [(0, "#e3ecd6"), (150, "#e1ead0"), (400, "#e9ecd0"), (800, "#efeacc"), (1500, "#ede1c0"),
                  (2500, "#e4d2b2"), (3500, "#dccab0"), (4300, "#ece8e2"), (6500, "#ffffff")]
         lv = np.array([s[0] for s in stops], float); cols = np.array([matplotlib.colors.to_rgb(s[1]) for s in stops])
-        rgb = np.stack([np.interp(z_, lv, cols[:, i]) for i in range(3)], -1) if tint else np.ones(z_.shape + (3,)) * 0.94
-        shade = shade[0] + shade[1] * hs
-        rgb = np.clip(rgb * shade[..., None], 0, 1)
+        rgb = np.empty(z_.shape + (3,), np.uint8)
+        for i in range(3):
+            ch = np.interp(z_, lv, cols[:, i]).astype(np.float32) if tint else np.full(z_.shape, 0.94, np.float32)
+            ch *= sh; np.clip(ch, 0, 1, out=ch); ch *= 255
+            rgb[..., i] = ch
+            del ch
+        del sh
         # mar
         if land is not None:
-            from rasterio.features import rasterize
             m = rasterize([(g, 1) for g in land], out_shape=z_.shape, transform=tr, fill=0, dtype="uint8")
-            sea = (m == 0)
-            rgb[sea] = matplotlib.colors.to_rgb(C["mar"])
+            rgb[m == 0] = (np.array(matplotlib.colors.to_rgb(C["mar"])) * 255).astype(np.uint8)
+            del m
         if veil is not None:
-            from rasterio.features import rasterize
             m = rasterize([(g, 1) for g in veil], out_shape=z_.shape, transform=tr, fill=0, dtype="uint8").astype(bool)
-            rgb[m] = rgb[m] * (1 - veil_alpha) + veil_alpha
-        self.ax.imshow((rgb * 255).astype(np.uint8), extent=(self.x0, self.x0 + nx * res, self.y1 - ny * res, self.y1),
+            rgb[m] = (rgb[m] * (1 - veil_alpha) + 255 * veil_alpha).astype(np.uint8)
+            del m
+        self.ax.imshow(rgb, extent=(self.x0, self.x0 + nx * res, self.y1 - ny * res, self.y1),
                        interpolation="bilinear", zorder=z, origin="upper")
 
     # -------- marco, cuadrícula y coordenadas
-    def frame(self, step_deg=0.5, lw=1.2, utm_km=50):
+    def frame(self, step_deg=0.5, lw=1.2, utm_km=50, skip=()):
         x, y, w, h = self.rect
         bg = self.fig.ov
+        def libre(px, py, m=6):  # fuera de los recuadros interiores
+            return not any(r[0] - m < px < r[0] + r[2] + m and r[1] - m < py < r[1] + r[3] + m for r in skip)
         # graticule
         lon0, lat0 = TO_LL.transform(self.x0, self.y0); lon1, lat1 = TO_LL.transform(self.x1, self.y1)
         lonA, latA = TO_LL.transform(self.x0, self.y1); lonB, latB = TO_LL.transform(self.x1, self.y0)
@@ -220,13 +236,13 @@ class MapFrame:
         for X in np.arange(math.ceil(self.x0 / (utm_km * 1000)) * utm_km * 1000, self.x1, utm_km * 1000):
             px, _ = self.mm(X, self.y0)
             for py, d in [(y, 1.8), (y + h, -1.8)]:
-                bg.plot([px, px], [py, py + d], color="#333", lw=0.5)
-            bg.text(px, y + 2.3, f"{X/1000:.0f}", fontsize=4.6, color="#444", ha="center", va="bottom")
+                if libre(px, py): bg.plot([px, px], [py, py + d], color="#333", lw=0.5)
+            if libre(px, y): bg.text(px, y + 2.3, f"{X/1000:.0f}", fontsize=4.6, color="#444", ha="center", va="bottom")
         for Y in np.arange(math.ceil(self.y0 / (utm_km * 1000)) * utm_km * 1000, self.y1, utm_km * 1000):
             _, py = self.mm(self.x0, Y)
             for px, d in [(x, 1.8), (x + w, -1.8)]:
-                bg.plot([px, px + d], [py, py], color="#333", lw=0.5)
-            bg.text(x + 2.3, py, f"{Y/1000:.0f}", fontsize=4.6, color="#444", ha="left", va="center")
+                if libre(px, py): bg.plot([px, px + d], [py, py], color="#333", lw=0.5)
+            if libre(x, py): bg.text(x + 2.3, py, f"{Y/1000:.0f}", fontsize=4.6, color="#444", ha="left", va="center")
         bg.add_patch(Rectangle((x, y), w, h, fill=False, lw=lw, ec="k", zorder=30))
         bg.add_patch(Rectangle((x - 1.6, y - 1.6), w + 3.2, h + 3.2, fill=False, lw=0.4, ec="k", zorder=30))
 
@@ -260,7 +276,7 @@ class LabelManager:
         f = self.fr.fig; k = 25.4 / f.dpi
         return (e.x0 * k - pad, e.y0 * k - pad, e.x1 * k + pad, e.y1 * k + pad)
 
-    def place(self, X, Y, s, offsets=((0, 0),), force=False, inside=None, shrink=(), **kw):
+    def place(self, X, Y, s, offsets=((0, 0),), force=False, inside=None, shrink=(), inside_min=0.55, **kw):
         """Coloca un texto probando desplazamientos (en pt). Devuelve el Text o None."""
         sizes = [kw.pop("size", 7)] + list(shrink)
         x0, x1, y0, y1 = self.fr.x0, self.fr.x1, self.fr.y0, self.fr.y1
@@ -275,7 +291,7 @@ class LabelManager:
                     # el rótulo debe quedar mayormente dentro del polígono
                     k = (self.fr.x1 - self.fr.x0) / fw
                     bb = box(x0 + (b[0] - fx) * k, y0 + (b[1] - fy) * k, x0 + (b[2] - fx) * k, y0 + (b[3] - fy) * k)
-                    ok = inside.intersection(bb).area / bb.area > 0.55
+                    ok = inside.intersection(bb).area / bb.area > inside_min
                 if ok and not self.collides(b):
                     self.add_box(b); return t
                 t.remove()
