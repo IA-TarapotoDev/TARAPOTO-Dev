@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mapa 1 – Circunscripción IA Tarapoto</title>
+<meta name="description" content="Mapa mural A0 de la circunscripción territorial de la Intendencia de Aduana de Tarapoto: límites, régimen tributario (Ley N.° 27037) y red de transporte.">
+<style>
+  :root {
+    --crema: #f4f1e8; --salvia: #dde5d0; --oliva: #36432f; --acento: #7d9467;
+    --borde: #c9c2ad; --texto: #2b3326; --suave: #5d6655;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--crema); color: var(--texto);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+  body { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; }
+  header { padding: 14px 16px 12px; border-left: 6px solid var(--acento); border-bottom: 1px solid var(--borde); }
+  .sup { margin: 0 0 3px; font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: #6a7060; }
+  h1 { margin: 0; font-size: clamp(18px, 2.6vw, 28px); line-height: 1.2; color: var(--oliva); }
+  .sub { margin: 5px 0 12px; font-size: 13px; color: var(--suave); }
+  .acciones { display: flex; flex-wrap: wrap; gap: 8px; }
+  .btn { display: inline-flex; align-items: baseline; gap: 6px; padding: 10px 14px; border-radius: 6px;
+    font-size: 14px; font-weight: 600; text-decoration: none; color: var(--oliva);
+    background: var(--salvia); border: 1px solid #9aab86; }
+  .btn:hover { background: #d2dcc3; }
+  .btn.principal { background: var(--oliva); border-color: var(--oliva); color: #fff; }
+  .btn.principal:hover { background: #2a3424; }
+  .btn small { font-weight: 400; opacity: .85; }
+  #visor { flex: 0 0 auto; height: 78vh; height: 78dvh; min-height: 420px; background: #e9e6dc; }
+  .ayuda { margin: 0; padding: 8px 16px; font-size: 12px; color: var(--suave); border-top: 1px solid var(--borde); }
+  footer { padding: 4px 16px 16px; font-size: 11px; color: #6a7060; }
+  @media (max-width: 600px) {
+    header { padding: 10px 12px 10px; }
+    .sup { font-size: 10px; }
+    .sub { font-size: 12px; margin-bottom: 10px; }
+    .acciones { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+    .btn { flex-direction: column; align-items: center; text-align: center; gap: 2px; padding: 8px 4px; font-size: 13px; }
+    .btn small { font-size: 10.5px; }
+    #visor { height: 74vh; height: 74dvh; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <p class="sup">SUNAT · Intendencia de Aduana de Tarapoto · Equipo de Gestión de Riesgo</p>
+  <h1>Circunscripción territorial de la Intendencia de Aduana de Tarapoto</h1>
+  <p class="sub">Mapa 1 de 3 · A0 vertical (841 × 1189 mm) · Escala 1:625 000 · Noviembre 2026</p>
+  <div class="acciones">
+    <a class="btn principal" href="descargas/Mapa1_Circunscripcion_IA_Tarapoto.pdf" download>Descargar PDF <small>A0 vectorial para plotter · 57 MB</small></a>
+    <a class="btn" href="descargas/Mapa1_Circunscripcion_IA_Tarapoto_300dpi.png" download>Descargar PNG <small>300 dpi · 89 MB</small></a>
+    <a class="btn" href="descargas/Mapa1_Circunscripcion_IA_Tarapoto_vista.png" target="_blank" rel="noopener">Ver imagen liviana <small>20 MB</small></a>
+  </div>
+</header>
+
+<div id="visor" role="img" aria-label="Mapa 1: circunscripción territorial de la Intendencia de Aduana de Tarapoto"></div>
+<noscript><p class="ayuda">El visor necesita JavaScript. Puedes <a href="descargas/Mapa1_Circunscripcion_IA_Tarapoto_vista.png">ver la imagen</a> o <a href="descargas/Mapa1_Circunscripcion_IA_Tarapoto.pdf">descargar el PDF</a>.</p></noscript>
+<p class="ayuda">Para acercar, pellizca con dos dedos o usa la rueda del ratón; doble toque o doble clic también amplía. El recuadro de abajo a la derecha muestra qué parte del mapa estás viendo.</p>
+<footer>Fuentes: INEI 2019 (límites referenciales) · R.S. N.° 000980 y modificatorias (circunscripciones) · Ley N.° 27037 (ZTE) · © colaboradores de OpenStreetMap (ODbL) · AWS Terrain Tiles. Visor: OpenSeadragon. Mapas 2 y 3: en preparación.</footer>
+
+<script src="js/openseadragon.min.js"></script>
+<script>
+  window.visor = OpenSeadragon({
+    id: "visor",
+    prefixUrl: "js/images/",
+    tileSources: "tiles/mapa1.dzi",
+    showNavigator: true,
+    navigatorPosition: "BOTTOM_RIGHT",
+    navigatorSizeRatio: 0.18,
+    showRotationControl: false,
+    maxZoomPixelRatio: 2.5,
+    visibilityRatio: 0.9,
+    constrainDuringPan: true,
+    animationTime: 0.8,
+    gestureSettingsTouch: { pinchRotate: false }
+  });
+</script>
+</body>
+</html>
