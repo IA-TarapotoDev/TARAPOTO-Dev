@@ -23,7 +23,7 @@ CREMA = "#f4f1e8"        # fondo del título
 # recuadros dentro del marco (x, y, ancho, alto en mm)
 B_TIT = (20, 1081, 262, 88)       # título (noroeste, sobre Ecuador)
 B_UBI = (581, 879, 240, 290)      # ubicación (noreste)
-B_LEY = (20, 20, 260, 305)        # leyenda (suroeste)
+B_LEY = (20, 20, 260, 233)        # leyenda (suroeste)
 B_SE = (631, 20, 190, 348)        # zoom Tarapoto + tabla (sureste)
 for b in (B_TIT, B_UBI, B_LEY, B_SE):
     fr.labels.add_box((b[0] - 2.5, b[1] - 2.5, b[0] + b[2] + 2.5, b[1] + b[3] + 2.5))
@@ -51,57 +51,60 @@ zte = reg[reg.regimen == "ZTE"].geometry.iloc[0]
 ext = [g.difference(peru_g) for g in paises.geometry]
 land = [peru_g] + ext
 
-# ------------------------------------------------ relieve (MDE ~38 m) con velo fuera del ámbito
-fr.relief(dem="/home/user/data_base/dem_m1_z12.tif", res=65, src_res=38, land=land,
-          veil=[g.intersection(CB) for g in ext], veil_alpha=0.50)
-fr.polys([peru_g.difference(tara).intersection(CB)], fc="white", alpha=0.28, z=1)
+# ------------------------------------------------ relieve sólo dentro de la circunscripción; fondo blanco fuera
+FUERA = CB.difference(tara)
+fr.relief(dem="/home/user/data_base/dem_m1_z12.tif", res=65, src_res=38, land=land, veil=[FUERA], veil_alpha=1.0, shade=(0.60, 0.46))
+CL_IN = fr.clip_patch(tara); fr.ax.add_patch(CL_IN)        # recorte: dentro de la IA Tarapoto
+CL_OUT = fr.clip_patch(FUERA); fr.ax.add_patch(CL_OUT)     # recorte: fuera (estilo atenuado)
 
 # ------------------------------------------------ hidrografía
 agua = fr.load("agua_poly"); rios = fr.load("rios"); hum = fr.load("humedales")
-fr.polys(list(hum.geometry), fc="#b9d9c9", alpha=0.35, z=2)
+fr.polys(list(hum.geometry), fc="#b9d9c9", alpha=0.35, z=2, clip=CL_IN)
 fr.polys(list(agua.geometry), fc=C["agua"], ec=C["agua_lin"], lw=0.18, z=3)
-W = {"quebrada": (0.25, 0.6), "canal": (0.35, 0.7), "rio": (0.7, 0.95), "navegable": (1.5, 1), "hidrovia": (2.6, 1)}
-for cl in W:
-    fr.lines(list(rios[rios.clase == cl].geometry), color=C["agua_lin"], lw=W[cl][0], alpha=W[cl][1], z=3.2 + 0.1 * list(W).index(cl))
+W_IN = {"quebrada": (0.25, 0.6), "canal": (0.35, 0.7), "rio": (0.7, 0.95), "navegable": (1.5, 1), "hidrovia": (2.6, 1)}
+W_OUT = {"rio": (0.45, 0.75), "navegable": (1.0, 0.9), "hidrovia": (1.8, 0.9)}
+for i, cl in enumerate(W_IN):
+    g = list(rios[rios.clase == cl].geometry)
+    fr.lines(g, color=C["agua_lin"], lw=W_IN[cl][0], alpha=W_IN[cl][1], z=3.2 + 0.1 * i, clip=CL_IN)
+    if cl in W_OUT:
+        fr.lines(g, color="#7fb3dc", lw=W_OUT[cl][0], alpha=W_OUT[cl][1], z=3.2 + 0.1 * i, clip=CL_OUT)
 
-# ------------------------------------------------ áreas naturales protegidas
+# ------------------------------------------------ áreas naturales protegidas (sólo dentro)
 anp = fr.load("anp")
-fr.polys(list(anp.geometry), fc="none", ec=C["anp"], lw=0.85, ls=(0, (1.5, 1.2)), z=4, alpha=0.9)
+fr.polys(list(anp.geometry), fc="none", ec=C["anp"], lw=0.85, ls=(0, (1.5, 1.2)), z=4, alpha=0.9, clip=CL_IN)
 
 # ------------------------------------------------ ZTE: franja interior
 zz = zte.intersection(CB)
 zclip = fr.clip_patch(zz); fr.ax.add_patch(zclip)
-fr.polys([zz], fc=C["zte"], alpha=0.07, z=4.5)
 fr.lines([zz.boundary], color=C["zte"], lw=11, alpha=0.30, z=4.6, clip=zclip, cap="butt")
 fr.lines([zz.boundary.difference(peru_g.boundary.buffer(800))], color=C["zte"], lw=1.6, z=4.7)
 
 # ------------------------------------------------ límites
-fr.lines(list(dist.geometry.boundary), color=C["dist"], lw=0.45, ls=(0, (2.4, 1.7)), z=6, alpha=0.9)
-fr.lines(list(prov.geometry.boundary), color=C["prov"], lw=1.0, ls=(0, (5.5, 2.4)), z=6.5)
+fr.lines(list(dist.geometry.boundary), color=C["dist"], lw=0.45, ls=(0, (2.4, 1.7)), z=6, alpha=0.9, clip=CL_IN)
+fr.lines(list(prov.geometry.boundary), color=C["prov"], lw=1.0, ls=(0, (5.5, 2.4)), z=6.5, clip=CL_IN)
+fr.lines(list(prov.geometry.boundary), color="#a5a5a5", lw=0.7, ls=(0, (5.5, 2.4)), z=6.5, clip=CL_OUT)
 fr.lines(list(dep.geometry.boundary), color=C["dep"], lw=1.8, ls=(0, (9, 2.6, 1.6, 2.6)), z=7)
 cb = unary_union([g.boundary for g in circ.geometry]).difference(peru_g.boundary.buffer(800))
 fr.lines([cb.intersection(CB)], color=C["circ"], lw=2.4, ls=(0, (7, 3)), z=8)
-tclip = fr.clip_patch(tara); fr.ax.add_patch(tclip)
-fr.lines([tara.boundary], color=C["tarapoto"], lw=9, alpha=0.28, z=8.2, clip=tclip, cap="butt")
+fr.lines([tara.boundary], color=C["tarapoto"], lw=9, alpha=0.28, z=8.2, clip=CL_IN, cap="butt")
 fr.lines([tara.boundary], color=C["tarapoto"], lw=2.6, z=8.4)
-fr.lines(list(pext.geometry.boundary), color="#6a6a6a", lw=0.8, ls=(0, (5, 2.5)), z=6.5)
+fr.lines(list(pext.geometry.boundary), color="#9a9a9a", lw=0.7, ls=(0, (5, 2.5)), z=6.5)
 fr.lines([peru_g.boundary.intersection(CB)], color="#d9534f", lw=6, alpha=0.25, z=9)
 fr.lines([peru_g.boundary.intersection(CB)], color=C["frontera"], lw=2.2, ls=(0, (10, 2.5, 2, 2.5, 2, 2.5)), z=9.2)
 
-# ------------------------------------------------ red vial
+# ------------------------------------------------ red vial (detalle dentro; red principal atenuada fuera)
 vias = fr.load("vias")
 vx = vias[~vias.pe]; vias = vias[vias.pe]
-fr.lines(list(vx[vx.clase == "trocha"].geometry), color="#9a9a9a", lw=0.4, ls=(0, (3, 1.6)), z=10)
-fr.lines(list(vx[vx.clase == "vecinal"].geometry), color="#9a9a9a", lw=0.55, z=10)
-fr.lines(list(vx[vx.clase.isin(["nacional", "departamental"])].geometry), color="#7d7d7d", lw=1.2, z=10.2)
-fr.lines(list(vias[vias.clase == "trocha"].geometry), color=C["trocha"], lw=0.55, ls=(0, (3, 1.6)), z=10)
-fr.lines(list(vias[vias.clase == "vecinal"].geometry), color=C["vecinal"], lw=0.75, z=10.5)
-dv = vias[vias.clase == "departamental"]
-fr.lines(list(dv.geometry), color="#7a4a00", lw=2.1, z=11, cap="butt")
-fr.lines(list(dv.geometry), color=C["departamental"], lw=1.5, z=11.1)
-nv = vias[vias.clase == "nacional"]
-fr.lines(list(nv.geometry), color="#5a0010", lw=3.2, z=12, cap="butt")
-fr.lines(list(nv.geometry), color=C["nacional"], lw=2.4, z=12.1)
+fr.lines(list(vx[vx.clase.isin(["nacional", "departamental"])].geometry), color="#b0b0b0", lw=0.8, z=10.2)
+dv = vias[vias.clase == "departamental"]; nv = vias[vias.clase == "nacional"]
+fr.lines(list(vias[vias.clase == "trocha"].geometry), color=C["trocha"], lw=0.55, ls=(0, (3, 1.6)), z=10, clip=CL_IN)
+fr.lines(list(vias[vias.clase == "vecinal"].geometry), color=C["vecinal"], lw=0.75, z=10.5, clip=CL_IN)
+fr.lines(list(dv.geometry), color="#7a4a00", lw=2.1, z=11, cap="butt", clip=CL_IN)
+fr.lines(list(dv.geometry), color=C["departamental"], lw=1.5, z=11.1, clip=CL_IN)
+fr.lines(list(nv.geometry), color="#5a0010", lw=3.2, z=12, cap="butt", clip=CL_IN)
+fr.lines(list(nv.geometry), color=C["nacional"], lw=2.4, z=12.1, clip=CL_IN)
+fr.lines(list(dv.geometry), color="#f2b77a", lw=1.0, z=11, clip=CL_OUT)
+fr.lines(list(nv.geometry), color="#e07070", lw=1.6, z=12, clip=CL_OUT)
 
 # ------------------------------------------------ puntos operativos públicos
 pts = fr.load("puntos")
@@ -111,24 +114,36 @@ sede = pts[pts.clase == "sunat"].copy()
 sede["d"] = sede.distance(Point(*TO_UTM.transform(-76.3592, -6.4863)))
 sede_pt = sede.sort_values("d").geometry.iloc[0]
 others = pts.drop(sede.sort_values("d").index[:1])
+others = others[others.geometry.within(tara) | (others.clase.isin(["sunat", "frontera", "peaje"]) & others.pe)]
 draw_points(fr, others)
 fr.ax.plot([sede_pt.x], [sede_pt.y], marker="*", ms=20, mfc="#c8102e", mec="white", mew=1.1, zorder=30)
 fr.labels.obstacle(sede_pt.x, sede_pt.y, 3.6)
 
-# ------------------------------------------------ centros poblados
-lug = fr.load("lugares"); lug = lug[lug.geometry.within(fr.bbox)].copy()
-lug.loc[~lug.pe & (lug.cap == 8), "cap"] = np.nan
-lug["rank"] = np.select([lug.cap == 4, lug.cap == 6, lug.cap == 8, lug.place.isin(["city", "town"]), lug.place == "village"],
-                        [0, 1, 2, 3, 4], 5)
-in_t = lug.geometry.within(tara)
-STY = {0: dict(marker="s", ms=8, mfc="white", mec="black", mew=1.5), 1: dict(marker="o", ms=7, mfc="white", mec="black", mew=1.4),
-       2: dict(marker="o", ms=4.2, mfc="#222", mec="white", mew=0.6), 3: dict(marker="o", ms=3.4, mfc="#444", mec="white", mew=0.5),
-       4: dict(marker="o", ms=2.4, mfc="#555", mec="none"), 5: dict(marker="o", ms=1.6, mfc="#777", mec="none")}
-for r in range(6):
-    g = lug[(lug["rank"] == r) & (in_t | (lug["rank"] <= 2))]
-    if r == 5: g = g[g.place == "hamlet"]
-    fr.ax.plot(g.geometry.x, g.geometry.y, ls="none", zorder=25 - r * 0.1, **STY[r])
-    for p in g.geometry: fr.labels.obstacle(p.x, p.y, STY[r]["ms"] * PT * 0.5)
+# ------------------------------------------------ centros poblados: capitales oficiales (INEI) + ciudades y pueblos > 2 000 hab.
+import re
+def nom_cap(n):
+    m = re.search(r"\((.*?)\)", n)
+    if m: n = m.group(1)
+    return nombre(n) if (n.isupper() or not any(ord(ch) > 127 for ch in n)) else n
+caps = fr.load("capitales"); caps = caps[caps.geometry.within(fr.bbox)].copy()
+caps = caps[caps.in_ia | (caps.nivel <= 1) | (caps["pop"] >= 10000)]
+caps["txt"] = caps.nombre.map(nom_cap)
+otros = fr.load("otros_poblados"); otros = otros[otros.geometry.within(fr.bbox) & otros.in_ia].copy()
+def clase_pop(p):
+    return 0 if p >= 100000 else 1 if p >= 40000 else 2 if p >= 15000 else 3 if p >= 5000 else 4 if p >= 2000 else 5
+caps["cp"] = caps["pop"].fillna(0).map(clase_pop); otros["cp"] = otros["pop"].fillna(2000).map(clase_pop)
+LAB = {0: (16, "bold"), 1: (13.5, "bold"), 2: (11.5, "bold"), 3: (9.6, "semibold"), 4: (8.4, "medium"), 5: (7.4, "normal")}
+SYM = {0: dict(marker="s", mfc="white", mec="black", mew=1.6), 1: dict(marker="o", mfc="white", mec="black", mew=1.5),
+       2: dict(marker="o", mfc="#1f1f1f", mec="white", mew=0.6)}
+MS = {0: {0: 12, 1: 11, 2: 10, 3: 9, 4: 8.5, 5: 8}, 1: {0: 11, 1: 10, 2: 9, 3: 8, 4: 7.5, 5: 7}, 2: {0: 7.5, 1: 7, 2: 6.4, 3: 5.4, 4: 4.6, 5: 4}}
+for r in caps.itertuples():
+    ms = MS[r.nivel][r.cp]
+    fr.ax.plot([r.geometry.x], [r.geometry.y], ls="none", ms=ms, zorder=26 - r.nivel * 0.1, **SYM[r.nivel])
+    if r.nivel == 1:
+        fr.ax.plot([r.geometry.x], [r.geometry.y], ls="none", marker="o", ms=ms * 0.32, mfc="black", mec="none", zorder=26.05)
+    fr.labels.obstacle(r.geometry.x, r.geometry.y, ms * PT * 0.5)
+fr.ax.plot(otros.geometry.x, otros.geometry.y, ls="none", marker="o", ms=3.4, mfc="#6b6b6b", mec="white", mew=0.5, zorder=25)
+for p in otros.geometry: fr.labels.obstacle(p.x, p.y, 0.8)
 
 # ------------------------------------------------ rectángulo del zoom N.° 01 (Tarapoto)
 ZC = TO_UTM.transform(-76.364, -6.492); ZSCALE = 40_000
@@ -152,26 +167,35 @@ for dx, dy, ha, va in [(34, -26, "left", "top"), (34, 26, "left", "bottom"), (-3
     t.remove()
 L.place(ZC[0] + zw / 2, ZC[1] - zh / 2, "Zoom N.° 01", size=7.6, weight="bold", color="#c8102e", h=1.8,
         offsets=[(3, -2, "left", "top"), (3, 2, "left", "bottom"), (-3, -2, "right", "top")], force=True)
-for r, (sz, wt) in {0: (14, "bold"), 1: (11, "semibold")}.items():
-    for row in lug[lug["rank"] == r].sort_values("pop", ascending=False).itertuples():
-        near_sede = row.geometry.distance(sede_pt) < 4000
-        L.place(row.geometry.x, row.geometry.y, row.name.upper() if r == 0 else row.name, size=sz, weight=wt,
-                offsets=ring(14 if near_sede else (8 if r == 0 else 7)), h=2.2, force=row.pe, shrink=(sz * 0.85,))
+# capitales: primero las más pobladas; todas las de la circunscripción se rotulan
+n_cap = 0
+for r in caps.sort_values(["in_ia", "pop"], ascending=[False, False]).itertuples():
+    sz, wt = LAB[r.cp]
+    d = MS[r.nivel][r.cp] * 0.55 + 2.5
+    if r.geometry.distance(sede_pt) < 4000: d = 14
+    s = r.txt.upper() if r.nivel == 0 else r.txt
+    t = L.place(r.geometry.x, r.geometry.y, s, size=sz, weight=wt, color=C["texto"] if r.in_ia else "#5e5e5e",
+                offsets=ring(d) + ring(d * 1.8), h=2.2 if r.cp <= 2 else 1.7, shrink=(sz * 0.88, sz * 0.78), force=bool(r.in_ia))
+    n_cap += (t is not None) and bool(r.in_ia)
+print("capitales rotuladas en la circunscripción:", n_cap, "de", int(caps.in_ia.sum()))
+for r in otros.sort_values("pop", ascending=False).itertuples():
+    L.place(r.geometry.x, r.geometry.y, r.name, size=LAB[r.cp][0] * 0.92, weight="normal", color="#3a3a3a", offsets=ring(4.5), h=1.5)
 for g, n in zip(paises.geometry, paises.name):
     p, gi = ancla(g.difference(peru_g))
     if gi is not None and gi.area > 1e8:
-        L.place(p.x, p.y, n.upper(), size=30, weight="bold", color="#6b6b6b", spacing=1, h=2.5,
+        L.place(p.x, p.y, n.upper(), size=30, weight="bold", color="#8a8a8a", spacing=1, h=2.5,
                 offsets=[(0, 0), (0, -60), (0, 60), (0, -120), (0, 120), (0, -180)])
 for row in pext.itertuples():
     p, gi = ancla(row.geometry.difference(peru_g))
     if gi is not None and gi.area > 6e8:
-        L.place(p.x, p.y, f"Provincia de {row.name}" if row.name != "Amazonas" else row.name, size=10.5, style="italic", color="#6b6b6b", h=1.8,
+        L.place(p.x, p.y, f"Provincia de {row.name}" if row.name != "Amazonas" else row.name, size=10.5, style="italic", color="#8a8a8a", h=1.8,
                 offsets=[(0, 0), (0, 30), (0, -30), (0, 60), (0, -60)])
 for row in dep.itertuples():
     p, gi = ancla(row.geometry, 1000)
     if gi is None or gi.area < 2e9: continue
     own = row.departamento in ("SAN MARTIN", "AMAZONAS", "LORETO")   # departamentos de la circunscripción
-    L.place(p.x, p.y, nombre(row.departamento).upper(), size=30 if own else 24, weight="bold", color="#4a4a4a", spacing=1, h=2.8, alpha=0.75,
+    L.place(p.x, p.y, nombre(row.departamento).upper(), size=30 if own else 24, weight="bold", color="#4a4a4a" if own else "#8a8a8a",
+            spacing=1, h=2.8, alpha=0.75,
             offsets=[(0, 0), (0, 50), (0, -50), (0, 100), (0, -100), (50, 0), (-50, 0), (0, 150), (0, -150), (70, 70), (-70, -70)],
             shrink=(24, 20) if own else (20, 16), inside=gi, inside_min=0.6, force=own)
 for row in circ.itertuples():
@@ -186,55 +210,54 @@ for row in prov.itertuples():
     p, gi = ancla(row.geometry, 300)
     if gi is None or gi.area < 4e7: continue
     intar = tara.contains(p)
-    L.place(p.x, p.y, nombre(row.provincia).upper(), size=13 if intar else 10, weight="semibold", color="#3d3d3d" if intar else "#6b6b6b",
+    L.place(p.x, p.y, nombre(row.provincia).upper(), size=13 if intar else 10, weight="semibold", color="#3d3d3d" if intar else "#8a8a8a",
             h=2, offsets=[(0, 0), (0, 16), (0, -16), (22, 0), (-22, 0), (0, 32), (0, -32)], inside=gi, shrink=(11, 9) if intar else (8.5,))
-for row in lug[lug["rank"] == 2].itertuples():
-    L.place(row.geometry.x, row.geometry.y, row.name, size=7.8, weight="medium", offsets=ring(5), h=1.6, shrink=(6.8,))
-dist["in_t"] = dist.geometry.representative_point().within(tara)
+dist = dist[dist.geometry.representative_point().within(tara)].copy()
 dist["a"] = dist.area
 n_ok = 0
-for row in dist.sort_values(["in_t", "a"], ascending=[False, False]).itertuples():
+for row in dist.sort_values("a", ascending=False).itertuples():
     gi = row.geometry.intersection(fr.bbox)
-    if gi.is_empty or gi.area < 3e6: continue
+    if gi.is_empty: continue
     p = polylabel(max(getattr(gi, "geoms", [gi]), key=lambda a: a.area), 200)
     s = nombre(row.distrito)
-    if row.in_t:
-        kw_ = dict(style="italic", color="#4f3a66", h=1.4)
-        t = L.place(p.x, p.y, s, size=7.6, inside=gi, offsets=[(0, 0), (0, 8), (0, -8), (11, 0), (-11, 0), (0, 15), (0, -15), (14, 10), (-14, -10)],
-                    shrink=(6.8, 6.0, 5.2), **kw_)
-        if t is None:   # distrito pequeño: rótulo menor y menos exigente
-            t = L.place(p.x, p.y, s, size=5.0, inside=gi, inside_min=0.3, offsets=[(0, 0), (0, 5), (0, -5), (7, 0), (-7, 0)], shrink=(4.5,), **kw_)
-        if t is None:   # último recurso: rótulo fuera del polígono con línea guía
-            t = L.place(p.x, p.y, s, size=5.4, offsets=ring(14) + ring(22) + ring(32) + ring(44) + ring(58) + ring(74), shrink=(4.8, 4.4), **kw_)
-            if t is not None:
-                ax_, ay_ = t.get_position()
-                fr.ax.plot([p.x, ax_], [p.y, ay_], color="#4f3a66", lw=0.45, zorder=19, alpha=0.9)
-                fr.ax.plot([p.x], [p.y], marker="o", ms=1.6, color="#4f3a66", zorder=19)
-        n_ok += t is not None
-        if t is None: print("   sin rótulo:", s, "(", nombre(row.provincia), ")")
-    else:
-        L.place(p.x, p.y, s, size=6.2, style="italic", color="#7b7b7b", h=1.2, inside=gi, offsets=[(0, 0), (0, 8), (0, -8)])
-print("distritos rotulados en la circunscripción:", n_ok, "de", int(dist.in_t.sum()))
+    kw_ = dict(style="italic", color="#4f3a66", h=1.4)
+    t = L.place(p.x, p.y, s, size=7.6, inside=gi, offsets=[(0, 0), (0, 8), (0, -8), (11, 0), (-11, 0), (0, 15), (0, -15), (14, 10), (-14, -10)],
+                shrink=(6.8, 6.0, 5.2), **kw_)
+    if t is None:   # distrito pequeño: rótulo menor y menos exigente
+        t = L.place(p.x, p.y, s, size=5.0, inside=gi, inside_min=0.3, offsets=[(0, 0), (0, 5), (0, -5), (7, 0), (-7, 0)], shrink=(4.5,), **kw_)
+    if t is None:   # último recurso: rótulo fuera del polígono con línea guía
+        t = L.place(p.x, p.y, s, size=5.4, offsets=ring(14) + ring(22) + ring(32) + ring(44) + ring(58) + ring(74), shrink=(4.8, 4.4), **kw_)
+        if t is not None:
+            ax_, ay_ = t.get_position()
+            fr.ax.plot([p.x, ax_], [p.y, ay_], color="#4f3a66", lw=0.45, zorder=19, alpha=0.9)
+            fr.ax.plot([p.x], [p.y], marker="o", ms=1.6, color="#4f3a66", zorder=19)
+    n_ok += t is not None
+    if t is None: print("   sin rótulo:", s, "(", nombre(row.provincia), ")")
+print("distritos rotulados en la circunscripción:", n_ok, "de", len(dist))
 rn = rios[rios.clase.isin(["hidrovia", "navegable", "rio"]) & rios.name.notna()]
 for cl, (sz, ev) in {"hidrovia": (12, 150), "navegable": (10, 130), "rio": (7.6, 120)}.items():
     g = rn[rn.clase == cl]
-    along_labels(fr, [(n, list(x.geometry)) for n, x in g.groupby("name")], ev, sz, C["agua_txt"], weight="bold" if cl != "rio" else "normal",
+    grupos = []
+    for n, x in g.groupby("name"):
+        geoms = list(x.geometry) if cl != "rio" else [gg.intersection(tara) for gg in x.geometry if gg.intersects(tara)]
+        if geoms: grupos.append((n, geoms))
+    along_labels(fr, grupos, ev, sz, C["agua_txt"], weight="bold" if cl != "rio" else "normal",
                  family="Liberation Serif", min_len_mm=18 if cl != "rio" else 30, h=1.6)
-shields(fr, vias, "nacional", C["nacional"], "white", every_mm=85, size=7.0)
-shields(fr, vias, "departamental", "#ffd08a", "#4a2b00", every_mm=95, size=6.2, min_len_mm=25)
+nv_in = nv[nv.intersects(tara)].copy(); nv_in["geometry"] = nv_in.geometry.intersection(tara)
+nv_out = nv[~nv.within(tara)].copy(); nv_out["geometry"] = nv_out.geometry.difference(tara)
+shields(fr, nv_in, "nacional", C["nacional"], "white", every_mm=85, size=7.0)
+shields(fr, nv_out, "nacional", "#e3a3a3", "white", every_mm=110, size=6.2)
+dv_in = dv[dv.intersects(tara)].copy(); dv_in["geometry"] = dv_in.geometry.intersection(tara)
+shields(fr, dv_in, "departamental", "#ffd08a", "#4a2b00", every_mm=95, size=6.2, min_len_mm=25)
 for row in others.itertuples():
     if not isinstance(row.name, str): continue
     sz = {"aerodromo": 7.2, "puerto": 7.0, "sunat": 7.2, "peaje": 6.8, "frontera": 7.0, "control": 6.6}.get(row.clase, 6.6)
     col = {"aerodromo": "#0b3d91", "puerto": "#0b5394", "sunat": "#0d47a1", "peaje": "#5d4a00", "frontera": "#9b1c1c"}.get(row.clase, "#333")
     L.place(row.geometry.x, row.geometry.y, row.name, size=sz, color=col, offsets=ring(6), h=1.6)
 for row in anp.itertuples():
-    p, gi = ancla(row.geometry, 500)
+    p, gi = ancla(row.geometry.intersection(tara), 500)
     if gi is None or gi.area < 1.5e8: continue
     L.place(p.x, p.y, row.name, size=7.6, style="italic", color="#2e6b2e", h=1.5, inside=gi, offsets=[(0, 0), (0, 12), (0, -12), (0, 24)])
-for r, sz in [(3, 7.0), (4, 6.2), (5, 5.4)]:
-    g = lug[(lug["rank"] == r) & in_t]
-    for row in g.sort_values("pop", ascending=False).itertuples():
-        L.place(row.geometry.x, row.geometry.y, row.name, size=sz, color="#333" if r < 5 else "#555", offsets=ring(4), h=1.3)
 
 fr.frame(step_deg=0.5, utm_km=50, skip=(B_TIT, B_UBI, B_LEY, B_SE))
 
@@ -406,7 +429,7 @@ x, y, w, h = B_LEY
 caja(B_LEY)
 barra(x, y + h - 9, w, "LEYENDA", h=9, size=9)
 ly = y + h - 15
-lg = Legend(pn, x + 6, ly, 118, row=8.0, size=9.6)
+lg = Legend(pn, x + 6, ly, 118, row=7.6, size=9.4)
 lg.header("Límites")
 lg.line("Límite internacional", C["frontera"], 2.0, ls=(0, (6, 1.5, 1.2, 1.5)), under=("#d9534f", 5.5, 0.25))
 lg.line("Circunscripción de intendencia de aduana", C["circ"], 2.2, ls=(0, (4, 1.8)))
@@ -414,11 +437,11 @@ lg.line("Circunscripción IA Tarapoto", C["tarapoto"], 2.4, under=(C["tarapoto"]
 lg.line("Límite departamental", C["dep"], 1.6, ls=(0, (5, 1.5, 1, 1.5)))
 lg.line("Límite provincial", C["prov"], 1.0, ls=(0, (3.5, 1.5)))
 lg.line("Límite distrital (referencial INEI)", C["dist"], 0.5, ls=(0, (2, 1.4)))
-lg.line("Límite provincial (Ecuador)", "#6a6a6a", 0.8, ls=(0, (3.5, 1.8)))
+lg.line("Límite provincial (Ecuador)", "#9a9a9a", 0.8, ls=(0, (3.5, 1.8)))
 lg.header("Régimen tributario y ámbito")
 lg.band("Zona de Tributación Especial – ZTE (art. 3, Ley N.° 27037)", C["zte"], 1.6, 1.7)
-lg.box("Zona de Tributación Común – ZTC (sin trama)", fc="white", ec="#888", lw=0.5)
-lg.box("Fuera de la circunscripción IA Tarapoto (velo)", fc="#f3f3f3", ec="#bbb", lw=0.4)
+lg.box("Circunscripción IA Tarapoto (con relieve)", fc="#e6e8cf", ec="#888", lw=0.5)
+lg.box("Fuera de la circunscripción (fondo blanco)", fc="white", ec="#888", lw=0.5)
 lg.box("Área natural protegida", fc="none", ec=C["anp"], lw=0.9, ls=(0, (1.5, 1.2)))
 lg.header("Hidrografía")
 lg.line("Vía navegable principal (Hidrovía Amazónica)", C["agua_lin"], 2.6)
@@ -426,7 +449,7 @@ lg.line("Río navegable – embarcaciones menores", C["agua_lin"], 1.5)
 lg.line("Río / quebrada", C["agua_lin"], 0.7)
 lg.box("Lago, laguna o cauce mayor", fc=C["agua"], ec=C["agua_lin"], lw=0.3)
 
-lg2 = Legend(pn, x + 134, ly, 120, row=8.0, size=9.6)
+lg2 = Legend(pn, x + 134, ly, 120, row=7.6, size=9.4)
 lg2.header("Red vial")
 lg2.line("Red vial nacional", C["nacional"], 2.4, casing=("#5a0010", 3.2))
 lg2.line("Red vial departamental", C["departamental"], 1.5, casing=("#7a4a00", 2.1))
@@ -435,11 +458,13 @@ lg2.line("Trocha carrozable / camino de herradura", C["trocha"], 0.6, ls=(0, (3,
 lg2.shield("Código de ruta nacional", "PE-5N", C["nacional"], "white")
 lg2.shield("Código de ruta departamental", "SM-105", "#ffd08a", "#4a2b00")
 lg2.header("Centros poblados")
-lg2.marker("Capital de departamento", **STY[0])
-lg2.marker("Capital de provincia", **STY[1])
-lg2.marker("Capital de distrito", **STY[2])
-lg2.marker("Ciudad / pueblo", **STY[3])
-lg2.marker("Centro poblado menor / caserío", **STY[4])
+lg2.marker("Capital de departamento", ms=9, **SYM[0])
+cy_ = lg2.cy
+lg2.marker("Capital de provincia", ms=8, **SYM[1])
+pn.plot([lg2.x + lg2.sw / 2], [cy_], ls="none", marker="o", ms=8 * 0.32, mfc="black", mec="none", zorder=6)
+lg2.marker("Capital de distrito", ms=5.4, **SYM[2])
+lg2.marker("Otro centro poblado (más de 2 000 hab.)", marker="o", ms=3.6, mfc="#6b6b6b", mec="white", mew=0.5)
+lg2.text("Tamaño del nombre según la población", size=8.2)
 lg2.header("Infraestructura y control")
 lg2.marker("Sede de la Intendencia de Aduana de Tarapoto", marker="*", ms=14, mfc="#c8102e", mec="white", mew=0.8)
 lg2.marker("Oficina / puesto SUNAT", marker="p", ms=6.6, mfc="#0d47a1", mec="white", mew=0.7)
@@ -449,34 +474,14 @@ lg2.marker("Unidad de peaje", marker="s", ms=5.2, mfc="#f2c200", mec="#3b3b3b", 
 lg2.glyph("Aeropuerto / aeródromo", "✈", "#0b3d91")
 lg2.glyph("Helipuerto", "Ⓗ", "#0b5394", size=7)
 lg2.glyph("Puerto / embarcadero fluvial", "⚓", "#0b5394")
-ycut = min(lg.cy, lg2.cy) - 2
+ycut = min(lg.cy, lg2.cy) - 1
 pn.plot([x + 4, x + w - 4], [ycut, ycut], color="#999", lw=0.5, zorder=5)
-pn.text(x + 6, ycut - 6, "ESCALA 1:625 000", fontsize=9, weight="bold", va="center", zorder=5)
+pn.text(x + 6, ycut - 6, "ESCALA 1:625 000", fontsize=9.4, weight="bold", va="center", zorder=5)
 scale_bar(pn, x + 52, ycut - 18, SCALE, 100, 25, h=2.8)
 north_arrow(pn, x + w - 20, ycut - 19, s=13)
-info_a = ("DATOS TÉCNICOS\n"
-          "Sistema de referencia WGS 84 · Proyección UTM Zona 18 Sur (EPSG:32718)\n"
-          "Cuadrícula geográfica cada 30' · marcas UTM cada 50 km\n\n"
-          "FUENTES\n"
-          "Límites: INEI 2019, referenciales (calderonsamuel/perumapas). Países: OSM.\n"
-          "Circunscripciones: R.S. N.° 000980 y modificatorias (R.S. 391-2014,\n"
-          "188-2015 y 070-2016/SUNAT; Ley N.° 28593 – Datem del Marañón).\n"
-          "ZTE: art. 3 de la Ley N.° 27037 y modificatorias (Ley N.° 27759).\n"
-          "Vías, ríos, poblados, peajes, puertos, aeródromos y controles:\n"
-          "© colaboradores de OpenStreetMap (ODbL), extracto del 30.10.2026.\n"
-          "Relieve: AWS Terrain Tiles (SRTM), MDE ~38 m.")
-info_b = ("NOTAS\n"
-          "1. Límites distritales referenciales (INEI); no son límites oficiales.\n"
-          "2. Provincia de Cutervo representada como ZTC. La Ley N.° 32582\n"
-          "   (15.04.2026) la incluye en la ZTE (excepto el distrito de Cutervo);\n"
-          "   su reglamento no ha sido ubicado.\n"
-          "3. Clasificación vial referencial a partir de OSM (códigos PE-,\n"
-          "   XX-1nn). Clasificación oficial: SINAC – MTC.\n"
-          "4. Sólo se muestran puntos operativos de fuentes públicas.\n\n"
-          "Elaborado por: Equipo de Gestión de Riesgo\n"
-          "Intendencia de Aduana de Tarapoto – SUNAT")
-pn.text(x + 6, ycut - 30, info_a, fontsize=7.6, va="top", linespacing=1.32, color="#222", zorder=5)
-pn.text(x + 134, ycut - 30, info_b, fontsize=7.6, va="top", linespacing=1.32, color="#222", zorder=5)
+pn.text(x + 6, ycut - 30, "Elaborado por: Equipo de Gestión de Riesgo – Intendencia de Aduana de Tarapoto – SUNAT", fontsize=8.6,
+        weight="semibold", color=OLIVA, va="center", zorder=5)
+print("leyenda: fondo de contenido en y =", round(ycut - 34, 1), "mm (borde inferior del recuadro:", y, ")")
 
 if MODE in ("both", "pdf"): fig.savefig(OUT + ".pdf")
 if MODE in ("both", "nopdf"): fig.savefig(OUT + ".png", dpi=DPI)

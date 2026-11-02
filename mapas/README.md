@@ -10,7 +10,7 @@ El mapa 1 tiene la distribución de mural nueva: el mapa ocupa todo el recuadro,
 
 | Mapa | Archivo | Escala | Contenido |
 |---|---|---|---|
-| 1 | `Mapa1_Circunscripcion_IA_Tarapoto` | 1:625 000 | Circunscripción de la IA Tarapoto con límites de departamentos, provincias y distritos (los 173 distritos rotulados), ZTE/ZTC, circunscripciones vecinas, red vial con códigos, ríos navegables, puertos, aeródromos, capitales, frontera, sede de la IA, relieve (MDE ~38 m), zoom de Tarapoto (1:40 000) y tabla de provincias |
+| 1 | `Mapa1_Circunscripcion_IA_Tarapoto` | 1:625 000 | Circunscripción de la IA Tarapoto (con relieve; fondo blanco fuera de ella) con límites de departamentos, provincias y distritos (los 173 rotulados), ZTE, circunscripciones vecinas, red vial con códigos, ríos navegables, puertos, aeródromos, las 173 capitales distritales en su ubicación oficial (INEI) más los centros poblados de más de 2 000 habitantes, frontera, sede de la IA, zoom de Tarapoto (1:40 000) y tabla de provincias |
 | 2 | `Mapa2_Corredores_ZTE_ZTC` | 1:1 000 000 | Corredores Oeste, Suroeste, Sur y Fluvial, con km totales, km en ZTE, punto exacto de salida de la ZTE (con zoom), peajes, controles, grifos y comisarías en ruta |
 | 3 | `Mapa3_Frontera_Norte_Red_Fluvial` | 1:550 000 | Frontera norte y red fluvial de Condorcanqui al Datem del Marañón: ríos, puertos, poblados ribereños, cruces viales y fluviales de frontera, y zooms de los puertos |
 
@@ -33,4 +33,4 @@ En el corredor Oeste, entre los km 34,4 y 58,3 la vía pasa por el distrito de C
 - La clasificación vial es referencial, a partir de los códigos OSM (PE- = nacional; XX-1nn = departamental). La clasificación oficial es la del SINAC – MTC.
 
 ## Regenerar
-Requiere geopandas, rasterio, rdata, networkx, matplotlib y osmium-tool. Ejecutar los scripts de `scripts/` en orden (01 a 08b) y después `mapa1.py`, `mapa2.py` y `mapa3.py`. El mapa 1 usa un MDE de mayor resolución (`02_dem.py 12 -79.40 -74.68 -8.98 -2.32 dem_m1_z12.tif`); se genera con `mapa1.py <salida> 300 pdf` y el PNG con `pdftoppm -r 300 -png -singlefile <salida>.pdf <salida>`. Las rutas de datos están en `/home/user/data_base` y `/home/user/data_osm`.
+Requiere geopandas, rasterio, rdata, networkx, matplotlib y osmium-tool. Ejecutar los scripts de `scripts/` en orden (01 a 08b, más `05b_limpiar.py` después de 05 y `10_capitales.py` al final; este último usa `ubigeo_distrito.csv` de jmcastagnetto/ubigeo-peru-aumentado, con las coordenadas de las capitales distritales del INEI) y después `mapa1.py`, `mapa2.py` y `mapa3.py`. El mapa 1 usa un MDE de mayor resolución (`02_dem.py 12 -79.40 -74.68 -8.98 -2.32 dem_m1_z12.tif`); se genera con `mapa1.py <salida> 300 pdf` y el PNG con `pdftoppm -r 300 -png -singlefile <salida>.pdf <salida>`. Las rutas de datos están en `/home/user/data_base` y `/home/user/data_osm`.
