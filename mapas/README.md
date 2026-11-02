@@ -1,18 +1,16 @@
 # Mapas murales A0 – Intendencia de Aduana de Tarapoto
 
-Tres mapas en formato A0 vertical (841 × 1189 mm), con un PDF vectorial para plotter y un PNG de 300 dpi por mapa.
+Tres mapas en formato A0 vertical (841 × 1189 mm), cada uno con un PDF vectorial para plotter. Los tres usan la misma distribución mural: el mapa ocupa todo el recuadro y los recuadros (título, ubicación, leyenda, zooms y tablas) van encima, sobre las zonas que no son relevantes. El relieve se muestra solo en el área relevante de cada mapa y el resto queda con fondo blanco.
 
-**Página web (GitHub Pages):** https://ia-tarapotodev.github.io/TARAPOTO-Dev/ (visor con zoom y descarga del PDF y del PNG; se publica desde la rama `gh-pages`, con teselas generadas por `scripts/09_dzi.py`).
+**Página web (GitHub Pages):** https://ia-tarapotodev.github.io/TARAPOTO-Dev/ (pestañas para los 3 mapas, visor con zoom y descarga de cada PDF; se publica desde la rama `gh-pages`, con teselas generadas por `scripts/09_dzi.py`).
 
-**Ver en GitHub (mapa 1):** [vista rápida](png/Mapa1_Circunscripcion_IA_Tarapoto_vista.png) (100 dpi, para el celular) · [PNG 300 dpi](png/Mapa1_Circunscripcion_IA_Tarapoto_300dpi.png) · [PDF para plotter](Mapa1_Circunscripcion_IA_Tarapoto.pdf)
+Vistas livianas (100 dpi) en `png/`: [mapa 1](png/Mapa1_Circunscripcion_IA_Tarapoto_vista.png) · [mapa 2](png/Mapa2_Corredores_ZTE_ZTC_vista.png) · [mapa 3](png/Mapa3_Frontera_Norte_Red_Fluvial_vista.png)
 
-El mapa 1 tiene la distribución de mural nueva: el mapa ocupa todo el recuadro, con el título arriba a la izquierda, la ubicación arriba a la derecha, la leyenda abajo a la izquierda, y el zoom de Tarapoto con la tabla de provincias abajo a la derecha. Los mapas 2 y 3 siguen en su versión anterior y se rehacen con la misma distribución cuando se apruebe el mapa 1. El PNG de 300 dpi se obtiene rasterizando el PDF (`pdftoppm -r 300`), así ambos son idénticos.
-
-| Mapa | Archivo | Escala | Contenido |
-|---|---|---|---|
-| 1 | `Mapa1_Circunscripcion_IA_Tarapoto` | 1:625 000 | Circunscripción de la IA Tarapoto (con relieve; fondo blanco fuera de ella) con límites de departamentos, provincias y distritos (los 173 rotulados), ZTE, circunscripciones vecinas, red vial con códigos, ríos navegables, puertos, aeródromos, las 173 capitales distritales en su ubicación oficial (INEI) más los centros poblados de más de 2 000 habitantes, frontera, sede de la IA, zoom de Tarapoto (1:40 000) y tabla de provincias |
-| 2 | `Mapa2_Corredores_ZTE_ZTC` | 1:1 000 000 | Corredores Oeste, Suroeste, Sur y Fluvial, con km totales, km en ZTE, punto exacto de salida de la ZTE (con zoom), peajes, controles, grifos y comisarías en ruta |
-| 3 | `Mapa3_Frontera_Norte_Red_Fluvial` | 1:550 000 | Frontera norte y red fluvial de Condorcanqui al Datem del Marañón: ríos, puertos, poblados ribereños, cruces viales y fluviales de frontera, y zooms de los puertos |
+| Mapa | Archivo | Escala | Relieve en | Contenido |
+|---|---|---|---|---|
+| 1 | `Mapa1_Circunscripcion_IA_Tarapoto` | 1:625 000 | Circunscripción IA Tarapoto | Límites de departamentos, provincias y distritos; ZTE; circunscripciones vecinas; red vial con códigos; ríos navegables; puertos; aeródromos; las 173 capitales distritales en su ubicación oficial (INEI) y los centros poblados de más de 2 000 habitantes; frontera; sede de la IA; zoom de Tarapoto (1:40 000) y tabla de provincias. El nombre de un distrito solo se rotula cuando es distinto al de su capital. |
+| 2 | `Mapa2_Corredores_ZTE_ZTC` | 1:1 000 000 | ZTE (la ZTC va en blanco) | Corredores Oeste, Suroeste, Sur y Fluvial, con kilometraje, salida definitiva de la ZTE (4 zooms a 1:60 000), peajes, controles, grifos y comisarías en ruta, y una tabla con los datos de cada corredor |
+| 3 | `Mapa3_Frontera_Norte_Red_Fluvial` | 1:550 000 | Condorcanqui, Datem del Marañón y Alto Amazonas | Frontera con Ecuador; ríos Santiago, Cenepa, Morona, Pastaza, Marañón y Huallaga; puertos y embarcaderos; poblados ribereños; cruces viales y fluviales de frontera; 4 zooms de puertos a 1:50 000 |
 
 ## Resultados de los corredores (OSRM sobre OpenStreetMap, 30.10.2026)
 
@@ -23,14 +21,23 @@ El mapa 1 tiene la distribución de mural nueva: el mapa ocupa todo el recuadro,
 | Sur: Tocache → Tingo María → Huánuco → Ambo → Cerro de Pasco | 396,2 | 330,4 | km 330,4, en el límite Ambo (ZTE) / San Rafael (ZTC): 10,21960° S, 76,15546° W |
 | Fluvial: Iquitos → Yurimaguas | 703,2 | 703,2 | No sale de la ZTE |
 
-En el corredor Oeste, entre los km 34,4 y 58,3 la vía pasa por el distrito de Choros (Cutervo, ZTC) según los límites referenciales del INEI.
+En el corredor Oeste, entre los km 34,4 y 58,3, la vía pasa por los distritos de Callayuc, Choros, Santa Cruz y Pimpingos (provincia de Cutervo, ZTC) según los límites referenciales del INEI.
 
 ## Decisiones y notas
 - La provincia de Cutervo se representa como **ZTC**, por decisión del usuario. La Ley N.° 32582 (15.04.2026) la incluye en la ZTE, excepto el distrito de Cutervo, pero no se ubicó su reglamento.
 - La ZTE sigue el art. 3 de la Ley N.° 27037 y sus modificatorias. Además de lo verificado, se marcan como ZTE Ucayali y Madre de Dios (departamentos completos), y Oxapampa, Chanchamayo y Satipo (provincias), que figuran en el mismo art. 3.
-- Los límites distritales son referenciales (INEI 2019, repositorio `calderonsamuel/perumapas`).
+- Los límites distritales son referenciales (INEI 2019, repositorio `calderonsamuel/perumapas`). Las capitales distritales usan las coordenadas del INEI (repositorio `jmcastagnetto/ubigeo-peru-aumentado`).
 - Solo se usan puntos operativos de fuentes públicas (OpenStreetMap).
 - La clasificación vial es referencial, a partir de los códigos OSM (PE- = nacional; XX-1nn = departamental). La clasificación oficial es la del SINAC – MTC.
 
 ## Regenerar
-Requiere geopandas, rasterio, rdata, networkx, matplotlib y osmium-tool. Ejecutar los scripts de `scripts/` en orden (01 a 08b, más `05b_limpiar.py` después de 05 y `10_capitales.py` al final; este último usa `ubigeo_distrito.csv` de jmcastagnetto/ubigeo-peru-aumentado, con las coordenadas de las capitales distritales del INEI) y después `mapa1.py`, `mapa2.py` y `mapa3.py`. El mapa 1 usa un MDE de mayor resolución (`02_dem.py 12 -79.40 -74.68 -8.98 -2.32 dem_m1_z12.tif`); se genera con `mapa1.py <salida> 300 pdf` y el PNG con `pdftoppm -r 300 -png -singlefile <salida>.pdf <salida>`. Las rutas de datos están en `/home/user/data_base` y `/home/user/data_osm`.
+Requiere geopandas, rasterio, rdata, networkx, scipy, matplotlib, osmium-tool y poppler (`pdftoppm`). Ejecutar los scripts de `scripts/` en orden: 01 a 05, `05b_limpiar.py`, 06 a 08b y `10_capitales.py`. Este último usa `ubigeo_distrito.csv` de jmcastagnetto/ubigeo-peru-aumentado. Después ejecutar `mapa1.py`, `mapa2.py` y `mapa3.py`; los tres usan `mural.py` y `carto.py`.
+
+Cada mapa se genera con `mapaN.py <salida> 300 pdf`, y su PNG de 300 dpi con `pdftoppm -r 300 -png -singlefile <salida>.pdf <salida>`.
+
+Los modelos de elevación se descargan con `02_dem.py`:
+- Mapa 1 y mapa 3: `dem_m1_z12.tif`.
+- Mapa 2: `dem_m2_z11.tif`.
+- Zooms: `dem_zoom_*.tif` y `dem_zoom3_*.tif`, a nivel 13.
+
+Las rutas de datos están en `/home/user/data_base` y `/home/user/data_osm`.

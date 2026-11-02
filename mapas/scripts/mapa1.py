@@ -4,6 +4,7 @@
 import sys
 sys.path.insert(0, "/home/user/mapas_scripts")
 from carto import *
+from carto import _key
 
 OUT = sys.argv[1] if len(sys.argv) > 1 else "/home/user/TARAPOTO-Dev/mapas/Mapa1_Circunscripcion_IA_Tarapoto"
 DPI = int(sys.argv[2]) if len(sys.argv) > 2 else 300
@@ -214,6 +215,9 @@ for row in prov.itertuples():
             h=2, offsets=[(0, 0), (0, 16), (0, -16), (22, 0), (-22, 0), (0, 32), (0, -32)], inside=gi, shrink=(11, 9) if intar else (8.5,))
 dist = dist[dist.geometry.representative_point().within(tara)].copy()
 dist["a"] = dist.area
+# el nombre del distrito sólo se rotula cuando es distinto al de su capital (si no, se repetiría)
+cap_txt = dict(zip(caps.ubigeo, caps.txt))
+dist = dist[[_key(nombre(d)) != _key(cap_txt.get(u, "")) for d, u in zip(dist.distrito, dist.ubigeo)]]
 n_ok = 0
 for row in dist.sort_values("a", ascending=False).itertuples():
     gi = row.geometry.intersection(fr.bbox)
