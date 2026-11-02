@@ -489,3 +489,19 @@ def draw_points(fr, pts, z=24):
                        ha="center", va="center", family="DejaVu Sans", zorder=z, path_effects=halo(1.6), clip_on=True)
             fr.labels.obstacle(p.x, p.y, 1.5)
     return out
+
+# ---------------------------------------------------------------- recuadros de ubicación
+# Tonos de un solo color (salvia/oliva), acordes al estilo de los mapas murales
+UBI = dict(mar="#e2ecf1", vecinos="#ecebe6", vecinos_borde="#c8c5bb", peru="#eef1e6", borde_peru="#6f7d63",
+           tonos=["#f3f5ee", "#e6ebdd", "#d9e1cd", "#ccd7bd", "#bfccad"], medio="#c3cfb2", destaque="#6b8257",
+           texto="#4f5948", oscuro="#36432f", marco="#2f3a29", pais="#8a8a8a", oceano="#7d9bb0")
+
+def colorear(geoms, n):
+    """Índice de tono (0..n-1) para cada polígono, distinto del de sus vecinos (coloreo voraz por grado)."""
+    idx = range(len(geoms))
+    vec = {i: [j for j in idx if j != i and geoms[i].distance(geoms[j]) < 2000] for i in idx}
+    col = {}
+    for i in sorted(idx, key=lambda i: -len(vec[i])):
+        usados = {col[j] for j in vec[i] if j in col}
+        col[i] = next((c for c in range(n) if c not in usados), 0)
+    return [col[i] for i in idx]

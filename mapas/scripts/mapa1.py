@@ -296,30 +296,29 @@ pu = gpd.read_file(f"{U}/paises_ubicacion.gpkg")
 pb = peru.total_bounds
 mh = h - 14; mw = mh * (pb[2] - pb[0] + 120e3) / (pb[3] - pb[1] + 60e3)
 ax_in = mm_axes(fig, x + (w - mw) / 2, y + 3, mw, mh, zorder=56)
-ax_in.set_facecolor(C["mar"])
+ax_in.set_facecolor(UBI["mar"])
 for row in pu[pu.name != "Perú"].itertuples():
-    ax_in.add_patch(PathPatch(poly_path(row.geometry), fc="#ececec", ec="#b5b5b5", lw=0.4))
-pal = ["#d8e2dc", "#ffe5d9", "#ffcad4", "#f4acb7", "#e2ece9", "#cddafd", "#dfe7fd", "#f0efeb", "#fde2e4", "#fad2e1",
-       "#e9f5db", "#cfe1b9", "#eae4e9", "#bee1e6", "#f1e3d3", "#fff1e6"]
+    ax_in.add_patch(PathPatch(poly_path(row.geometry), fc=UBI["vecinos"], ec=UBI["vecinos_borde"], lw=0.4))
+ton = colorear([g.simplify(1500) for g in circ.geometry], len(UBI["tonos"]))
 for i, row in enumerate(circ.itertuples()):
     t_ = row.circ == "IA TARAPOTO"
-    ax_in.add_patch(PathPatch(poly_path(row.geometry), fc="#b39ddb" if t_ else pal[i % len(pal)], ec="#7b1f5c", lw=0.4))
+    ax_in.add_patch(PathPatch(poly_path(row.geometry), fc=UBI["destaque"] if t_ else UBI["tonos"][ton[i]], ec="white", lw=0.8))
     p = polylabel(max(getattr(row.geometry, "geoms", [row.geometry]), key=lambda a: a.area), 2000)
     if t_:
-        ax_in.text(p.x, p.y, "IA\nTARAPOTO", fontsize=8, weight="bold", ha="center", va="center", color="#2d0f4f", linespacing=1.0)
+        ax_in.text(p.x, p.y, "IA\nTARAPOTO", fontsize=8, weight="bold", ha="center", va="center", color="white", linespacing=1.0)
     else:
         ax_in.text(p.x, p.y, row.circ.replace("IA ", "").replace("MARÍTIMA DEL ", "MAR. DEL\n").replace("PUERTO ", "PTO.\n"), fontsize=5.0,
-                   ha="center", va="center", color="#444", linespacing=1.0)
-ax_in.add_patch(PathPatch(poly_path(tara), fc="none", ec=C["tarapoto"], lw=1.4))
-ax_in.add_patch(Rectangle((fr.x0, fr.y0), fr.x1 - fr.x0, fr.y1 - fr.y0, fill=False, ec="#c8102e", lw=1.1))
+                   ha="center", va="center", color=UBI["texto"], linespacing=1.0)
+ax_in.add_patch(PathPatch(poly_path(peru.geometry.iloc[0]), fc="none", ec=UBI["borde_peru"], lw=0.6))
+ax_in.add_patch(Rectangle((fr.x0, fr.y0), fr.x1 - fr.x0, fr.y1 - fr.y0, fill=False, ec=UBI["marco"], lw=1.2))
 for n, (lo, la) in {"ECUADOR": (-78.6, -1.2), "COLOMBIA": (-72.6, -1.6), "BRASIL": (-70.4, -8.6), "BOLIVIA": (-68.9, -16.0),
                     "CHILE": (-69.6, -18.0), "OCÉANO\nPACÍFICO": (-79.6, -12.2)}.items():
-    ax_in.text(*TO_UTM.transform(lo, la), n, fontsize=6.2, color="#5f87a6" if "OCÉANO" in n else "#777", ha="center", va="center",
+    ax_in.text(*TO_UTM.transform(lo, la), n, fontsize=6.2, color=UBI["oceano"] if "OCÉANO" in n else UBI["pais"], ha="center", va="center",
                style="italic" if "OCÉANO" in n else "normal", weight="bold" if "OCÉANO" not in n else "normal", linespacing=1.0)
 ax_in.set_xlim(pb[0] - 60e3, pb[2] + 60e3); ax_in.set_ylim(pb[1] - 30e3, pb[3] + 30e3); ax_in.set_aspect("equal")
 ax_in.set_xticks([]); ax_in.set_yticks([])
 for s in ax_in.spines.values(): s.set_lw(0.6)
-ov.text(x + (w - mw) / 2 + 4, y + 9, "Recuadro rojo: ámbito\ndel mapa principal", fontsize=6.2, color="#8b0a1e", va="center", zorder=45, linespacing=1.1)
+ov.text(x + (w - mw) / 2 + 4, y + 9, "Recuadro: ámbito\ndel mapa principal", fontsize=6.2, color=UBI["marco"], va="center", zorder=45, linespacing=1.1)
 
 # ------------------------------------------------ zoom N.° 01: Tarapoto (SE)
 x, y, w, h = B_SE

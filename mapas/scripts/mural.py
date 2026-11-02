@@ -64,8 +64,8 @@ class Mural:
         ov.text(x + 10, y + 9.5, num, fontsize=9.5, color=OLIVA, weight="bold", va="center", zorder=42)
         ov.text(x + w - 10, y + 9.5, f"Escala {escala}  ·  A0 (841 × 1189 mm)  ·  Noviembre 2026", fontsize=9, color="#4f5948", ha="right", va="center", zorder=42)
 
-    def ubicacion(self, b, titulo, sombrear, etiqueta, peru, circ, tara):
-        """Recuadro de ubicación: Perú con un ámbito sombreado (geometría `sombrear`) y el marco del mapa."""
+    def ubicacion(self, b, titulo, sombrear, etiqueta, peru, circ, tara, color_sombra=None, fondo_ia=False):
+        """Recuadro de ubicación en tonos de un solo color: Perú, un ámbito sombreado (`sombrear`) y el marco del mapa."""
         x, y, w, h = b; fr = self.fr
         self.caja(b)
         self.barra(x, y + h - 8.5, w, titulo)
@@ -73,26 +73,32 @@ class Mural:
         pb = peru.total_bounds
         mh = h - 13; mw = mh * (pb[2] - pb[0] + 120e3) / (pb[3] - pb[1] + 60e3)
         ax = mm_axes(self.fig, x + (w - mw) / 2, y + 3, mw, mh, zorder=56)
-        ax.set_facecolor(C["mar"])
+        ax.set_facecolor(UBI["mar"])
         for row in pu[pu.name != "Perú"].itertuples():
-            ax.add_patch(PathPatch(poly_path(row.geometry), fc="#ececec", ec="#b5b5b5", lw=0.4))
-        ax.add_patch(PathPatch(poly_path(peru.geometry.iloc[0]), fc="white", ec="#777", lw=0.5))
-        ax.add_patch(PathPatch(poly_path(sombrear), fc="#cfe3c4", ec="#2e7d32", lw=0.5))
-        for g in circ.geometry: ax.add_patch(PathPatch(poly_path(g), fc="none", ec="#b9a3c9", lw=0.35))
-        ax.add_patch(PathPatch(poly_path(tara), fc="none", ec=C["tarapoto"], lw=1.3))
-        p = polylabel(tara, 2000)
-        ax.text(p.x, p.y, "IA\nTARAPOTO", fontsize=6.5, weight="bold", ha="center", va="center", color="#2d0f4f", linespacing=1.0)
+            ax.add_patch(PathPatch(poly_path(row.geometry), fc=UBI["vecinos"], ec=UBI["vecinos_borde"], lw=0.4))
+        ax.add_patch(PathPatch(poly_path(peru.geometry.iloc[0]), fc=UBI["peru"], ec="none"))
+        if fondo_ia:
+            ax.add_patch(PathPatch(poly_path(tara), fc=UBI["tonos"][3], ec="none"))
+        ax.add_patch(PathPatch(poly_path(sombrear), fc=color_sombra or UBI["medio"], ec="none"))
+        for g in circ.geometry: ax.add_patch(PathPatch(poly_path(g), fc="none", ec="white", lw=0.7))
+        ax.add_patch(PathPatch(poly_path(peru.geometry.iloc[0]), fc="none", ec=UBI["borde_peru"], lw=0.6))
+        ax.add_patch(PathPatch(poly_path(tara), fc="none", ec=UBI["oscuro"], lw=1.1))
+        zona = tara.difference(sombrear) if fondo_ia else tara
+        zona = max(getattr(zona, "geoms", [zona]), key=lambda a: a.area)
+        p = polylabel(zona, 2000)
+        ax.text(p.x, p.y, "IA\nTARAPOTO", fontsize=6.5, weight="bold", ha="center", va="center", color=UBI["oscuro"], linespacing=1.0,
+                path_effects=halo(1.4, c=UBI["peru"]))
         if etiqueta:
-            ax.text(*TO_UTM.transform(-72.6, -9.4), etiqueta, fontsize=6.5, weight="bold", ha="center", va="center", color="#2e5e2e", linespacing=1.0)
-        ax.add_patch(Rectangle((fr.x0, fr.y0), fr.x1 - fr.x0, fr.y1 - fr.y0, fill=False, ec="#c8102e", lw=1.1))
+            ax.text(*TO_UTM.transform(-71.9, -3.3), etiqueta, fontsize=6.5, weight="bold", ha="center", va="center", color=UBI["oscuro"], linespacing=1.0)
+        ax.add_patch(Rectangle((fr.x0, fr.y0), fr.x1 - fr.x0, fr.y1 - fr.y0, fill=False, ec=UBI["marco"], lw=1.2))
         for n, (lo, la) in {"ECUADOR": (-78.6, -1.2), "COLOMBIA": (-72.6, -1.6), "BRASIL": (-70.4, -8.6), "BOLIVIA": (-68.9, -16.0),
                             "CHILE": (-69.6, -18.0), "OCÉANO\nPACÍFICO": (-79.6, -12.2)}.items():
-            ax.text(*TO_UTM.transform(lo, la), n, fontsize=5.6, color="#5f87a6" if "OCÉANO" in n else "#777", ha="center", va="center",
+            ax.text(*TO_UTM.transform(lo, la), n, fontsize=5.6, color=UBI["oceano"] if "OCÉANO" in n else UBI["pais"], ha="center", va="center",
                     style="italic" if "OCÉANO" in n else "normal", weight="bold" if "OCÉANO" not in n else "normal", linespacing=1.0)
         ax.set_xlim(pb[0] - 60e3, pb[2] + 60e3); ax.set_ylim(pb[1] - 30e3, pb[3] + 30e3); ax.set_aspect("equal")
         ax.set_xticks([]); ax.set_yticks([])
         for s in ax.spines.values(): s.set_lw(0.6)
-        self.ov.text(x + (w - mw) / 2 + 3, y + 8, "Recuadro rojo: ámbito\ndel mapa principal", fontsize=5.8, color="#8b0a1e", va="center", zorder=45, linespacing=1.1)
+        self.ov.text(x + (w - mw) / 2 + 3, y + 8, "Recuadro: ámbito\ndel mapa principal", fontsize=5.8, color=UBI["marco"], va="center", zorder=45, linespacing=1.1)
 
     def pie(self, x, y, w):
         """Escala, norte y 'Elaborado por' al pie de la leyenda."""

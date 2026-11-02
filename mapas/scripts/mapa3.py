@@ -253,7 +253,7 @@ fr.frame(step_deg=0.5, utm_km=50, skip=CAJAS)
 M.titulo(B_TIT, "FRONTERA NORTE Y RED FLUVIAL", "DE CONDORCANQUI AL DATEM DEL MARAÑÓN",
          "Ríos Santiago, Cenepa, Morona, Pastaza, Marañón y Huallaga · puertos, poblados ribereños y cruces de frontera",
          "MAPA 3 / 3", "1:550 000")
-M.ubicacion(B_UBI, "UBICACIÓN · ÁMBITO DEL MAPA EN LA IA TARAPOTO", AMB, None, peru, circ, tara)
+M.ubicacion(B_UBI, "UBICACIÓN · ÁMBITO DEL MAPA EN LA IA TARAPOTO", AMB, None, peru, circ, tara, color_sombra=UBI["destaque"], fondo_ia=True)
 
 def zoom(b, n, dem, titulo):
     x, y, w, h = b
