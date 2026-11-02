@@ -16,7 +16,9 @@ pn = mm_axes(fig, 0, 0, PAGE_W, PAGE_H, zorder=50)   # capa de recuadros (sobre 
 pn.set_xlim(0, PAGE_W); pn.set_ylim(0, PAGE_H); pn.axis("off"); pn.patch.set_alpha(0)
 fr = MapFrame(fig, FR, (X_L + FR[2] * SCALE / 2000, 9_375_400), SCALE)
 CB = fr.clipbox(0.05)
-NAVY = "#1d2b45"
+OLIVA = "#36432f"        # texto de títulos (oliva oscuro)
+SALVIA = "#dde5d0"       # fondo de encabezados (salvia claro, acorde al relieve)
+CREMA = "#f4f1e8"        # fondo del título
 
 # recuadros dentro del marco (x, y, ancho, alto en mm)
 B_TIT = (20, 1081, 262, 88)       # título (noroeste, sobre Ecuador)
@@ -242,21 +244,22 @@ def caja(b, fc="white", ec="#222", lw=0.9):
     ov.add_patch(Rectangle(b[:2], b[2], b[3], fill=False, ec=ec, lw=lw, zorder=40))
 
 def barra(x, y, w, s, h=8.5, size=8.2):
-    ov.add_patch(Rectangle((x, y), w, h, fc=NAVY, ec="none", zorder=41))
-    ov.text(x + 3, y + h / 2, s, fontsize=size, color="white", weight="bold", va="center", zorder=42)
+    ov.add_patch(Rectangle((x, y), w, h, fc=SALVIA, ec="none", zorder=41))
+    ov.plot([x, x + w], [y, y], color="#9aab86", lw=0.8, zorder=42)
+    ov.text(x + 3, y + h / 2, s, fontsize=size, color=OLIVA, weight="bold", va="center", zorder=42)
 
 # ------------------------------------------------ título (NO)
 x, y, w, h = B_TIT
-caja(B_TIT, fc=NAVY, ec=NAVY)
-ov.add_patch(Rectangle((x, y), 4, h, fc="#c8102e", ec="none", zorder=41))
-ov.text(x + 10, y + h - 8, "SUPERINTENDENCIA NACIONAL DE ADUANAS Y DE ADMINISTRACIÓN TRIBUTARIA – SUNAT", fontsize=7.8, color="#c9d3e6", weight="semibold", va="center", zorder=42)
-ov.text(x + 10, y + h - 14.5, "INTENDENCIA DE ADUANA DE TARAPOTO · EQUIPO DE GESTIÓN DE RIESGO", fontsize=7.8, color="#c9d3e6", va="center", zorder=42)
-ov.text(x + 10, y + h - 29, "CIRCUNSCRIPCIÓN TERRITORIAL", fontsize=22, color="white", weight="bold", va="center", family="Inter Display", zorder=42)
-ov.text(x + 10, y + h - 41, "DE LA INTENDENCIA DE ADUANA DE TARAPOTO", fontsize=22, color="white", weight="bold", va="center", family="Inter Display", zorder=42)
-ov.text(x + 10, y + h - 54, "Límites político-administrativos, régimen tributario (Ley N.° 27037) y red de transporte", fontsize=9.6, color="#e3e8f2", va="center", zorder=42)
-ov.plot([x + 10, x + w - 10], [y + 17, y + 17], color="#5d6d8c", lw=0.6, zorder=42)
-ov.text(x + 10, y + 9.5, "MAPA 1 / 3", fontsize=9.5, color="white", weight="bold", va="center", zorder=42)
-ov.text(x + w - 10, y + 9.5, "Escala 1:625 000  ·  A0 (841 × 1189 mm)  ·  Noviembre 2026", fontsize=9, color="#e3e8f2", ha="right", va="center", zorder=42)
+caja(B_TIT, fc=CREMA, ec="#a39c86")
+ov.add_patch(Rectangle((x, y), 4, h, fc="#7d9467", ec="none", zorder=41))
+ov.text(x + 10, y + h - 8, "SUPERINTENDENCIA NACIONAL DE ADUANAS Y DE ADMINISTRACIÓN TRIBUTARIA – SUNAT", fontsize=7.8, color="#6a7060", weight="semibold", va="center", zorder=42)
+ov.text(x + 10, y + h - 14.5, "INTENDENCIA DE ADUANA DE TARAPOTO · EQUIPO DE GESTIÓN DE RIESGO", fontsize=7.8, color="#6a7060", va="center", zorder=42)
+ov.text(x + 10, y + h - 29, "CIRCUNSCRIPCIÓN TERRITORIAL", fontsize=22, color=OLIVA, weight="bold", va="center", family="Inter Display", zorder=42)
+ov.text(x + 10, y + h - 41, "DE LA INTENDENCIA DE ADUANA DE TARAPOTO", fontsize=22, color=OLIVA, weight="bold", va="center", family="Inter Display", zorder=42)
+ov.text(x + 10, y + h - 54, "Límites político-administrativos, régimen tributario (Ley N.° 27037) y red de transporte", fontsize=9.6, color="#4f5948", va="center", zorder=42)
+ov.plot([x + 10, x + w - 10], [y + 17, y + 17], color="#c9c2ad", lw=0.7, zorder=42)
+ov.text(x + 10, y + 9.5, "MAPA 1 / 3", fontsize=9.5, color=OLIVA, weight="bold", va="center", zorder=42)
+ov.text(x + w - 10, y + 9.5, "Escala 1:625 000  ·  A0 (841 × 1189 mm)  ·  Noviembre 2026", fontsize=9, color="#4f5948", ha="right", va="center", zorder=42)
 
 # ------------------------------------------------ ubicación (NE)
 x, y, w, h = B_UBI
@@ -376,13 +379,13 @@ barra(x, ty - 8.5, w, "PROVINCIAS DE LA CIRCUNSCRIPCIÓN DE LA IA TARAPOTO", siz
 ty -= 13
 cols = [(3, "DEPARTAMENTO"), (36, "PROVINCIA"), (88, "CAPITAL"), (138, "DISTRITOS"), (186, "ÁREA km²")]
 for dx, s in cols:
-    pn.text(x + dx, ty, s, fontsize=6.6, weight="bold", va="center", ha="right" if dx >= 138 else "left", zorder=5, color=NAVY)
+    pn.text(x + dx, ty, s, fontsize=6.6, weight="bold", va="center", ha="right" if dx >= 138 else "left", zorder=5, color=OLIVA)
 pn.plot([x + 2, x + w - 2], [ty - 3, ty - 3], color="#555", lw=0.6, zorder=5)
 ty -= 7.4
 RH = 5.4
 prev = None
 for i, row in enumerate(tb.itertuples()):
-    if i % 2 == 0: pn.add_patch(Rectangle((x + 1.5, ty - RH / 2), w - 3, RH, fc="#f1f3f7", ec="none", zorder=2))
+    if i % 2 == 0: pn.add_patch(Rectangle((x + 1.5, ty - RH / 2), w - 3, RH, fc="#f3f1ea", ec="none", zorder=2))
     if row.departamento != prev:
         pn.text(x + 3, ty, nombre(row.departamento), fontsize=6.9, weight="bold", va="center", zorder=5)
         prev = row.departamento
