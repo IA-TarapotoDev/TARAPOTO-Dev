@@ -16,14 +16,9 @@ CB = fr.clipbox(0.05)
 
 # recuadros dentro del marco (x, y, ancho, alto en mm de página)
 B_TIT = (20, 1079, 300, 90)       # título (noroeste, sobre Ecuador)
-B_Z1 = (20, 880, 180, 190)        # zoom corredor Oeste
 B_UBI = (591, 982, 230, 187)      # ubicación (noreste)
-B_Z4 = (591, 580, 230, 210)       # zoom corredor fluvial (Yurimaguas)
-B_TAB = (591, 250, 230, 320)      # datos de los corredores
-B_Z3 = (591, 20, 230, 220)        # zoom corredor Sur
-B_Z2 = (20, 350, 190, 190)        # zoom corredor Suroeste
 B_LEY = (20, 20, 262, 240)        # leyenda (suroeste)
-CAJAS = (B_TIT, B_Z1, B_UBI, B_Z4, B_TAB, B_Z3, B_Z2, B_LEY)
+CAJAS = (B_TIT, B_UBI, B_LEY)
 M.reservar(*CAJAS)
 
 # ------------------------------------------------ datos
@@ -187,16 +182,6 @@ keep = (caps.nivel == 0) | caps.sobre | ((caps.nivel == 1) & (caps.en_zte | caps
 caps = caps[keep & ~caps.parada]
 caps = dibujar_capitales(fr, caps)
 
-# ------------------------------------------------ rectángulos de los zooms en el mapa principal
-ZOOMS = {"OESTE": (B_Z1, EXITS["OESTE"][:2], "dem_zoom_oeste", f"ZOOM 1 · CORREDOR OESTE – SALIDA DE LA ZTE (km {fkm(EXITS['OESTE'][2]['km'])})"),
-         "SUROESTE": (B_Z2, EXITS["SUROESTE"][:2], "dem_zoom_suroeste", f"ZOOM 2 · CORREDOR SUROESTE – PUENTE BALSAS (km {fkm(EXITS['SUROESTE'][2]['km'])})"),
-         "SUR": (B_Z3, EXITS["SUR"][:2], "dem_zoom_sur", f"ZOOM 3 · CORREDOR SUR – SALIDA DE LA ZTE AL SUR DE AMBO (km {fkm(EXITS['SUR'][2]['km'])})"),
-         "FLUVIAL": (B_Z4, TO_UTM.transform(-76.0870, -5.8920), "dem_zoom_fluvial", "ZOOM 4 · CORREDOR FLUVIAL – PUERTO DE YURIMAGUAS (km 703)")}
-ZSCALE = 60_000
-for k, (b, cen, _, _) in ZOOMS.items():
-    zw, zh = (b[2] - 6) * ZSCALE / 1000, (b[3] - 15) * ZSCALE / 1000
-    fr.ax.add_patch(Rectangle((cen[0] - zw / 2, cen[1] - zh / 2), zw, zh, fill=False, ec=CCOL[k], lw=1.3, zorder=31))
-
 # ------------------------------------------------ rótulos (por prioridad)
 L = fr.labels
 for k, (X, Y, e) in EXITS.items():
@@ -259,138 +244,8 @@ fr.frame(step_deg=1.0, utm_km=100, skip=CAJAS)
 # ======================================================================= recuadros
 M.titulo(B_TIT, "CORREDORES DE SALIDA DE MERCANCÍAS", "DE LA ZTE HACIA LA ZTC",
          "Rutas, kilometraje, salida exacta de la Zona de Tributación Especial (Ley N.° 27037) y puntos de control",
-         "MAPA 2 / 3", "1:1 000 000")
+         "1:1 000 000")
 M.ubicacion(B_UBI, "UBICACIÓN · ZONA DE TRIBUTACIÓN ESPECIAL (LEY N.° 27037)", zte, "ZTE", peru, circ, tara)
-
-def zoom(k, b, cen, dem, titulo):
-    x, y, w, h = b
-    c = corr[k]
-    M.caja(b)
-    M.barra(x, y + h - 9, w, titulo, h=9, size=7.8)
-    rect = (x + 3, y + 3, w - 6, h - 15)
-    f2 = MapFrame(fig, rect, cen, ZSCALE, zorder=55)
-    bb = f2.clipbox(0.1)
-    f2.relief(dem=f"/home/user/data_base/{dem}.tif", res=6, src_res=19, land=land, veil=[bb.difference(zte).intersection(land_u)],
-              veil_alpha=1.0, exag=1.0, shade=(0.66, 0.38))
-    zc = f2.clip_patch(zte.intersection(bb)); f2.ax.add_patch(zc)
-    f2.lines([zte.intersection(bb).boundary], color=C["zte"], lw=10, alpha=0.32, z=4.6, clip=zc, cap="butt")
-    f2.lines([zte.intersection(bb).boundary], color=C["zte"], lw=1.8, z=4.7)
-    ag = f2.load("agua_poly"); rr = f2.load("rios")
-    f2.polys(list(ag.geometry), fc=C["agua"], ec=C["agua_lin"], lw=0.3, z=3)
-    for cl, lw in {"quebrada": 0.5, "canal": 0.6, "rio": 1.1, "navegable": 2.2, "hidrovia": 3.2}.items():
-        f2.lines(list(rr[rr.clase == cl].geometry), color=C["agua_lin"], lw=lw, z=3.3)
-    ds = dist[dist.intersects(bb)]
-    f2.lines(list(ds.geometry.boundary), color="#444", lw=0.9, ls=(0, (4, 2)), z=6)
-    vv = f2.load("vias")
-    for cl, (col, lw) in {"trocha": (C["trocha"], 0.8), "vecinal": (C["vecinal"], 1.1), "departamental": (C["departamental"], 1.8),
-                          "nacional": (C["nacional"], 2.4)}.items():
-        f2.lines(list(vv[vv.clase == cl].geometry), color=col, lw=lw, z=10, ls=(0, (3, 1.6)) if cl == "trocha" else "-")
-    for g, rg, a, b_ in c["segs"]:
-        g = g.intersection(bb)
-        f2.lines([g], color="white", lw=9, z=13, cap="butt")
-        f2.lines([g], color=CCOL[k], lw=6.5, z=13.1, ls=(0, (4, 1.2)) if k == "FLUVIAL" else "-")
-        if rg == "ZTC": f2.lines([g], color="white", lw=2.4, z=13.2, ls=(0, (3, 3)))
-    ln, ff = c["line"], c["f"]
-    for km in np.arange(0, c["data"]["km_total"], 1.0):
-        p = ln.interpolate(km * 1000 / ff)
-        if not f2.bbox.contains(p): continue
-        a = ln.interpolate(max(0, km * 1000 / ff - 150)); b2 = ln.interpolate(min(ln.length, km * 1000 / ff + 150))
-        ang = math.atan2(b2.y - a.y, b2.x - a.x) + math.pi / 2; L_ = 5.5 * f2.m_pt
-        f2.ax.plot([p.x - L_ * math.cos(ang), p.x + L_ * math.cos(ang)], [p.y - L_ * math.sin(ang), p.y + L_ * math.sin(ang)], color="#111", lw=0.9, zorder=13.5)
-        f2.labels.place(p.x, p.y, f"{km:.0f}", size=6.6, weight="bold", color="#111", h=1.6,
-                        offsets=[(9 * math.cos(ang), 9 * math.sin(ang)), (-9 * math.cos(ang), -9 * math.sin(ang))])
-    pp = f2.load("puntos"); pp = pp[pp.geometry.within(f2.bbox)]
-    draw_points(f2, pp[pp.clase.isin(["peaje", "pesaje", "control", "frontera", "sunat", "aerodromo", "puerto", "policia", "grifo"])])
-    lg_ = f2.load("lugares"); lg_ = lg_[lg_.geometry.within(f2.bbox)]
-    f2.ax.plot(lg_.geometry.x, lg_.geometry.y, ls="none", marker="o", ms=3.2, mfc="#222", mec="white", mew=0.5, zorder=25)
-    for p in lg_.geometry: f2.labels.obstacle(p.x, p.y, 0.8)
-    if k in EXITS:
-        X, Y, e = EXITS[k]
-        f2.ax.plot([X], [Y], marker="o", ms=17, mfc="white", mec=C["salida"], mew=2.6, zorder=28)
-        f2.ax.plot([X], [Y], marker="x", ms=9, mec=C["salida"], mew=2.6, zorder=28.1)
-        f2.labels.obstacle(X, Y, 4)
-        f2.labels.place(X, Y, f"SALIDA DE LA ZTE · km {fkm(e['km'])}\n{fgr(e['lat'])}° S  {fgr(e['lon'])}° W", size=8, weight="bold",
-                        color=C["salida"], h=2.2, linespacing=1.1, offsets=ring(14) + ring(24), force=True)
-    for row in pp.itertuples():
-        if isinstance(row.name, str): f2.labels.place(row.geometry.x, row.geometry.y, row.name, size=6.6, color="#333", offsets=ring(6), h=1.6)
-    for row in ds.itertuples():
-        gi = row.geometry.intersection(f2.bbox)
-        if gi.area < 1e5: continue
-        p = polylabel(max(getattr(gi, "geoms", [gi]), key=lambda a: a.area), 30)
-        f2.labels.place(p.x, p.y, f"{nombre(row.distrito).upper()}\n({nombre(row.provincia)}) · {row.regimen}", size=7.6, weight="semibold",
-                        color=C["zte"] if row.regimen == "ZTE" else "#5b5b5b", h=2, linespacing=1.05,
-                        offsets=[(0, 0), (0, 20), (0, -20), (25, 0), (-25, 0), (0, 40), (0, -40)], inside=gi)
-    for row in lg_.itertuples():
-        f2.labels.place(row.geometry.x, row.geometry.y, row.name, size=6.8, color="#222", offsets=ring(4), h=1.6)
-    rn2 = rr[rr.name.notna() & rr.clase.isin(["rio", "navegable", "hidrovia"])]
-    along_labels(f2, [(n, list(x.geometry)) for n, x in rn2.groupby("name")], 90, 7.8, C["agua_txt"], family="Liberation Serif", min_len_mm=15)
-    shields(f2, vv, "nacional", C["nacional"], "white", every_mm=70, size=6.6, min_len_mm=10)
-    shields(f2, vv, "departamental", "#ffd08a", "#4a2b00", every_mm=70, size=6.2, min_len_mm=10)
-    f2.ax.add_patch(Rectangle((f2.x0, f2.y0), f2.x1 - f2.x0, f2.y1 - f2.y0, fill=False, ec="#222", lw=1.0, zorder=60))
-    sb = 2000 * 1e3 / ZSCALE
-    ov.add_patch(Rectangle((rect[0] + 3, rect[1] + 3), 66, 10, fc="white", ec="none", alpha=0.9, zorder=43))
-    ov.text(rect[0] + 5, rect[1] + 10, "Escala 1:60 000", fontsize=6.6, zorder=44, va="center")
-    for i in range(4):
-        ov.add_patch(Rectangle((rect[0] + 5 + i * sb / 2, rect[1] + 4.6), sb / 2, 1.8, fc="#222" if i % 2 == 0 else "white", ec="#222", lw=0.4, zorder=44))
-    ov.text(rect[0] + 7 + 2 * sb, rect[1] + 5.5, "2 km", fontsize=6.2, zorder=44, va="center")
-    # línea guía desde el rectángulo del mapa principal
-    rx0, ry0 = fr.mm(f2.x0, f2.y0); rx1, ry1 = fr.mm(f2.x1, f2.y1)
-    cxm, cym = (rx0 + rx1) / 2, (ry0 + ry1) / 2
-    tx = min(max(cxm, x), x + w); ty = min(max(cym, y), y + h)
-    ov.plot([cxm, tx], [cym, ty], color=CCOL[k], lw=1.1, ls=(0, (3, 2)), zorder=39)
-
-for k, (b, cen, dem, tit) in ZOOMS.items():
-    zoom(k, b, cen, dem, tit)
-
-# ------------------------------------------------ datos de los corredores
-x, y, w, h = B_TAB
-M.caja(B_TAB)
-M.barra(x, y + h - 9, w, "DATOS DE LOS CORREDORES (km acumulados desde el origen)", h=9, size=8.2)
-ty = y + h - 16
-for k in ["OESTE", "SUROESTE", "SUR", "FLUVIAL"]:
-    c = corr[k]; d = c["data"]; nom, ruta = CNOM[k]
-    y_top = ty
-    pn.text(x + 9, ty, nom, fontsize=12.4, weight="bold", color=CCOL[k], va="center", zorder=5)
-    ty -= 6.8
-    pn.text(x + 9, ty, ruta, fontsize=9.2, color="#222", va="center", zorder=5); ty -= 6.0
-    pn.text(x + 9, ty, "Vías: " + " · ".join(d["vias"][:6]), fontsize=8.5, color="#444", va="center", zorder=5); ty -= 6.8
-    pn.text(x + 9, ty, "Total:", fontsize=9.4, color="#444", va="center", zorder=5)
-    pn.text(x + 25, ty, f"{fkm(d['km_total'])} km", fontsize=10.9, weight="bold", va="center", zorder=5)
-    pn.text(x + 72, ty, "En ZTE:", fontsize=9.4, color="#444", va="center", zorder=5)
-    pn.text(x + 92, ty, f"{fkm(d['km_zte'])} km", fontsize=10.9, weight="bold", color=C["zte"], va="center", zorder=5)
-    ty -= 7.2
-    if k in EXITS:
-        e = EXITS[k][2]
-        pn.text(x + 9, ty, f"Salida definitiva de la ZTE: km {fkm(e['km'])}   ·   {fgr(e['lat'])}° S, {fgr(e['lon'])}° W",
-                fontsize=9.4, weight="bold", color=C["salida"], va="center", zorder=5); ty -= 6.0
-        for t_ in e["limite_txt"][:2]:
-            pn.text(x + 12, ty, t_, fontsize=8.5, color="#222", va="center", zorder=5); ty -= 5.3
-        for a, b_, nm_ in e["intermedios"]:
-            pn.text(x + 9, ty, f"Tramo intermedio en ZTC: km {fkm(a)}–{fkm(b_)} ({nm_})", fontsize=8.5, color="#7a1d1d",
-                    style="italic", va="center", zorder=5); ty -= 5.5
-    else:
-        pn.text(x + 9, ty, "Recorrido íntegro dentro de la ZTE (no tiene punto de salida).", fontsize=9.4, weight="bold", color=C["zte"],
-                va="center", zorder=5); ty -= 6.0
-        pn.text(x + 9, ty, "  ·  ".join(f"{nm} km {fkm(km, 0)}" for nm, km, _ in c["stops"]), fontsize=8.5, color="#222", va="center", zorder=5); ty -= 5.5
-        pn.text(x + 9, ty, "Ingresa a la circunscripción IA Tarapoto por el río Marañón (Datem del Marañón / Alto Amazonas).", fontsize=8.0,
-                color="#444", va="center", zorder=5); ty -= 5.3
-    mg = []
-    for a, b_, n_ in c["cir"]:
-        if mg and mg[-1][2] == n_ and a - mg[-1][1] < 1: mg[-1] = (mg[-1][0], b_, n_)
-        else: mg.append((a, b_, n_))
-    mg = [m_ for m_ in mg if m_[1] - m_[0] >= 1]
-    ctxt = "Circunscripciones: " + "  ·  ".join(f"IA {title_case(n_[3:])} km {fkm(a, 0)}–{fkm(b_, 0)}" for a, b_, n_ in mg)
-    for line in textwrap.wrap(ctxt, 70)[:2]:
-        pn.text(x + 9, ty, line, fontsize=8.5, color="#444", va="center", zorder=5); ty -= 5.3
-    pc = c["pts"][c["pts"].clase.isin(["peaje", "pesaje", "control", "sunat"])]
-    txt = "; ".join(f"{(n if isinstance(n, str) else cl.capitalize())} (km {km:.0f})" for n, cl, km in zip(pc.name, pc.clase, pc.km))
-    for i, line in enumerate(textwrap.wrap("Peajes y controles: " + (txt or "sin registros públicos en OSM"), 70)[:5]):
-        pn.text(x + 9, ty, line, fontsize=8.5, color="#444", va="center", zorder=5); ty -= 5.3
-    pn.add_patch(Rectangle((x + 3, ty + 2.2), 3, y_top - ty + 1.5, fc=CCOL[k], ec="none", zorder=5))
-    ty -= 4.5
-    pn.plot([x + 3, x + w - 3], [ty + 2.4, ty + 2.4], color="#d6d2c4", lw=0.6, zorder=5)
-    ty -= 2.5
-print("tabla: espacio libre al pie", round(ty - y, 1), "mm")
 
 # ------------------------------------------------ leyenda (SO)
 x, y, w, h = B_LEY

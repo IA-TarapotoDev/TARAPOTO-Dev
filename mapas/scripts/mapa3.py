@@ -16,13 +16,9 @@ CB = fr.clipbox(0.05)
 
 # recuadros dentro del marco (x, y, ancho, alto en mm de página)
 B_TIT = (20, 1079, 300, 90)       # título (noroeste, sobre Ecuador)
-B_ZC = (20, 860, 190, 190)        # zoom Puerto Galilea
-B_ZA = (325, 975, 190, 190)       # zoom Saramiriza
 B_UBI = (591, 980, 230, 189)      # ubicación (noreste)
-B_ZB = (631, 740, 190, 190)       # zoom San Lorenzo
-B_ZD = (480, 20, 230, 190)        # zoom Yurimaguas
 B_LEY = (20, 20, 262, 270)        # leyenda (suroeste)
-CAJAS = (B_TIT, B_ZC, B_ZA, B_UBI, B_ZB, B_ZD, B_LEY)
+CAJAS = (B_TIT, B_UBI, B_LEY)
 M.reservar(*CAJAS)
 
 # ------------------------------------------------ datos
@@ -151,23 +147,8 @@ lx = lx[lx.distance(front) < 45000]
 fr.ax.plot(lx.geometry.x, lx.geometry.y, ls="none", marker="o", ms=4.4, mfc="white", mec="#777", mew=1.0, zorder=24)
 for p in lx.geometry: fr.labels.obstacle(p.x, p.y, 1.0)
 
-# ------------------------------------------------ rectángulos de los zooms en el mapa principal
-ZSCALE = 50_000
-ZOOMS = {"A": (B_ZA, "Saramiriza", "dem_zoom3_saramiriza", "ZOOM A · PUERTO DE SARAMIRIZA – RÍO MARAÑÓN"),
-         "B": (B_ZB, "San Lorenzo", "dem_zoom3_sanlorenzo", "ZOOM B · PUERTO DE SAN LORENZO – RÍO MARAÑÓN"),
-         "C": (B_ZC, "Puerto Galilea", "dem_zoom3_galilea", "ZOOM C · PUERTO GALILEA – RÍO SANTIAGO"),
-         "D": (B_ZD, "Yurimaguas", "dem_zoom3_yurimaguas", "ZOOM D · PUERTO DE YURIMAGUAS – RÍO HUALLAGA")}
-ZRECT = {}
-for k, (b, n, _, _) in ZOOMS.items():
-    p = PXY[n]; zw, zh = (b[2] - 6) * ZSCALE / 1000, (b[3] - 15) * ZSCALE / 1000
-    fr.ax.add_patch(Rectangle((p.x - zw / 2, p.y - zh / 2), zw, zh, fill=False, ec="#0d3c8c", lw=1.4, zorder=31))
-    ZRECT[k] = (p.x - zw / 2, p.y - zh / 2, p.x + zw / 2, p.y + zh / 2)
-
 # ------------------------------------------------ rótulos (por prioridad)
 L = fr.labels
-for k, (x0_, y0_, x1_, y1_) in ZRECT.items():
-    L.place(x1_, y1_, f"Zoom {k}", size=9, weight="bold", color="#0d3c8c", h=2,
-            offsets=[(2, 1, "left", "bottom"), (2, -1, "left", "top"), (-2, 1, "right", "bottom")], force=True)
 for n in PUERTOS:
     p = PXY[n]
     L.place(p.x, p.y, f"PUERTO {n.upper()}", size=12, weight="bold", color="#0d3c8c", h=2.5, offsets=ring(13) + ring(22), force=True)
@@ -252,66 +233,8 @@ fr.frame(step_deg=0.5, utm_km=50, skip=CAJAS)
 # ======================================================================= recuadros
 M.titulo(B_TIT, "FRONTERA NORTE Y RED FLUVIAL", "DE CONDORCANQUI AL DATEM DEL MARAÑÓN",
          "Ríos Santiago, Cenepa, Morona, Pastaza, Marañón y Huallaga · puertos, poblados ribereños y cruces de frontera",
-         "MAPA 3 / 3", "1:550 000")
+         "1:550 000")
 M.ubicacion(B_UBI, "UBICACIÓN · ÁMBITO DEL MAPA EN LA IA TARAPOTO", AMB, None, peru, circ, tara, color_sombra=UBI["destaque"], fondo_ia=True)
-
-def zoom(b, n, dem, titulo):
-    x, y, w, h = b
-    M.caja(b)
-    M.barra(x, y + h - 9, w, titulo, h=9, size=7.8)
-    rect = (x + 3, y + 3, w - 6, h - 15)
-    p0 = PXY[n]
-    f2 = MapFrame(fig, rect, (p0.x, p0.y), ZSCALE, zorder=55)
-    f2.relief(dem=f"/home/user/data_base/{dem}.tif", res=6, src_res=19, land=land, exag=1.0, shade=(0.70, 0.32))
-    ag = f2.load("agua_poly"); rr = f2.load("rios")
-    f2.polys(list(ag.geometry), fc=C["agua"], ec=C["agua_lin"], lw=0.3, z=3)
-    for cl, lw in {"quebrada": 0.5, "canal": 0.6, "rio": 1.2, "navegable": 2.4, "hidrovia": 3.4}.items():
-        f2.lines(list(rr[rr.clase == cl].geometry), color=C["agua_lin"], lw=lw, z=3.3)
-    bb = f2.clipbox(0.1)
-    ds = dist[dist.intersects(bb)]
-    f2.lines(list(ds.geometry.boundary), color="#444", lw=0.9, ls=(0, (4, 2)), z=6)
-    vv = f2.load("vias"); ss = sen[sen.intersects(bb)]
-    f2.lines(list(ss[ss.highway.notna()].geometry), color="#8d6e63", lw=0.7, ls=(0, (1.2, 1.4)), z=9.6)
-    for cl, (col, lw) in {"trocha": (C["trocha"], 0.9), "vecinal": (C["vecinal"], 1.2), "departamental": (C["departamental"], 1.9),
-                          "nacional": (C["nacional"], 2.5)}.items():
-        f2.lines(list(vv[vv.clase == cl].geometry), color=col, lw=lw, z=10, ls=(0, (3, 1.6)) if cl == "trocha" else "-")
-    pp = f2.load("puntos"); pp = pp[pp.geometry.within(f2.bbox)]
-    draw_points(f2, pp[pp.clase.isin(["peaje", "control", "frontera", "sunat", "aerodromo", "puerto", "policia", "grifo", "helipuerto"])])
-    mun = pp[pp.clase == "municipalidad"]
-    f2.ax.plot(mun.geometry.x, mun.geometry.y, ls="none", marker="s", ms=5, mfc="#795548", mec="white", mew=0.6, zorder=24)
-    for q in mun.geometry: f2.labels.obstacle(q.x, q.y, 1.2)
-    f2.ax.plot([p0.x], [p0.y], marker="o", ms=16, mfc="#0d47a1", mec="white", mew=1.5, zorder=29)
-    f2.ax.text(p0.x, p0.y, "⚓", fontsize=9, color="white", ha="center", va="center", family="DejaVu Sans", zorder=29.5)
-    f2.labels.obstacle(p0.x, p0.y, 3.4)
-    lg_ = f2.load("lugares"); lg_ = lg_[lg_.geometry.within(f2.bbox)]
-    f2.ax.plot(lg_.geometry.x, lg_.geometry.y, ls="none", marker="o", ms=3.4, mfc="#222", mec="white", mew=0.5, zorder=25)
-    for q in lg_.geometry: f2.labels.obstacle(q.x, q.y, 0.8)
-    f2.labels.place(p0.x, p0.y, f"PUERTO {n.upper()}" if not n.startswith("Puerto") else n.upper(), size=9.6, weight="bold", color="#0d3c8c",
-                    h=2.4, offsets=ring(12) + ring(20), force=True)
-    for row in pp.itertuples():
-        if isinstance(row.name, str): f2.labels.place(row.geometry.x, row.geometry.y, row.name, size=6.8, color="#333", offsets=ring(6), h=1.6)
-    for row in lg_.sort_values("cap").itertuples():
-        if _key(row.name) == _key(n): continue
-        f2.labels.place(row.geometry.x, row.geometry.y, row.name, size=8 if row.cap == row.cap else 6.8, weight="bold" if row.cap == row.cap else "normal",
-                        color="#222", offsets=ring(4), h=1.6)
-    for row in ds.itertuples():
-        gi = row.geometry.intersection(f2.bbox)
-        if gi.area < 2e5: continue
-        q = polylabel(max(getattr(gi, "geoms", [gi]), key=lambda a: a.area), 20)
-        f2.labels.place(q.x, q.y, f"Distrito de {nombre(row.distrito)}", size=8, style="italic", weight="semibold", color="#5b4a73", h=2,
-                        offsets=[(0, 0), (0, 25), (0, -25), (35, 0), (-35, 0), (0, 50), (0, -50)], inside=gi)
-    rn2 = rr[rr.name.notna() & rr.clase.isin(["rio", "navegable", "hidrovia"])]
-    along_labels(f2, [(m_, list(x_.geometry)) for m_, x_ in rn2.groupby("name")], 70, 9, "#0d3c8c", family="Liberation Serif", weight="bold", min_len_mm=12)
-    f2.ax.add_patch(Rectangle((f2.x0, f2.y0), f2.x1 - f2.x0, f2.y1 - f2.y0, fill=False, ec="#222", lw=1.0, zorder=60))
-    sb = 2000 * 1e3 / ZSCALE
-    ov.add_patch(Rectangle((rect[0] + 3, rect[1] + 3), 72, 10, fc="white", ec="none", alpha=0.9, zorder=43))
-    ov.text(rect[0] + 5, rect[1] + 10, "Escala 1:50 000", fontsize=6.6, zorder=44, va="center")
-    for i in range(4):
-        ov.add_patch(Rectangle((rect[0] + 5 + i * sb / 2, rect[1] + 4.6), sb / 2, 1.8, fc="#222" if i % 2 == 0 else "white", ec="#222", lw=0.4, zorder=44))
-    ov.text(rect[0] + 7 + 2 * sb, rect[1] + 5.5, "2 km", fontsize=6.2, zorder=44, va="center")
-
-for k, (b, n, dem, tit) in ZOOMS.items():
-    zoom(b, n, dem, tit)
 
 # ------------------------------------------------ leyenda (SO)
 x, y, w, h = B_LEY

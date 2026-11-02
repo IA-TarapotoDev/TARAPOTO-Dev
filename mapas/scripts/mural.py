@@ -51,7 +51,7 @@ class Mural:
         self.ov.plot([x, x + w], [y, y], color="#9aab86", lw=0.8, zorder=42)
         self.ov.text(x + 3, y + h / 2, s, fontsize=size, color=OLIVA, weight="bold", va="center", zorder=42)
 
-    def titulo(self, b, l1, l2, sub, num, escala):
+    def titulo(self, b, l1, l2, sub, escala):
         x, y, w, h = b; ov = self.ov
         self.caja(b, fc=CREMA, ec="#a39c86")
         ov.add_patch(Rectangle((x, y), 4, h, fc="#7d9467", ec="none", zorder=41))
@@ -61,8 +61,7 @@ class Mural:
         ov.text(x + 10, y + h - 41, l2, fontsize=22, color=OLIVA, weight="bold", va="center", family="Inter Display", zorder=42)
         ov.text(x + 10, y + h - 54, sub, fontsize=9.6, color="#4f5948", va="center", zorder=42, linespacing=1.25)
         ov.plot([x + 10, x + w - 10], [y + 17, y + 17], color="#c9c2ad", lw=0.7, zorder=42)
-        ov.text(x + 10, y + 9.5, num, fontsize=9.5, color=OLIVA, weight="bold", va="center", zorder=42)
-        ov.text(x + w - 10, y + 9.5, f"Escala {escala}  ·  A0 (841 × 1189 mm)  ·  Noviembre 2026", fontsize=9, color="#4f5948", ha="right", va="center", zorder=42)
+        ov.text(x + 10, y + 9.5, f"Escala {escala}  ·  A0 (841 × 1189 mm)  ·  Noviembre 2026", fontsize=9, color="#4f5948", va="center", zorder=42)
 
     def ubicacion(self, b, titulo, sombrear, etiqueta, peru, circ, tara, color_sombra=None, fondo_ia=False):
         """Recuadro de ubicación en tonos de un solo color: Perú, un ámbito sombreado (`sombrear`) y el marco del mapa."""

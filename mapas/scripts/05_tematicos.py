@@ -27,13 +27,21 @@ def circ(r):
     return "?"
 
 ZTE_DEP = {"LORETO", "MADRE DE DIOS", "UCAYALI", "AMAZONAS", "SAN MARTIN"}
+# Ámbito según el anexo de SUNAT "Jurisdicción en la Ley de Promoción de la Amazonía – Ley N.° 27037, art. 3"
+# (procedimiento RECA-PE.05.01); Cutervo se mantiene como ZTC por decisión del usuario.
 ZTE_PROV = {("HUANUCO", "LEONCIO PRADO"), ("HUANUCO", "PUERTO INCA"), ("HUANUCO", "MARAÑON"), ("HUANUCO", "PACHITEA"),
             ("CAJAMARCA", "JAEN"), ("CAJAMARCA", "SAN IGNACIO"),
-            ("PASCO", "OXAPAMPA"), ("JUNIN", "CHANCHAMAYO"), ("JUNIN", "SATIPO")}
+            ("PASCO", "OXAPAMPA"), ("JUNIN", "CHANCHAMAYO"), ("JUNIN", "SATIPO"), ("CUSCO", "LA CONVENCION")}
 ZTE_DIS = {("HUAMALIES", "MONZON"), ("HUANCABAMBA", "EL CARMEN DE LA FRONTERA"), ("PATAZ", "ONGON"),
            ("HUANUCO", "HUANUCO"), ("HUANUCO", "AMARILIS"), ("HUANUCO", "PILLCO MARCA"), ("HUANUCO", "CHINCHAO"),
            ("HUANUCO", "CHURUBAMBA"), ("HUANUCO", "SANTA MARIA DEL VALLE"),
-           ("AMBO", "AMBO"), ("AMBO", "CONCHAMARCA"), ("AMBO", "TOMAY KICHWA")}
+           ("AMBO", "AMBO"), ("AMBO", "CONCHAMARCA"), ("AMBO", "TOMAY KICHWA"),
+           ("HUANTA", "SIVIA"), ("HUANTA", "AYAHUANCO"), ("LA MAR", "AYNA"), ("LA MAR", "SAN MIGUEL"), ("LA MAR", "SANTA ROSA"),
+           ("TAYACAJA", "HUACHOCOLPA"), ("TAYACAJA", "TINTAY PUNCU"),
+           ("CALCA", "YANATILE"), ("PAUCARTAMBO", "KOSÑIPATA"), ("QUISPICANCHI", "CAMANTI"), ("QUISPICANCHI", "MARCAPATA"),
+           ("CARABAYA", "COASA"), ("CARABAYA", "AYAPATA"), ("CARABAYA", "ITUATA"), ("CARABAYA", "OLLACHEA"), ("CARABAYA", "SAN GABAN"),
+           ("SANDIA", "SAN JUAN DEL ORO"), ("SANDIA", "LIMBANI"), ("SANDIA", "YANAHUAYA"), ("SANDIA", "PHARA"),
+           ("SANDIA", "ALTO INAMBARI"), ("SANDIA", "SANDIA"), ("SANDIA", "PATAMBUCO")}
 def reg(r):
     if r.departamento in ZTE_DEP or (r.departamento, r.provincia) in ZTE_PROV or (r.provincia, r.distrito) in ZTE_DIS: return "ZTE"
     return "ZTC"

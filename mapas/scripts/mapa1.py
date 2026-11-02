@@ -285,8 +285,7 @@ ov.text(x + 10, y + h - 29, "CIRCUNSCRIPCIÓN TERRITORIAL", fontsize=22, color=O
 ov.text(x + 10, y + h - 41, "DE LA INTENDENCIA DE ADUANA DE TARAPOTO", fontsize=22, color=OLIVA, weight="bold", va="center", family="Inter Display", zorder=42)
 ov.text(x + 10, y + h - 54, "Límites político-administrativos, régimen tributario (Ley N.° 27037) y red de transporte", fontsize=9.6, color="#4f5948", va="center", zorder=42)
 ov.plot([x + 10, x + w - 10], [y + 17, y + 17], color="#c9c2ad", lw=0.7, zorder=42)
-ov.text(x + 10, y + 9.5, "MAPA 1 / 3", fontsize=9.5, color=OLIVA, weight="bold", va="center", zorder=42)
-ov.text(x + w - 10, y + 9.5, "Escala 1:625 000  ·  A0 (841 × 1189 mm)  ·  Noviembre 2026", fontsize=9, color="#4f5948", ha="right", va="center", zorder=42)
+ov.text(x + 10, y + 9.5, "Escala 1:625 000  ·  A0 (841 × 1189 mm)  ·  Noviembre 2026", fontsize=9, color="#4f5948", va="center", zorder=42)
 
 # ------------------------------------------------ ubicación (NE)
 x, y, w, h = B_UBI
