@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Mapa 1 – Circunscripción IA Tarapoto</title>
-<meta name="description" content="Mapa mural A0 de la circunscripción territorial de la Intendencia de Aduana de Tarapoto: límites, régimen tributario (Ley N.° 27037) y red de transporte.">
+<title>Mapas IA Tarapoto</title>
+<meta name="description" content="Mapas murales A0 de la Intendencia de Aduana de Tarapoto: circunscripción, corredores de salida de la ZTE y frontera norte con red fluvial.">
 <style>
   :root {
     --crema: #f4f1e8; --salvia: #dde5d0; --oliva: #36432f; --acento: #7d9467;
@@ -13,11 +13,15 @@
   * { box-sizing: border-box; }
   html, body { margin: 0; background: var(--crema); color: var(--texto);
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
-  body { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; }
   header { padding: 14px 16px 12px; border-left: 6px solid var(--acento); border-bottom: 1px solid var(--borde); }
   .sup { margin: 0 0 3px; font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: #6a7060; }
   h1 { margin: 0; font-size: clamp(18px, 2.6vw, 28px); line-height: 1.2; color: var(--oliva); }
   .sub { margin: 5px 0 12px; font-size: 13px; color: var(--suave); }
+  .pestanas { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
+  .pestana { appearance: none; border: 1px solid #9aab86; background: #fff; color: var(--oliva); border-radius: 6px;
+    padding: 9px 14px; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }
+  .pestana[aria-selected="true"] { background: var(--oliva); border-color: var(--oliva); color: #fff; }
+  .pestana small { display: block; font-weight: 400; font-size: 11.5px; opacity: .85; }
   .acciones { display: flex; flex-wrap: wrap; gap: 8px; }
   .btn { display: inline-flex; align-items: baseline; gap: 6px; padding: 10px 14px; border-radius: 6px;
     font-size: 14px; font-weight: 600; text-decoration: none; color: var(--oliva);
@@ -26,53 +30,80 @@
   .btn.principal { background: var(--oliva); border-color: var(--oliva); color: #fff; }
   .btn.principal:hover { background: #2a3424; }
   .btn small { font-weight: 400; opacity: .85; }
-  #visor { flex: 0 0 auto; height: 78vh; height: 78dvh; min-height: 420px; background: #e9e6dc; }
+  #visor { height: 78vh; height: 78dvh; min-height: 420px; background: #e9e6dc; }
   .ayuda { margin: 0; padding: 8px 16px; font-size: 12px; color: var(--suave); border-top: 1px solid var(--borde); }
   footer { padding: 4px 16px 16px; font-size: 11px; color: #6a7060; }
   @media (max-width: 600px) {
     header { padding: 10px 12px 10px; }
     .sup { font-size: 10px; }
     .sub { font-size: 12px; margin-bottom: 10px; }
-    .acciones { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+    .pestanas { display: grid; grid-template-columns: repeat(3, 1fr); }
+    .pestana { padding: 8px 4px; font-size: 13px; text-align: center; }
+    .acciones { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
     .btn { flex-direction: column; align-items: center; text-align: center; gap: 2px; padding: 8px 4px; font-size: 13px; }
     .btn small { font-size: 10.5px; }
-    #visor { height: 74vh; height: 74dvh; }
+    #visor { height: 72vh; height: 72dvh; }
   }
 </style>
 </head>
 <body>
 <header>
   <p class="sup">SUNAT · Intendencia de Aduana de Tarapoto · Equipo de Gestión de Riesgo</p>
-  <h1>Circunscripción territorial de la Intendencia de Aduana de Tarapoto</h1>
-  <p class="sub">Mapa 1 de 3 · A0 vertical (841 × 1189 mm) · Escala 1:625 000 · Noviembre 2026</p>
+  <h1 id="titulo">Circunscripción territorial de la Intendencia de Aduana de Tarapoto</h1>
+  <p class="sub" id="sub">Mapa 1 de 3 · A0 vertical (841 × 1189 mm) · Escala 1:625 000 · Noviembre 2026</p>
+  <div class="pestanas" role="tablist" aria-label="Elegir mapa">
+    <button class="pestana" role="tab" data-mapa="1" aria-selected="true">Mapa 1<small>Circunscripción</small></button>
+    <button class="pestana" role="tab" data-mapa="2" aria-selected="false">Mapa 2<small>Corredores ZTE → ZTC</small></button>
+    <button class="pestana" role="tab" data-mapa="3" aria-selected="false">Mapa 3<small>Frontera norte</small></button>
+  </div>
   <div class="acciones">
-    <a class="btn principal" href="descargas/Mapa1_Circunscripcion_IA_Tarapoto.pdf" download>Descargar PDF <small>A0 vectorial para plotter · 46 MB</small></a>
-    <a class="btn" href="descargas/Mapa1_Circunscripcion_IA_Tarapoto_300dpi.png" download>Descargar PNG <small>300 dpi · 56 MB</small></a>
-    <a class="btn" href="descargas/Mapa1_Circunscripcion_IA_Tarapoto_vista.png" target="_blank" rel="noopener">Ver imagen liviana <small>14 MB</small></a>
+    <a class="btn principal" id="pdf" href="descargas/Mapa1_Circunscripcion_IA_Tarapoto.pdf" download>Descargar PDF <small id="pdf-tam">A0 vectorial para plotter</small></a>
+    <a class="btn" id="vista" href="descargas/Mapa1_Circunscripcion_IA_Tarapoto_vista.png" target="_blank" rel="noopener">Ver imagen liviana <small id="vista-tam"></small></a>
   </div>
 </header>
 
-<div id="visor" role="img" aria-label="Mapa 1: circunscripción territorial de la Intendencia de Aduana de Tarapoto"></div>
-<noscript><p class="ayuda">El visor necesita JavaScript. Puedes <a href="descargas/Mapa1_Circunscripcion_IA_Tarapoto_vista.png">ver la imagen</a> o <a href="descargas/Mapa1_Circunscripcion_IA_Tarapoto.pdf">descargar el PDF</a>.</p></noscript>
+<div id="visor" role="img" aria-label="Visor del mapa seleccionado"></div>
+<noscript><p class="ayuda">El visor necesita JavaScript. Puedes descargar los PDF: <a href="descargas/Mapa1_Circunscripcion_IA_Tarapoto.pdf">mapa 1</a>, <a href="descargas/Mapa2_Corredores_ZTE_ZTC.pdf">mapa 2</a>, <a href="descargas/Mapa3_Frontera_Norte_Red_Fluvial.pdf">mapa 3</a>.</p></noscript>
 <p class="ayuda">Para acercar, pellizca con dos dedos o usa la rueda del ratón; doble toque o doble clic también amplía. El recuadro de abajo a la derecha muestra qué parte del mapa estás viendo.</p>
-<footer>Fuentes: INEI 2019 (límites y capitales distritales) · R.S. N.° 000980 y modificatorias (circunscripciones) · Ley N.° 27037 (ZTE) · © colaboradores de OpenStreetMap (ODbL) · AWS Terrain Tiles. Visor: OpenSeadragon. Mapas 2 y 3: en preparación.</footer>
+<footer>Fuentes: INEI 2019 (límites y capitales distritales) · R.S. N.° 000980 y modificatorias (circunscripciones) · Ley N.° 27037 (ZTE) · © colaboradores de OpenStreetMap (ODbL) · OSRM (rutas) · AWS Terrain Tiles. Visor: OpenSeadragon.</footer>
 
-<script src="js/openseadragon.min.js?v=20261102b"></script>
+<script src="js/openseadragon.min.js?v=20261102c"></script>
 <script>
-  window.visor = OpenSeadragon({
-    id: "visor",
-    prefixUrl: "js/images/",
-    tileSources: "tiles/mapa1.dzi?v=20261102b",
-    showNavigator: true,
-    navigatorPosition: "BOTTOM_RIGHT",
-    navigatorSizeRatio: 0.18,
-    showRotationControl: false,
-    maxZoomPixelRatio: 2.5,
-    visibilityRatio: 0.9,
-    constrainDuringPan: true,
-    animationTime: 0.8,
-    gestureSettingsTouch: { pinchRotate: false }
+  var V = "20261102c";
+  var MAPAS = {
+    "1": { titulo: "Circunscripción territorial de la Intendencia de Aduana de Tarapoto",
+           sub: "Mapa 1 de 3 · A0 vertical (841 × 1189 mm) · Escala 1:625 000 · Noviembre 2026",
+           tiles: "tiles/mapa1.dzi", pdf: "descargas/Mapa1_Circunscripcion_IA_Tarapoto.pdf", pdfTam: "46 MB",
+           vista: "descargas/Mapa1_Circunscripcion_IA_Tarapoto_vista.png", vistaTam: "14 MB" },
+    "2": { titulo: "Corredores de salida de mercancías de la ZTE hacia la ZTC",
+           sub: "Mapa 2 de 3 · A0 vertical (841 × 1189 mm) · Escala 1:1 000 000 · Noviembre 2026",
+           tiles: "tiles/mapa2.dzi", pdf: "descargas/Mapa2_Corredores_ZTE_ZTC.pdf", pdfTam: "78 MB",
+           vista: "descargas/Mapa2_Corredores_ZTE_ZTC_vista.png", vistaTam: "13 MB" },
+    "3": { titulo: "Frontera norte y red fluvial: de Condorcanqui al Datem del Marañón",
+           sub: "Mapa 3 de 3 · A0 vertical (841 × 1189 mm) · Escala 1:550 000 · Noviembre 2026",
+           tiles: "tiles/mapa3.dzi", pdf: "descargas/Mapa3_Frontera_Norte_Red_Fluvial.pdf", pdfTam: "39 MB",
+           vista: "descargas/Mapa3_Frontera_Norte_Red_Fluvial_vista.png", vistaTam: "11 MB" }
+  };
+  var visor = OpenSeadragon({
+    id: "visor", prefixUrl: "js/images/", showNavigator: true, navigatorPosition: "BOTTOM_RIGHT",
+    navigatorSizeRatio: 0.18, showRotationControl: false, maxZoomPixelRatio: 2.5, visibilityRatio: 0.9,
+    constrainDuringPan: true, animationTime: 0.8, gestureSettingsTouch: { pinchRotate: false }
   });
+  function mostrar(n) {
+    if (!MAPAS[n]) n = "1";
+    var m = MAPAS[n];
+    document.getElementById("titulo").textContent = m.titulo;
+    document.getElementById("sub").textContent = m.sub;
+    document.getElementById("pdf").href = m.pdf;
+    document.getElementById("pdf-tam").textContent = "A0 vectorial para plotter · " + m.pdfTam;
+    document.getElementById("vista").href = m.vista;
+    document.getElementById("vista-tam").textContent = m.vistaTam;
+    document.querySelectorAll(".pestana").forEach(function (b) { b.setAttribute("aria-selected", b.dataset.mapa === n ? "true" : "false"); });
+    visor.open(m.tiles + "?v=" + V);
+    if (location.hash !== "#mapa" + n) history.replaceState(null, "", "#mapa" + n);
+  }
+  document.querySelectorAll(".pestana").forEach(function (b) { b.addEventListener("click", function () { mostrar(b.dataset.mapa); }); });
+  mostrar((location.hash.match(/mapa(\d)/) || [])[1] || "1");
 </script>
 </body>
 </html>
