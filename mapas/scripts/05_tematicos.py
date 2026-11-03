@@ -13,6 +13,9 @@ def circ(r):
     if dep == "LAMBAYEQUE": return "IA CHICLAYO"
     if dep == "LA LIBERTAD": return "IA SALAVERRY"
     if dep == "ANCASH": return "IA CHIMBOTE"
+    if (dep == "PASCO" and prov in ("PASCO", "DANIEL ALCIDES CARRION")) or \
+       (dep == "LIMA" and prov in ("CAJATAMBO", "HUARAL", "OYON", "BARRANCA", "HUAURA")) or \
+       (dep == "LIMA" and prov == "LIMA" and dis == "ANCON"): return "IA CHANCAY"
     if dep in ("LIMA", "CALLAO", "JUNIN", "PASCO"): return "IA MARÍTIMA DEL CALLAO"
     if dep in ("ICA", "AYACUCHO", "HUANCAVELICA"): return "IA PISCO"
     if dep == "AREQUIPA": return "IA MOLLENDO"
