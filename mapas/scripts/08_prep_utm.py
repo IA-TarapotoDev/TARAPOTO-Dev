@@ -34,8 +34,8 @@ def rclase(r):
     if r.waterway != "river": return "quebrada" if r.waterway == "stream" else "canal"
     if "Amazonas" in n or "Ucayali" in n: return "hidrovia"
     if "Marañ" in n:
-        if c.x > -77.43: return "hidrovia"
-        return "navegable" if c.y > -5.5 else "rio"
+        if c.y <= -5.5: return "rio"                     # Marañón alto (Andes): no navegable
+        return "hidrovia" if c.x > -77.43 else "navegable"
     if "Huallaga" in n:
         return "hidrovia" if c.y > -5.92 else "rio"
     if re.search(NAV, n) and r.geometry.length > 0: return "navegable"

@@ -296,6 +296,14 @@ class LabelManager:
                     self.add_box(b); return t
                 t.remove()
         if force:
+            # sin hueco libre: primera posición que quede dentro del marco (aunque se superponga); si ninguna, la primera
+            for dx, dy, *al in offsets:
+                t = self.fr.text(X + dx * self.fr.m_pt, Y + dy * self.fr.m_pt, s, size=sizes[0], ha=al[0] if al else "center",
+                                 va=al[1] if len(al) > 1 else "center", **kw)
+                b = self.bbox_mm(t)
+                if b[0] > fx + 1 and b[2] < fx + fw - 1 and b[1] > fy + 1 and b[3] < fy + fh - 1:
+                    self.add_box(b); return t
+                t.remove()
             dx, dy, *al = offsets[0]
             t = self.fr.text(X + dx * self.fr.m_pt, Y + dy * self.fr.m_pt, s, size=sizes[0], ha=al[0] if al else "center",
                              va=al[1] if len(al) > 1 else "center", **kw)
