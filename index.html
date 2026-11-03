@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Mapas IA Tarapoto</title>
-<meta name="description" content="Mapas murales A0 de la Intendencia de Aduana de Tarapoto: circunscripción, corredores de salida de la ZTE y red fluvial del Perú con sus salidas.">
+<meta name="description" content="Mapas murales A0 de la Intendencia de Aduana de Tarapoto: circunscripción, corredores de salida de la ZTE y red fluvial del norte del Perú con sus salidas.">
 <style>
   :root {
     --crema: #f4f1e8; --salvia: #dde5d0; --oliva: #36432f; --acento: #7d9467;
@@ -54,7 +54,7 @@
   <div class="pestanas" role="tablist" aria-label="Elegir mapa">
     <button class="pestana" role="tab" data-mapa="1" aria-selected="true">Circunscripción<small>IA Tarapoto</small></button>
     <button class="pestana" role="tab" data-mapa="2" aria-selected="false">Corredores<small>ZTE → ZTC</small></button>
-    <button class="pestana" role="tab" data-mapa="3" aria-selected="false">Red fluvial<small>Salidas del Perú</small></button>
+    <button class="pestana" role="tab" data-mapa="3" aria-selected="false">Red fluvial<small>Norte del Perú</small></button>
   </div>
   <div class="acciones">
     <a class="btn principal" id="pdf" href="descargas/Mapa1_Circunscripcion_IA_Tarapoto.pdf" download>Descargar PDF <small id="pdf-tam">A0 vectorial para plotter</small></a>
@@ -63,13 +63,13 @@
 </header>
 
 <div id="visor" role="img" aria-label="Visor del mapa seleccionado"></div>
-<noscript><p class="ayuda">El visor necesita JavaScript. Puedes descargar los PDF: <a href="descargas/Mapa1_Circunscripcion_IA_Tarapoto.pdf">circunscripción</a>, <a href="descargas/Mapa2_Corredores_ZTE_ZTC.pdf">corredores</a>, <a href="descargas/Mapa3_Red_Fluvial_Peru.pdf">red fluvial</a>.</p></noscript>
+<noscript><p class="ayuda">El visor necesita JavaScript. Puedes descargar los PDF: <a href="descargas/Mapa1_Circunscripcion_IA_Tarapoto.pdf">circunscripción</a>, <a href="descargas/Mapa2_Corredores_ZTE_ZTC.pdf">corredores</a>, <a href="descargas/Mapa3_Red_Fluvial_Norte_Peru.pdf">red fluvial</a>.</p></noscript>
 <p class="ayuda">Para acercar, pellizca con dos dedos o usa la rueda del ratón; doble toque o doble clic también amplía. El recuadro de abajo a la derecha muestra qué parte del mapa estás viendo.</p>
 <footer>Fuentes: INEI 2019 (límites y capitales distritales) · R.S. N.° 000980 y modificatorias (circunscripciones) · Ley N.° 27037 y anexo SUNAT (ZTE) · © colaboradores de OpenStreetMap (ODbL) · OSRM (rutas) · AWS Terrain Tiles. Visor: OpenSeadragon.</footer>
 
-<script src="js/openseadragon.min.js?v=20261103a"></script>
+<script src="js/openseadragon.min.js?v=20261103b"></script>
 <script>
-  var V = "20261103a";
+  var V = "20261103b";
   var MAPAS = {
     "1": { titulo: "Circunscripción territorial de la Intendencia de Aduana de Tarapoto",
            sub: "A0 vertical (841 × 1189 mm) · Escala 1:625 000 · Noviembre 2026",
@@ -79,10 +79,10 @@
            sub: "A0 vertical (841 × 1189 mm) · Escala 1:1 000 000 · Noviembre 2026",
            tiles: "tiles/mapa2.dzi", pdf: "descargas/Mapa2_Corredores_ZTE_ZTC.pdf", pdfTam: "78 MB",
            vista: "descargas/Mapa2_Corredores_ZTE_ZTC_vista.png", vistaTam: "15 MB" },
-    "3": { titulo: "Red fluvial del Perú: salidas de la jurisdicción y del país",
-           sub: "A0 vertical (841 × 1189 mm) · Escala 1:1 800 000 · Noviembre 2026",
-           tiles: "tiles/mapa3.dzi", pdf: "descargas/Mapa3_Red_Fluvial_Peru.pdf", pdfTam: "44 MB",
-           vista: "descargas/Mapa3_Red_Fluvial_Peru_vista.png", vistaTam: "7 MB" }
+    "3": { titulo: "Red fluvial del norte del Perú: salidas de la jurisdicción y del país",
+           sub: "A0 horizontal (1189 × 841 mm) · Escala 1:1 250 000 · Noviembre 2026",
+           tiles: "tiles/mapa3.dzi", pdf: "descargas/Mapa3_Red_Fluvial_Norte_Peru.pdf", pdfTam: "35 MB",
+           vista: "descargas/Mapa3_Red_Fluvial_Norte_Peru_vista.png", vistaTam: "7 MB" }
   };
   var visor = OpenSeadragon({
     id: "visor", prefixUrl: "js/images/", showNavigator: true, navigatorPosition: "BOTTOM_RIGHT",
