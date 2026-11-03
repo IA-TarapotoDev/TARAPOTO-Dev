@@ -7,16 +7,15 @@ from carto import _key
 OLIVA = "#36432f"        # texto de títulos (oliva oscuro)
 SALVIA = "#dde5d0"       # fondo de encabezados (salvia claro)
 CREMA = "#f4f1e8"        # fondo del título
-FR = (20, 20, 801, 1149)  # marco del mapa (mm de página)
-
-
 class Mural:
-    def __init__(self, scale, x_oeste, y_norte):
+    def __init__(self, scale, x_oeste, y_norte, horizontal=False):
         self.scale = scale
-        self.fig, self.bg = page()
+        self.pw, self.ph = (PAGE_H, PAGE_W) if horizontal else (PAGE_W, PAGE_H)
+        self.FR = FR = (20, 20, self.pw - 40, self.ph - 40)   # marco del mapa (mm de página)
+        self.fig, self.bg = page(self.pw, self.ph)
         self.ov = self.fig.ov
-        self.pn = mm_axes(self.fig, 0, 0, PAGE_W, PAGE_H, zorder=50)   # recuadros: sobre el mapa, bajo los insertos
-        self.pn.set_xlim(0, PAGE_W); self.pn.set_ylim(0, PAGE_H); self.pn.axis("off"); self.pn.patch.set_alpha(0)
+        self.pn = mm_axes(self.fig, 0, 0, self.pw, self.ph, zorder=50)   # recuadros: sobre el mapa, bajo los insertos
+        self.pn.set_xlim(0, self.pw); self.pn.set_ylim(0, self.ph); self.pn.axis("off"); self.pn.patch.set_alpha(0)
         k = scale / 1000
         self.fr = MapFrame(self.fig, FR, (x_oeste + FR[2] * k / 2, y_norte - FR[3] * k / 2), scale)
         self.cajas = []
@@ -30,7 +29,7 @@ class Mural:
 
     def mm_a_utm(self, b):
         x, y, w, h = b
-        fr = self.fr; k = self.scale / 1000
+        fr = self.fr; k = self.scale / 1000; FR = self.FR
         return box(fr.x0 + (x - FR[0]) * k, fr.y0 + (y - FR[1]) * k, fr.x0 + (x + w - FR[0]) * k, fr.y0 + (y + h - FR[1]) * k)
 
     def ancla(self, geom, tol=500):
@@ -61,7 +60,8 @@ class Mural:
         ov.text(x + 10, y + h - 41, l2, fontsize=22, color=OLIVA, weight="bold", va="center", family="Inter Display", zorder=42)
         ov.text(x + 10, y + h - 54, sub, fontsize=9.6, color="#4f5948", va="center", zorder=42, linespacing=1.25)
         ov.plot([x + 10, x + w - 10], [y + 17, y + 17], color="#c9c2ad", lw=0.7, zorder=42)
-        ov.text(x + 10, y + 9.5, f"Escala {escala}  ·  A0 (841 × 1189 mm)  ·  Noviembre 2026", fontsize=9, color="#4f5948", va="center", zorder=42)
+        formato = f"A0 {'horizontal' if self.pw > self.ph else 'vertical'} ({self.pw:.0f} × {self.ph:.0f} mm)"
+        ov.text(x + 10, y + 9.5, f"Escala {escala}  ·  {formato}  ·  Noviembre 2026", fontsize=9, color="#4f5948", va="center", zorder=42)
 
     def ubicacion(self, b, titulo, sombrear, etiqueta, peru, circ, tara, color_sombra=None, fondo_ia=False):
         """Recuadro de ubicación en tonos de un solo color: Perú, un ámbito sombreado (`sombrear`) y el marco del mapa."""

@@ -1,16 +1,16 @@
 # Mapas murales A0 – Intendencia de Aduana de Tarapoto
 
-Tres mapas en formato A0 vertical (841 × 1189 mm), cada uno con un PDF vectorial para plotter. Los tres usan la misma distribución mural: el mapa ocupa todo el recuadro y los recuadros (título, ubicación y leyenda) van encima, sobre zonas que no son relevantes. El relieve se muestra solo en el área relevante de cada mapa y el resto queda con fondo blanco.
+Tres mapas en formato A0, cada uno con un PDF vectorial para plotter: los mapas 1 y 2 en vertical (841 × 1189 mm) y el mapa 3 en horizontal (1189 × 841 mm). Los tres usan la misma distribución mural: el mapa ocupa todo el recuadro y los recuadros (título, ubicación y leyenda) van encima, sobre zonas que no son relevantes. El relieve se muestra solo en el área relevante de cada mapa y el resto queda con fondo blanco.
 
 **Página web (GitHub Pages):** https://ia-tarapotodev.github.io/TARAPOTO-Dev/ (pestañas para los 3 mapas, visor con zoom y descarga de cada PDF; se publica desde la rama `gh-pages`, con teselas generadas por `scripts/09_dzi.py`).
 
-Vistas livianas (100 dpi) en `png/`: [mapa 1](png/Mapa1_Circunscripcion_IA_Tarapoto_vista.png) · [mapa 2](png/Mapa2_Corredores_ZTE_ZTC_vista.png) · [mapa 3](png/Mapa3_Red_Fluvial_Peru_vista.png)
+Vistas livianas (100 dpi) en `png/`: [mapa 1](png/Mapa1_Circunscripcion_IA_Tarapoto_vista.png) · [mapa 2](png/Mapa2_Corredores_ZTE_ZTC_vista.png) · [mapa 3](png/Mapa3_Red_Fluvial_Norte_Peru_vista.png)
 
 | Mapa | Archivo | Escala | Relieve en | Contenido |
 |---|---|---|---|---|
 | 1 | `Mapa1_Circunscripcion_IA_Tarapoto` | 1:625 000 | Circunscripción IA Tarapoto | Límites de departamentos, provincias y distritos; ZTE; circunscripciones vecinas; red vial con códigos; ríos navegables; puertos; aeródromos; las 173 capitales distritales en su ubicación oficial (INEI) y los centros poblados de más de 2 000 habitantes; frontera; sede de la IA; zoom de Tarapoto (1:40 000) y tabla de provincias. El nombre de un distrito solo se rotula cuando es distinto al de su capital. |
 | 2 | `Mapa2_Corredores_ZTE_ZTC` | 1:1 000 000 | ZTE (la ZTC va en blanco) | Corredores Oeste, Suroeste, Sur y Fluvial, con kilometraje, salida definitiva de la ZTE, y peajes, controles, grifos y comisarías en ruta |
-| 3 | `Mapa3_Red_Fluvial_Peru` | 1:1 800 000 | Circunscripción IA Tarapoto | Red fluvial de todo el Perú: Hidrovía Amazónica, ríos navegables, puertos fluviales y oficinas SUNAT junto a ríos navegables; salidas fluviales de la jurisdicción y del país; rutas de salida desde los puertos de la IA Tarapoto con kilometraje desde Yurimaguas |
+| 3 | `Mapa3_Red_Fluvial_Norte_Peru` (A0 horizontal) | 1:1 250 000 | Circunscripción IA Tarapoto | Red fluvial del norte del Perú (de la frontera con Ecuador y Colombia hasta ~9° S, de la costa de Tumbes a Santa Rosa): Hidrovía Amazónica, ríos navegables, puertos fluviales, capitales ribereñas y oficinas SUNAT junto a ríos navegables; salida fluvial de la jurisdicción y las 10 salidas del país del norte; rutas de salida desde los puertos de la IA Tarapoto con kilometraje desde Yurimaguas |
 
 ## Salidas fluviales (mapa 3)
 
@@ -22,7 +22,7 @@ Kilometraje medido sobre el eje de los ríos de OpenStreetMap (longitud geodési
 |---|---|---|
 | Río Marañón → IA Iquitos | 4,9428° S, 75,5149° W | km 236 desde Yurimaguas · km 292 desde Saramiriza |
 
-**Salidas del país**
+**Salidas del país (norte del Perú)**
 
 | Río | Hacia | En la IA Tarapoto | Coordenadas | Distancia por río |
 |---|---|---|---|---|
@@ -36,11 +36,6 @@ Kilometraje medido sobre el eje de los ríos de OpenStreetMap (longitud geodési
 | Río Putumayo (fronterizo) | Colombia | No | 2,6514° S, 70,0828° W | – |
 | Río Amazonas | Colombia (Leticia) y Brasil (Tabatinga) | No | 4,1854° S, 69,9795° W | 1 185 km desde Yurimaguas · 1 241 km desde Saramiriza |
 | Río Yavarí (fronterizo) | Brasil | No | 4,2842° S, 70,1298° W | – |
-| Río Juruá | Brasil | No | 9,4122° S, 72,7300° W | – |
-| Río Purús | Brasil | No | 9,4534° S, 70,5091° W | – |
-| Río Tahuamanu | Bolivia | No | 11,4590° S, 69,2540° W | – |
-| Río Manuripi | Bolivia | No | 11,9182° S, 68,9673° W | – |
-| Río Madre de Dios | Bolivia | No | 12,4975° S, 68,6551° W | – |
 
 En los ríos fronterizos (Putumayo y Yavarí), el río es el propio límite internacional y el cruce puede hacerse en cualquier punto de su curso; el punto marcado es el extremo aguas abajo del tramo limítrofe.
 

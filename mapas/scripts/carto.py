@@ -39,15 +39,18 @@ def halo(w=1.6, c="white", a=0.9):
     return [pe.withStroke(linewidth=w, foreground=c, alpha=a)]
 
 def mm_axes(fig, x, y, w, h, **kw):
-    ax = fig.add_axes([x / PAGE_W, y / PAGE_H, w / PAGE_W, h / PAGE_H], **kw)
+    pw, ph = getattr(fig, "page_mm", (PAGE_W, PAGE_H))
+    ax = fig.add_axes([x / pw, y / ph, w / pw, h / ph], **kw)
     return ax
 
-def page():
-    fig = plt.figure(figsize=(PAGE_W / 25.4, PAGE_H / 25.4), dpi=100)
-    bg = mm_axes(fig, 0, 0, PAGE_W, PAGE_H, zorder=-10)
-    bg.set_xlim(0, PAGE_W); bg.set_ylim(0, PAGE_H); bg.axis("off")
-    ov = mm_axes(fig, 0, 0, PAGE_W, PAGE_H, zorder=100)
-    ov.set_xlim(0, PAGE_W); ov.set_ylim(0, PAGE_H); ov.axis("off"); ov.patch.set_alpha(0)
+def page(w=PAGE_W, h=PAGE_H):
+    """Lámina en mm (por defecto A0 vertical; page(PAGE_H, PAGE_W) para A0 horizontal)."""
+    fig = plt.figure(figsize=(w / 25.4, h / 25.4), dpi=100)
+    fig.page_mm = (w, h)
+    bg = mm_axes(fig, 0, 0, w, h, zorder=-10)
+    bg.set_xlim(0, w); bg.set_ylim(0, h); bg.axis("off")
+    ov = mm_axes(fig, 0, 0, w, h, zorder=100)
+    ov.set_xlim(0, w); ov.set_ylim(0, h); ov.axis("off"); ov.patch.set_alpha(0)
     fig.ov = ov
     return fig, bg
 
