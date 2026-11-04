@@ -52,7 +52,7 @@ Para la actividad económica (CIIU) y la fecha de inscripción, agregue los resu
 
 Formatos de entrada esperados:
 
-- **DAM** (CSV): `COD_ADUANA, ANN_PRESEN, COD_REGIMEN, NUM_DECLARACION, FEC_DECLARACION, COD_ADUDEST, NUM_DOCIDENT, NOM_RAZONSOCIAL, DIR_PARTIC, COD_TIPPARTIC, CANAL, NUM_PARTNANDI, NUM_SECSERIE, CNT_COMER, COD_UNICOMER, MTO_FOBDOL, MTO_FLETEDOL, MTO_SEGDOL, MTO_VALORADU, DES_COMER, DES_FORMAPRESEN, DES_MATECOMP, DES_USOAPLIC, DES_OTROSCARAC, COD_TIPCONVENIO, COD_CONVENIO`
+- **DAM** (CSV, todas las aduanas de destino y regímenes; los totales usan el régimen 10, el depósito 70 y la exportación 40 se muestran aparte): `COD_ADUANA, ANN_PRESEN, COD_REGIMEN, NUM_DECLARACION, FEC_DECLARACION, COD_ADUDEST, NUM_DOCIDENT, NOM_RAZONSOCIAL, DIR_PARTIC, COD_TIPPARTIC, CANAL, NUM_PARTNANDI, NUM_SECSERIE, CNT_COMER, COD_UNICOMER, MTO_FOBDOL, MTO_FLETEDOL, MTO_SEGDOL, MTO_VALORADU, DES_COMER, DES_FORMAPRESEN, DES_MATECOMP, DES_USOAPLIC, DES_OTROSCARAC, COD_TIPCONVENIO, COD_CONVENIO`
 - **CPE emitidos** (TXT con `|`, Latin-1, fechas MM/DD/AAAA): `ruc emisor | tipo cpe | serie | nro cpe | tipo cpe | tipo doc | doc/receptor | nombre receptor | moneda | valor venta | igv | importe total | fecha cpe | indicador estado`
 - **Detalle de CPE** (TXT con `|`, Latin-1): `num_ruc | cod_cpe | num_serie_cpe | num_cpe | cod_tipo_cpe | cod_docide_recep | num_docide_recep | des_nombre_recep | fec_emision | moneda | ind_estado | ind_rechazo | cod_unidad | des_detalle_item | num_cant_item | mto_total_venta | mto_total_igv | observacion`
 
@@ -61,7 +61,8 @@ Formatos de entrada esperados:
 | Nivel | Alerta | Criterio |
 |---|---|---|
 | Alta | Maquinaria vendida con IGV | Factura vigente de la serie de maquinaria (FP) con IGV mayor que cero |
-| Alta | Maquinaria vendida a no domiciliado | Factura vigente de maquinaria a un cliente con documento de tipo 0 |
+| Alta / Baja | Maquinaria vendida a no domiciliado | Factura vigente de maquinaria a un cliente con documento de tipo 0; baja si hay una DAM de exportación (régimen 40) de maquinaria en los 90 días siguientes |
+| Media | Máquina vendida a cliente de otra circunscripción amazónica | Venta de maquinaria a un cliente domiciliado en la ZTE, pero en una circunscripción aduanera distinta de la del establecimiento emisor (inferido por la serie) |
 | Media | Venta de maquinaria anulada o devuelta | Nota de crédito de maquinaria con motivo 01 (anulación) o 06 (devolución total) |
 | Media | Factura de maquinaria dada de baja | Factura de maquinaria en estado 2 |
 | Media | Maquinaria usada importada | Serie de maquinaria con «USED» en la descripción o con un año de fabricación al menos 2 años anterior al de la DAM |

@@ -1,4 +1,4 @@
-"""Clasifica cada distrito (ubigeo INEI) en ZTE o ZTC según el art. 3 de la Ley 27037.
+"""Clasifica cada distrito (ubigeo INEI) en ZTE o ZTC según el art. 3 de la Ley 27037 y le asigna su circunscripción aduanera.
 
 Usa las mismas reglas que los mapas (mapas/scripts/05_tematicos.py): ámbito según el
 anexo de SUNAT «Jurisdicción en la Ley de Promoción de la Amazonía – Ley N.° 27037,
@@ -39,6 +39,32 @@ ZTE_PROV_K = {(clave(a), clave(b)) for a, b in ZTE_PROV}
 ZTE_DIS_K = {(clave(a), clave(b)) for a, b in ZTE_DIS}
 
 
+def circunscripcion(dep, prov, dis):
+    """Circunscripción aduanera de cada distrito: mismas reglas que mapas/scripts/05_tematicos.py (R.S. 000980 y modif.)."""
+    if dep == "TUMBES" or (prov == "TALARA" and dis in ("MANCORA", "LOS ORGANOS")): return "IA TUMBES"
+    if dep == "PIURA": return "IA PAITA"
+    if dep == "CAJAMARCA":
+        return "IA PAITA" if prov in ("SANTA CRUZ", "CHOTA", "CUTERVO", "SAN IGNACIO", "JAEN", "HUALGAYOC") else "IA SALAVERRY"
+    if dep == "LAMBAYEQUE": return "IA CHICLAYO"
+    if dep == "LA LIBERTAD": return "IA SALAVERRY"
+    if dep == "ANCASH": return "IA CHIMBOTE"
+    if (dep == "PASCO" and prov in ("PASCO", "DANIEL ALCIDES CARRION")) or \
+       (dep == "LIMA" and prov in ("CAJATAMBO", "HUARAL", "OYON", "BARRANCA", "HUAURA")) or \
+       (dep == "LIMA" and prov == "LIMA" and dis == "ANCON"): return "IA CHANCAY"
+    if dep in ("LIMA", "CALLAO", "JUNIN", "PASCO"): return "IA MARITIMA DEL CALLAO"
+    if dep in ("ICA", "AYACUCHO", "HUANCAVELICA"): return "IA PISCO"
+    if dep == "AREQUIPA": return "IA MOLLENDO"
+    if dep == "MOQUEGUA": return "IA ILO"
+    if dep == "TACNA": return "IA TACNA"
+    if dep == "PUNO": return "IA PUNO"
+    if dep in ("CUSCO", "APURIMAC"): return "IA CUSCO"
+    if dep == "MADRE DE DIOS": return "IA PUERTO MALDONADO"
+    if dep in ("UCAYALI", "HUANUCO"): return "IA PUCALLPA"
+    if dep in ("SAN MARTIN", "AMAZONAS"): return "IA TARAPOTO"
+    if dep == "LORETO": return "IA TARAPOTO" if prov in ("ALTO AMAZONAS", "DATEM DEL MARANON") else "IA IQUITOS"
+    return ""
+
+
 def main(entrada, salida):
     u = pd.read_csv(entrada, dtype=str)
     u = u[u.inei.fillna("").str.fullmatch(r"\d{6}")]  # descarta distritos sin código INEI
@@ -50,10 +76,13 @@ def main(entrada, salida):
         sys.exit(f"Reglas sin coincidencia en la tabla de ubigeos: {faltan}")
     u["zona"] = ["ZTE" if d in ZTE_DEP_K or (d, p) in ZTE_PROV_K or (p, s) in ZTE_DIS_K else "ZTC"
                  for d, p, s in zip(u.dep_k, u.prov_k, u.dis_k)]
-    out = u[["inei", "departamento", "provincia", "distrito", "zona"]].rename(columns={"inei": "ubigeo"}).sort_values("ubigeo")
+    u["circunscripcion"] = [circunscripcion(d, p, s) for d, p, s in zip(u.dep_k, u.prov_k, u.dis_k)]
+    assert (u.circunscripcion != "").all(), u[u.circunscripcion == ""]
+    out = u[["inei", "departamento", "provincia", "distrito", "zona", "circunscripcion"]].rename(columns={"inei": "ubigeo"}).sort_values("ubigeo")
     out.to_csv(salida, index=False)
     print(out.groupby("zona").size().to_dict())
     print(out[out.zona == "ZTE"].groupby("departamento").size().to_dict())
+    print(out.groupby("circunscripcion").size().to_dict())
 
 
 if __name__ == "__main__":

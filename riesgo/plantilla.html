@@ -760,6 +760,10 @@ function barrasH(host, filas, series, total) {
   }
   host.append(g);
 }
+const COL_DEST = { "271": "var(--s1)", "217": "var(--s3)", "280": "var(--s2)", "226": "var(--eje)", "": "var(--mudo)" };
+const destT = d => d ? `${d} · ${(D.meta.destinos || {})[d] || ""}` : "Sin aduana de destino";
+const estDe = r => (D.maq.establecimientos || []).find(e => e.dig === (r.cpe.split("-")[1] || "").slice(2));
+const titulo = t => String(t || "").toLowerCase().replace(/(^|[\s(])\S/g, c => c.toUpperCase());
 const convT = k => k === "Sin beneficio" ? "Sin beneficio" : k.startsWith("C-") ? `Código liberatorio ${k.slice(2)}` : k.startsWith("I-") ? `TPI ${k.slice(2)}` : k;
 
 /* ---------- vistas ---------- */
@@ -825,7 +829,7 @@ function vistaResumen(sec) {
   f1.append(
     plan({ icono: "importaciones", titulo: "Importaciones", chip: `${f0(M.n_dam)} DAM`, valor: usd(K.cif), sub: `CIF importado · ${f0(M.n_series)} series`,
       punto: "var(--lima)", puntos: [`<b>${pc(lib.cif / K.cif * 100)}</b> con ${esc(convT(lib.k).toLowerCase())}`, `Maquinaria: <b>${pc(K.cif_maq / K.cif * 100)}</b> del CIF`,
-        `Canal verde: <b>${pc(K.dam_verde / M.n_dam * 100)}</b> de las DAM`, `<b>${f0(K.maq_usada)}</b> máquinas declaradas usadas`],
+        ...I.destinos.slice(0, 2).map(d => `${esc(destT(d.cod))}: <b>${usd(d.cif)}</b> · ${f0(d.uds_maq)} máquinas`)],
       serie: I.mensual.map(d => d.maq + d.otros), color: "var(--lima)", mini: "CIF importado por mes", boton: "Importaciones", destino: "importaciones", pill: "lima" }),
     plan({ clase: "oscuro", icono: "maquinaria", titulo: "Maquinaria", chip: "Prioridad", valor: `${f0(K.uds_maq)} · ${f0(K.maq_vend)}`, sub: "importadas · vendidas en el periodo",
       punto: "var(--lat-act)", puntos: [
@@ -888,7 +892,14 @@ function vistaResumen(sec) {
     if (n) item(nm ? "Alta" : "Media", `<b>${f0(n)} facturas emitidas con IGV se dieron de baja y se reemitieron sin IGV</b> al mismo cliente y por el mismo monto en menos de 30 días (${f0(nm)} de maquinaria; en otras líneas solo se cuentan las de IGV de 100 o más). El cambio de gravada a exonerada debe sustentarse con la entrega dentro de la zona.`, tipo); }
   const igvMaqUsd = sumaAlertas("Maquinaria vendida con IGV", "USD"), igvMaqPen = sumaAlertas("Maquinaria vendida con IGV", "PEN");
   item("Alta", `<b>${f0(contarAlertas("Maquinaria vendida con IGV"))} facturas de maquinaria se emitieron con IGV</b> (USD ${fc(igvMaqUsd)} y S/ ${fc(igvMaqPen)} de valor de venta), aunque casi todas las demás ventas van sin IGV. Es un indicio de operación fuera del ámbito del beneficio: verificar con qué DAM y código liberatorio ingresó cada unidad y si se regularizó su salida de la zona.`, "Maquinaria vendida con IGV");
-  item("Alta", `<b>${f0(contarAlertas("Maquinaria vendida a no domiciliado"))} máquinas se facturaron a un cliente no domiciliado</b> (USD ${fc(sumaAlertas("Maquinaria vendida a no domiciliado", "USD"))}). Verificar si existe DAM de exportación o reexportación y por qué aduana salieron.`, "Maquinaria vendida a no domiciliado");
+  { const nd = D.alertas.filter(a => a.tipo === "Maquinaria vendida a no domiciliado"), conExp = nd.filter(a => a.nivel === "Baja").length;
+    if (nd.length) item(conExp === nd.length ? "Baja" : "Alta", `<b>${f0(nd.length)} máquinas se facturaron a un cliente no domiciliado</b> (USD ${fc(sumaAlertas("Maquinaria vendida a no domiciliado", "USD"))}). `
+      + (conExp ? `${f0(conExp)} tienen DAM de exportación probable (${[...new Set((D.maq.exportaciones || []).map(x => D.meta.aduanas[x.ad] || x.ad))].join(", ")}), enlazada por PIN con su DAM de importación con beneficio. Confirmar la serie en la factura.` : "Verificar si existe DAM de exportación o reexportación y por qué aduana salieron."),
+      "Maquinaria vendida a no domiciliado"); }
+  { const tipo = "Máquina vendida a cliente de otra circunscripción amazónica", n = contarAlertas(tipo);
+    if (n) item("Media", `<b>${f0(n)} máquinas se vendieron a clientes de la ZTE domiciliados en otra circunscripción</b> que la del establecimiento emisor (inferido por la serie). Son traslados dentro de la Amazonía que conviene contrastar con la aduana de destino de cada DAM.`, tipo); }
+  { const sinNac = (D.maq.deposito || []).filter(r => !r.nac_dam).length;
+    if (sinNac) item("Baja", `<b>${f0(sinNac)} máquinas siguen en depósito aduanero</b> sin DAM de nacionalización en los datos. Verificar su situación antes del vencimiento del plazo de depósito.`, null); }
   item("Media", `<b>${f0(contarAlertas("Venta de maquinaria anulada o devuelta"))} notas de crédito anulan o devuelven ventas de maquinaria</b> y ${f0(contarAlertas("Factura de maquinaria dada de baja"))} facturas de maquinaria se dieron de baja. Rastrear el destino final de cada unidad: si se volvió a facturar y a quién.`, "Venta de maquinaria anulada o devuelta");
   item("Media", `<b>${f0(contarAlertas("Maquinaria usada importada"))} máquinas se declararon usadas</b> (año de fabricación o texto «USED»). Revisar el valor declarado y el método de valoración aplicado.`, "Maquinaria usada importada");
   item("Media", `<b>${f0(contarAlertas("Cliente con 3 o más máquinas"))} clientes compraron 3 o más máquinas</b> en el periodo. Verificar su domicilio, actividad y la ubicación real de los equipos (posible intermediación o salida de la zona).`, "Cliente con 3 o más máquinas");
@@ -898,6 +909,7 @@ function vistaResumen(sec) {
 
   const n = tarjeta("Notas metodológicas");
   n.append(el("ul", { class: "nota", style: "margin:0;padding-left:18px;font-size:13px;color:var(--suave)", html: [
+    "Importaciones: régimen 10 (importación para el consumo) de todas las aduanas de destino; el depósito aduanero (70) y la exportación (40) se muestran aparte para no contar dos veces. El establecimiento emisor de cada comprobante se infiere del número de su serie.",
     "Importaciones en USD (FOB, flete, seguro y valor en aduana o CIF). Las ventas se muestran en su moneda (USD y S/) sin convertir, con el valor de venta sin IGV de comprobantes vigentes. Los comprobantes dados de baja (estado 2) no se suman.",
     "La línea de negocio se deduce de la serie del comprobante y de los ítems facturados: FR repuestos, FS servicio técnico, FP maquinaria y FV otros ingresos (intereses, gastos refacturados, anticipos).",
     "El detalle de los CPE repite el importe total del comprobante en cada ítem, así que no hay precio por ítem. En maquinaria cada factura corresponde a una sola unidad, de modo que su valor de venta es el precio unitario.",
@@ -910,8 +922,8 @@ function vistaResumen(sec) {
   sec.append(n);
 }
 
-function vistaImportaciones(sec) {
-  const I = D.imp, K = D.kpi;
+function detalleImportaciones(sec, V) {
+  const I = V, K = V.kpi;
   sec.append(el("h2", {}, "Importaciones por mes"), el("p", { class: "nota" }, "Valor en aduana (CIF) declarado por mes, separando la maquinaria del resto de mercancías (repuestos, filtros, lubricantes, implementos)."));
   const t1 = tarjeta(); sec.append(t1);
   columnas(t1, { titulo: "CIF importado por mes", datos: I.mensual, apilado: true,
@@ -922,7 +934,7 @@ function vistaImportaciones(sec) {
 
   sec.append(el("h2", {}, "Control y tratamiento tributario"));
   const g = el("div", { class: "rejilla" }); sec.append(g);
-  const tc = tarjeta("Canal de control", `${pc(K.dam_verde / D.meta.n_dam * 100)} de las DAM pasó por canal verde. La barra reparte el CIF; la tabla da el número de DAM.`);
+  const tc = tarjeta("Canal de control", `${pc(K.dam_verde / K.n_dam * 100)} de las DAM pasó por canal verde. La barra reparte el CIF; la tabla da el número de DAM.`);
   const colCanal = { V: "var(--ok)", D: "var(--serio)", F: "var(--critico)" };
   segmentada(tc, I.canal.map(c => ({ t: CANAL[c.c], v: c.cif, c: colCanal[c.c] })), v => "USD " + f0(v));
   const totDam = I.canal.reduce((a, c) => a + c.n, 0), totCif = I.canal.reduce((a, c) => a + c.cif, 0);
@@ -933,7 +945,7 @@ function vistaImportaciones(sec) {
   segmentada(tt, I.convenio.map((c, i) => ({ t: convT(c.k), v: c.cif, c: colConv[i % 3] })), v => "USD " + f0(v));
   tabla(tt, { buscar: false, cols: [{ k: "k", t: "Tratamiento", f: convT }, { k: "series", t: "Series", n: 1, f: f0 }, { k: "cif", t: "CIF USD", n: 1, f: f0 },
     { v: r => r.cif / K.cif * 100, t: "% CIF", n: 1, f: v => pc(v) }], filas: I.convenio, archivo: "tratamiento.csv" });
-  const ta = tarjeta("Aduana de despacho", "Todas las DAM declaran la misma aduana de destino. El flete en porcentaje del FOB sirve de referencia para detectar fletes atípicos.");
+  const ta = tarjeta("Aduana de despacho", "Aduana en la que se numeró la DAM. El flete en porcentaje del FOB sirve de referencia para detectar fletes atípicos.");
   tabla(ta, { buscar: false, cols: [{ k: "cod", t: "Aduana", f: v => `${v} · ${D.meta.aduanas[v] || ""}` }, { k: "n", t: "DAM", n: 1, f: f0 }, { k: "cif", t: "CIF USD", n: 1, f: f0 },
     { k: "flete_med", t: "Flete mediano (% FOB)", n: 1, f: v => pc(v) }], filas: I.aduana, archivo: "aduanas.csv" });
   g.append(tc, tt, ta);
@@ -942,6 +954,27 @@ function vistaImportaciones(sec) {
   const tp = tarjeta(); sec.append(tp);
   tabla(tp, { cols: [{ k: "hs", t: "Subpartida", c: 1 }, { k: "ej", t: "Descripción más frecuente", largo: 1 }, { k: "series", t: "Series", n: 1, f: f0 }, { k: "dams", t: "DAM", n: 1, f: f0 },
     { k: "uds", t: "Unidades", n: 1, f: f0 }, { k: "cif", t: "CIF USD", n: 1, f: f0 }, { k: "pct", t: "% CIF", n: 1, f: v => pc(v) }], filas: I.partidas, archivo: "subpartidas.csv", porPag: 10 });
+}
+
+function vistaImportaciones(sec) {
+  const I = D.imp, K = D.kpi;
+  sec.append(el("h2", {}, "Importaciones por aduana de destino"),
+    el("p", { class: "nota" }, `Importación para el consumo (régimen 10) de todas las aduanas de destino. `
+      + (I.otros_reg || []).map(r => `${r.t} (${f0(r.dams)} DAM)`).join(", ") + " se muestran aparte y no se suman."));
+  const t0 = tarjeta(); sec.append(t0);
+  segmentada(t0, I.destinos.map(d => ({ t: destT(d.cod), v: d.cif, c: COL_DEST[d.cod] || "var(--mudo)" })), v => "USD " + f0(v));
+  tabla(t0, { buscar: false, cols: [{ k: "cod", t: "Aduana de destino", h: r => r.cod === "271" ? `<b>${esc(destT(r.cod))}</b>` : esc(destT(r.cod)), v: r => destT(r.cod) },
+    { k: "n_dam", t: "DAM", n: 1, f: f0 }, { k: "n_series", t: "Series", n: 1, f: f0 }, { k: "cif", t: "CIF USD", n: 1, f: f0 },
+    { v: r => r.cif / K.cif * 100, t: "% CIF", n: 1, f: v => pc(v) }, { v: r => r.cif_lib / r.cif * 100, t: "% con código liberatorio", n: 1, f: v => pc(v) },
+    { k: "uds_maq", t: "Máquinas", n: 1, f: f0 }, { k: "cif_maq", t: "CIF maquinaria USD", n: 1, f: f0 },
+    { v: r => r.dam_verde / r.n_dam * 100, t: "% DAM canal verde", n: 1, f: v => pc(v) }], filas: I.destinos, archivo: "destinos.csv" });
+  const opciones = [["todas", "Todas las aduanas de destino"], ...I.destinos.map(d => [d.k, destT(d.cod)])];
+  const sel = el("select", { "aria-label": "Aduana de destino" }, opciones.map(([v, t]) => el("option", { value: v }, t)));
+  const cont = el("div");
+  sec.append(el("div", { class: "barra-tabla", style: "margin-top:22px" }, el("span", { style: "font-weight:650" }, "Detalle de:"), sel), cont);
+  const pintar = k => { cont.replaceChildren(); detalleImportaciones(cont, I.vistas[k]); };
+  sel.addEventListener("change", () => pintar(sel.value));
+  pintar("todas");
 
   sec.append(el("h2", {}, "Valoración y clasificación"),
     el("p", { class: "nota" }, "Indicadores sobre repuestos (sin maquinaria): series sin número de parte, un mismo número de parte declarado en varias subpartidas y valores unitarios FOB que se apartan de la mediana del mismo número de parte."));
@@ -956,14 +989,16 @@ function vistaImportaciones(sec) {
   sec.append(tv);
   tabla(tv, { cols: [{ k: "item", t: "Descripción", largo: 1 }, { k: "dam", t: "DAM", c: 1 }, { k: "serie", t: "Serie", n: 1 }, { k: "fecha", t: "Fecha", f: fecha, c: 1 }, { k: "hs", t: "Subpartida", c: 1 },
     { k: "cant", t: "Cantidad", n: 1, f: f0 }, { k: "fob_u", t: "FOB unit.", n: 1, f: f2 }, { k: "med", t: "Mediana", n: 1, f: f2 }, { k: "dev", t: "Desviación", n: 1, f: v => (v > 0 ? "+" : "") + pc(v, 0) },
-    { k: "canal", t: "Canal", h: r => canalH(r.canal) }], filas: I.disp_series, orden: { i: 8, d: -1 }, archivo: "valor_unitario_atipico.csv", porPag: 10 });
+    { k: "canal", t: "Canal", h: r => canalH(r.canal) }, { k: "dest", t: "Destino", f: destT, c: 1 }], filas: I.disp_series, orden: { i: 8, d: -1 },
+    filtros: [{ t: "Destino", campo: "dest", valor: r => destT(r.dest) }], archivo: "valor_unitario_atipico.csv", porPag: 10 });
 
   sec.append(el("h2", {}, "Todas las DAM"), el("p", { class: "nota" }, "Una fila por DAM. Ordene por cualquier columna; el flete en % del FOB permite ubicar fletes atípicos por aduana."));
   const td = tarjeta(); sec.append(td);
   tabla(td, { ph: "Buscar DAM, fecha, tratamiento…", cols: [{ k: "dam", t: "DAM", c: 1 }, { k: "f", t: "Fecha", f: fecha, c: 1 }, { k: "ad", t: "Aduana", c: 1 }, { k: "canal", t: "Canal", h: r => canalH(r.canal) },
+    { k: "dest", t: "Destino", f: destT, c: 1 },
     { k: "series", t: "Series", n: 1, f: f0 }, { k: "maq", t: "Máquinas", n: 1, f: f0 }, { k: "fob", t: "FOB USD", n: 1, f: f0 }, { k: "flete", t: "Flete USD", n: 1, f: f0 },
     { k: "flete_pct", t: "Flete % FOB", n: 1, f: v => pc(v) }, { k: "seguro", t: "Seguro USD", n: 1, f: f0 }, { k: "cif", t: "CIF USD", n: 1, f: f0 }, { k: "conv", t: "Tratamiento", f: v => v.split(", ").map(convT).join(", ") }],
-    filas: I.dams, filtros: [{ t: "Canal", campo: "canal", valor: r => CANAL[r.canal] }, { t: "Aduana", campo: "ad", valor: r => r.ad }], archivo: "dam.csv" });
+    filas: I.dams, filtros: [{ t: "Destino", campo: "dest", valor: r => destT(r.dest) }, { t: "Canal", campo: "canal", valor: r => CANAL[r.canal] }, { t: "Aduana", campo: "ad", valor: r => r.ad }], archivo: "dam.csv" });
 }
 
 function vistaMaquinaria(sec) {
@@ -1021,8 +1056,9 @@ function vistaMaquinaria(sec) {
   tabla(t4, { ph: "Buscar PIN, serie, modelo, DAM…", cols: [{ k: "dam", t: "DAM", c: 1 }, { k: "serie", t: "Serie", n: 1 }, { k: "f", t: "Fecha", f: fecha, c: 1 }, { k: "canal", t: "Canal", h: r => canalH(r.canal) },
     { k: "cat", t: "Tipo", c: 1 }, { k: "marca", t: "Marca", c: 1 }, { k: "modelo", t: "Modelo", c: 1 }, { k: "anio", t: "Año", c: 1 }, { k: "id", t: "PIN / serie", c: 1 }, { k: "motor", t: "Motor", c: 1 },
     { v: r => r.usada ? "Usada" : "Nueva", t: "Estado", h: r => r.usada ? `<span class="etq fuerte">Usada${r.horas ? " · " + esc(r.horas) + " h" : ""}</span>` : "Nueva" },
-    { k: "fob", t: "FOB USD", n: 1, f: f0 }, { k: "cif", t: "CIF USD", n: 1, f: f0 }, { k: "conv", t: "Tratamiento", f: convT, c: 1 }],
-    filas: Q.imp, filtros: [{ t: "Tipo", campo: "cat", valor: r => r.cat }, { t: "Canal", campo: "canal", valor: r => CANAL[r.canal] }, { t: "Estado", campo: "usada", valor: r => r.usada ? "Usada" : "Nueva" }],
+    { k: "fob", t: "FOB USD", n: 1, f: f0 }, { k: "cif", t: "CIF USD", n: 1, f: f0 }, { k: "conv", t: "Tratamiento", f: convT, c: 1 },
+    { k: "dest", t: "Destino", f: destT, c: 1 }, { v: r => r.dep_dam ? `${r.dep_dam} ${r.dep_f}` : "", t: "Depósito previo", h: r => r.dep_dam ? `${esc(r.dep_dam)}<br>${fecha(r.dep_f)}` : "–", c: 1 }],
+    filas: Q.imp, filtros: [{ t: "Destino", campo: "dest", valor: r => destT(r.dest) }, { t: "Tipo", campo: "cat", valor: r => r.cat }, { t: "Canal", campo: "canal", valor: r => CANAL[r.canal] }, { t: "Estado", campo: "usada", valor: r => r.usada ? "Usada" : "Nueva" }],
     archivo: "maquinaria_importada.csv" });
 
   sec.append(el("h2", {}, "Ventas de maquinaria"),
@@ -1040,21 +1076,58 @@ function vistaMaquinaria(sec) {
     if (r.tcli === "Entidad pública") o.push("Entidad pública");
     if (r.usado) o.push("Usado");
     if (r.zona === "ZTC") o.push("Fuera de la ZTE");
+    { const es = estDe(r); if (r.zona === "ZTE" && r.circ && es && es.circ && r.circ !== es.circ) o.push("Otra circunscripción"); }
     if (r.cond && r.cond !== "HABIDO") o.push("No habido");
     return o;
   };
   tabla(t5, { ph: "Buscar cliente, RUC, CPE, descripción…", cols: [{ k: "cpe", t: "CPE", c: 1 }, { k: "f", t: "Fecha", f: fecha, c: 1 }, { k: "cli", t: "Cliente", largo: 1 }, { k: "ruc", t: "RUC / doc.", c: 1 },
-    { k: "tcli", t: "Tipo de cliente" }, ...(D.dom ? [{ k: "zona", t: "Zona", h: r => zonaH(r.zona), v: r => zonaT(r.zona) }, { k: "lugar", t: "Domicilio fiscal", largo: 1 }] : []),
+    { k: "tcli", t: "Tipo de cliente" }, { v: r => titulo(r.est), t: "Establecimiento (inferido)", c: 1 },
+    ...(D.dom ? [{ k: "zona", t: "Zona", h: r => zonaH(r.zona), v: r => zonaT(r.zona) }, { k: "lugar", t: "Domicilio fiscal", largo: 1 }] : []),
     ...(conActividad() ? [{ k: "act", t: "Actividad económica", largo: 1 }] : []),
     { k: "desc", t: "Descripción", largo: 1 }, { k: "cat", t: "Tipo" }, { k: "mon", t: "Moneda", f: mon },
     { k: "vv", t: "Valor venta", n: 1, f: f2 }, { k: "igv", t: "IGV", n: 1, f: f2 },
     ...(D.meta.portal ? [{ t: "Consulta en el portal", v: r => { const p = portalDatos(r); return `${p.tipo} ${p.folio} ${p.fecha} ${p.monto}`; },
       h: r => { const p = portalDatos(r); return `<span class="etq">${p.tipo}</span>${copiable(p.folio)}${copiable(p.fecha)}${copiable(p.monto)}`; } }] : []),
     { v: r => obs(r).join(", ") + (r.mot ? ` (motivo ${r.mot}: ${D.meta.motivos[r.mot] || ""})` : ""), t: "Observaciones",
-      h: r => obs(r).map(t => `<span class="etq${["Con IGV", "No domiciliado", "Dado de baja", "Fuera de la ZTE", "No habido"].includes(t) ? " fuerte" : ""}">${t}</span>`).join("") + (r.mot ? `<span class="etq">${esc(D.meta.motivos[r.mot] || r.mot)}</span>` : "") }],
+      h: r => obs(r).map(t => `<span class="etq${["Con IGV", "No domiciliado", "Dado de baja", "Fuera de la ZTE", "No habido", "Otra circunscripción"].includes(t) ? " fuerte" : ""}">${t}</span>`).join("") + (r.mot ? `<span class="etq">${esc(D.meta.motivos[r.mot] || r.mot)}</span>` : "") }],
     filas: Q.ventas, filtros: [{ t: "Observación", campo: "obs", valor: obs }, ...(D.dom ? [{ t: "Zona", campo: "zona", valor: r => zonaT(r.zona) }] : []),
-      { t: "Tipo de cliente", campo: "tcli", valor: r => r.tcli }, { t: "Tipo", campo: "cat", valor: r => r.cat }],
+      { t: "Establecimiento", campo: "est", valor: r => titulo(r.est) }, { t: "Tipo de cliente", campo: "tcli", valor: r => r.tcli }, { t: "Tipo", campo: "cat", valor: r => r.cat }],
     archivo: "ventas_maquinaria.csv" });
+  seccionesRegimenes(sec);
+}
+
+function seccionesRegimenes(sec) {
+  const Q = D.maq;
+  if ((Q.establecimientos || []).length) {
+    sec.append(el("h2", {}, "Establecimientos emisores (inferidos)"),
+      el("p", { class: "nota" }, "El número de la serie del comprobante (FP03 → 03) identifica al establecimiento. Su ubicación se deduce de la provincia más frecuente entre los clientes de esa serie; la circunscripción y la aduana de destino son las que corresponden a esa ubicación."));
+    const t = tarjeta(); sec.append(t);
+    tabla(t, { buscar: false, cols: [{ k: "dig", t: "Serie", c: 1, f: v => `xx${v}` }, { v: r => `${titulo(r.prov)}, ${titulo(r.dep)}`, t: "Ubicación inferida" },
+      { k: "pct", t: "% de comprobantes de esa provincia", n: 1, f: v => pc(v) }, { k: "n", t: "Comprobantes con domicilio", n: 1, f: f0 },
+      { k: "circ", t: "Circunscripción" }, { k: "dest", t: "Aduana de destino", f: v => v ? destT(v) : "–" }], filas: Q.establecimientos, archivo: "establecimientos.csv" });
+  }
+  if ((Q.deposito || []).length) {
+    const sin = Q.deposito.filter(r => !r.nac_dam).length;
+    sec.append(el("h2", {}, "Depósito aduanero (régimen 70)"),
+      el("p", { class: "nota" }, `${f0(Q.deposito.length)} máquinas ingresaron a depósito; ${f0(sin)} no tienen DAM de nacionalización en los datos (al ${fecha(D.meta.dam_hasta)}). El depósito no se suma a los totales: la máquina se cuenta cuando se nacionaliza.`));
+    const t = tarjeta(); sec.append(t);
+    tabla(t, { ph: "Buscar PIN, modelo, DAM…", cols: [{ k: "dam", t: "DAM de depósito", c: 1 }, { k: "f", t: "Fecha", f: fecha, c: 1 }, { k: "canal", t: "Canal", h: r => canalH(r.canal) },
+      { k: "cat", t: "Tipo", c: 1 }, { k: "modelo", t: "Modelo", c: 1 }, { k: "id", t: "PIN / serie", c: 1 }, { k: "cif", t: "CIF USD", n: 1, f: f0 },
+      { v: r => r.nac_dam ? "Nacionalizada" : "En depósito", t: "Situación", h: r => r.nac_dam ? "Nacionalizada" : `<span class="etq fuerte">En depósito</span>` },
+      { k: "nac_dam", t: "DAM de nacionalización", c: 1, f: v => v || "–" }, { k: "nac_f", t: "Fecha", f: fecha, c: 1 }, { k: "nac_dest", t: "Destino", f: v => v === "" ? "–" : destT(v), c: 1 },
+      { k: "nac_conv", t: "Tratamiento", f: v => v ? convT(v) : "–", c: 1 }, { k: "dias", t: "Días en depósito", n: 1, f: f0 }],
+      filas: Q.deposito, filtros: [{ t: "Situación", campo: "sit", valor: r => r.nac_dam ? "Nacionalizada" : "En depósito" }, { t: "Tipo", campo: "cat", valor: r => r.cat }], archivo: "deposito.csv" });
+  }
+  if ((Q.exportaciones || []).length) {
+    sec.append(el("h2", {}, "Exportaciones (régimen 40)"),
+      el("p", { class: "nota" }, "DAM de exportación de maquinaria, enlazadas por PIN con su DAM de importación y, por fecha, con la venta probable a un cliente no domiciliado."));
+    const t = tarjeta(); sec.append(t);
+    tabla(t, { buscar: false, cols: [{ k: "dam", t: "DAM de exportación", c: 1 }, { k: "f", t: "Fecha", f: fecha, c: 1 }, { k: "ad", t: "Aduana", f: v => `${v} · ${D.meta.aduanas[v] || ""}`, c: 1 },
+      { k: "modelo", t: "Modelo", c: 1 }, { k: "pin", t: "PIN", c: 1 }, { k: "fob", t: "FOB USD", n: 1, f: f0 },
+      { k: "imp_dam", t: "DAM de importación", c: 1, f: v => v || "–" }, { k: "imp_dest", t: "Destino de importación", f: v => v ? destT(v) : "–", c: 1 },
+      { k: "imp_conv", t: "Tratamiento", f: v => v ? convT(v) : "–", c: 1 }, { k: "venta", t: "Venta probable", c: 1, f: v => v || "–" }, { k: "obs", t: "Observación", largo: 1 }],
+      filas: Q.exportaciones, archivo: "exportaciones.csv" });
+  }
 }
 
 function fichasTrazabilidad(sec) {
@@ -1067,17 +1140,20 @@ function fichasTrazabilidad(sec) {
       el("p", { class: "nota" }, `${c.fuente}${c.nota ? " · " + c.nota : ""}`));
     const cad = el("div", { class: "cadena" });
     cad.append(el("div", { class: "paso" + (m ? "" : " pend"), html: `<div class="n">${ic("importaciones")}1 · Importación</div>` + (m
-      ? `<b>DAM ${esc(m.dam)} · serie ${m.serie}</b><div class="d">${fecha(m.f)} · canal ${CANAL[m.canal] || m.canal} · ${esc(convT(m.conv))}<br>CIF USD ${f0(m.cif)} · año ${esc(m.anio || "s/d")}</div>`
+      ? `<b>DAM ${esc(m.dam)} · serie ${m.serie}</b><div class="d">${fecha(m.f)} · canal ${CANAL[m.canal] || m.canal} · ${esc(convT(m.conv))}<br>Destino ${esc(destT(m.dest))} · CIF USD ${f0(m.cif)} · año ${esc(m.anio || "s/d")}`
+        + (m.dep_dam ? `<br>Antes en depósito: DAM ${esc(m.dep_dam)} del ${fecha(m.dep_f)}` : "") + `</div>`
       : `<b>DAM no encontrada en el periodo</b><div class="d">La serie no está en las DAM de ${mesLargo(D.meta.desde)} a ${mesLargo(D.meta.hasta)}: probablemente se importó antes. Buscar la DAM por serie y motor en el sistema aduanero.</div>`) }));
     if (c.baja) cad.append(el("div", { class: "paso alerta", html: `<div class="n">${ic("ventas")}2 · Factura dada de baja</div><b>${esc(c.baja.cpe)} · ${fecha(c.baja.f)}</b><div class="d">Emitida <b style="display:inline">con IGV ${v ? mon(v.mon) : ""} ${f0(c.baja.igv)}</b> y dada de baja.</div>` }));
     if (v) cad.append(el("div", { class: "paso" + (v.igv > 0 ? "" : c.baja ? " alerta" : ""), html: `<div class="n">${ic("ventas")}${c.baja ? 3 : 2} · Venta</div><b>${esc(c.cpe)} · ${fecha(v.f)}</b><div class="d">${esc(v.cli)} (RUC ${esc(v.ruc)})<br>${mon(v.mon)} ${f0(v.vv)} · ${v.igv > 0 ? "con IGV " + f0(v.igv) : "sin IGV (operación exonerada)"}` +
       (m && m.dias != null ? `<br>${f0(m.dias)} días después de la DAM` : "") + (c.cif_ref ? `<br>Venta / CIF de referencia: ${NF2.format(v.vv / (m ? m.cif : c.cif_ref))}` : "") + `</div>` }));
     const fuera = c.entrega_zona === "ZTC" || (v && v.zona === "ZTC");
     cad.append(el("div", { class: "paso" + (fuera ? " alerta" : ""), html: `<div class="n">${ic("pin")}${c.baja ? 4 : 3} · Destino</div><b>${esc(c.entrega || "s/d")} · ${zonaH(c.entrega_zona)}</b><div class="d">Dirección en la factura: ${esc(c.entrega_dir || "s/d")}` +
+      (c.entrega_circ ? `<br>Circunscripción de entrega: ${esc(c.entrega_circ)}` + (m && m.dest_circ && m.dest_circ !== c.entrega_circ ? ` (la DAM tenía destino en ${esc(m.dest_circ)})` : "") : "") +
       (v ? `<br>Domicilio fiscal (padrón): ${esc(v.lugar || "s/d")} · ${zonaT(v.zona)}` : "") + `</div>` }));
     t.append(cad);
     const acc = [];
     if (!m) acc.push(`Ubicar la DAM de importación por la serie <b>${esc(c.serie)}</b> y el motor <b>${esc(c.motor)}</b> y verificar el código liberatorio con que ingresó.`);
+    else if (m.conv && m.conv.startsWith("C-")) acc.push(`La unidad ingresó con ${esc(convT(m.conv).toLowerCase())} y destino ${esc(destT(m.dest))} (DAM ${esc(m.dam)}): evaluar la regularización de los tributos si salió de la zona.`);
     if (fuera) acc.push("Verificar en campo dónde opera la máquina y si se regularizó su salida de la zona del beneficio.");
     if (c.baja) acc.push(`Pedir al emisor el sustento de la baja de ${esc(c.baja.cpe)} (emitida con IGV) y de su reemisión como operación exonerada.`);
     acc.push("Cruzar con la guía de remisión electrónica de la venta (punto de partida y de llegada) y con los registros de los controles en los corredores de salida.");

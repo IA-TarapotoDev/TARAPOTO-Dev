@@ -26,7 +26,10 @@ from datetime import date
 import pandas as pd
 
 ADUANAS = {"118": "Marítima del Callao", "235": "Aérea y Postal del Callao", "271": "Tarapoto",
-           "226": "Iquitos", "217": "Pucallpa"}
+           "226": "Iquitos", "217": "Pucallpa", "280": "Puerto Maldonado", "262": "Desaguadero"}
+DESTINOS = {"271": "Tarapoto", "217": "Pucallpa", "280": "Puerto Maldonado", "226": "Iquitos", "": "Sin aduana de destino"}
+DEST_CIRC = {"271": "IA TARAPOTO", "226": "IA IQUITOS", "217": "IA PUCALLPA", "280": "IA PUERTO MALDONADO"}
+REGIMENES = {"10": "Importación para el consumo", "40": "Exportación definitiva", "70": "Depósito aduanero"}
 CANALES = {"V": "Verde", "D": "Naranja", "F": "Rojo"}
 MOTIVOS_NC = {  # Catálogo 09 SUNAT
     "01": "Anulación de la operación", "02": "Anulación por error en el RUC",
@@ -92,7 +95,29 @@ def leer_dams(ruta):
     m["fob_u"] = m.MTO_FOBDOL / m.CNT_COMER
     m["conv"] = (m.COD_TIPCONVENIO.fillna("").str.strip() + "-" + m.COD_CONVENIO.fillna("").str.strip()).replace("-", "Sin beneficio")
     m["maq"] = m.hs4.isin(HS_MAQ) | (m.cif_u >= 15000)
+    m["COD_REGIMEN"] = m.COD_REGIMEN.str.strip()
+    m["dest"] = m.COD_ADUDEST.fillna("").str.strip()
     return m
+
+
+def datos_maquina(mq):
+    """Tipo, marca, modelo e identificadores (PIN/VIN/serie, motor, año, horas) de cada serie de maquinaria."""
+    mq = mq.copy()
+    mq["cat"] = mq.DES_COMER.map(cat_maquina)
+    partes = mq.DES_COMER.str.split(",")
+    mq["marca"] = partes.str[1].str.strip()
+    mq["modelo"] = partes.str[2].str.strip()
+    txt = (mq.DES_FORMAPRESEN.fillna("") + " " + mq.DES_MATECOMP.fillna("") + " " + mq.DES_USOAPLIC.fillna("") + " " + mq.DES_OTROSCARAC.fillna(""))
+    mq["pin"] = txt.str.extract(r"PIN(?: NUMBER)?[#: ]*\*?([A-Z0-9]{17})\*?", expand=False)
+    vin = txt.str.extract(r"VIN[#: ]*([A-Z0-9]{17})", expand=False)
+    sn = txt.str.extract(r"(?:SERIAL(?: NUMBER)?|S/N|SERIE|UNIQUE ID)[#: ]*([A-Z0-9]{8,20})", expand=False)
+    mq["id"] = mq.pin.fillna(vin).fillna(sn).fillna("")
+    mq["anio"] = txt.str.extract(r"A[ÑN]O DE (?:FABRIC?ACION|MANUFACTURA)[: ]*(\d{4})", expand=False).fillna("")
+    mq["motor"] = txt.str.extract(r"(?:ENG(?:INE)?(?: S/N| NUMBER| #)?|NUMERO DE MOTOR)[: ]*([A-Z0-9]{8,12})", expand=False).fillna("")
+    mq["horas"] = txt.str.extract(r"HOURS[: ]*([\d.,]+)\s*HRS", expand=False).fillna("")
+    mq["usada"] = txt.str.contains(r"\bUSED\b|\bUSAD[OA]\b", regex=True) | (
+        pd.to_numeric(mq.anio, errors="coerce") <= mq.f.dt.year - 2)
+    return mq
 
 
 def leer_cpe(ruta):
@@ -215,7 +240,10 @@ def mes(s):
 
 
 def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, consultas=None, r_traz=None):
-    m = leer_dams(r_dams)
+    mt = leer_dams(r_dams)
+    m = mt[mt.COD_REGIMEN == "10"].copy()        # importación para el consumo: base de todos los totales
+    dep70 = mt[mt.COD_REGIMEN == "70"].copy()    # depósito aduanero: fuera de totales, solo para la cadena
+    exp40 = mt[mt.COD_REGIMEN == "40"].copy()    # exportación definitiva
     e = leer_cpe(r_cpe)
     dl = leer_detalle(r_det)
 
@@ -223,7 +251,7 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, cons
 
     # ---------------- Importaciones ----------------
     dec = m.groupby("dam").agg(
-        fecha=("f", "first"), aduana=("COD_ADUANA", "first"), destino=("COD_ADUDEST", "first"),
+        fecha=("f", "first"), aduana=("COD_ADUANA", "first"), destino=("dest", "first"),
         canal=("CANAL", "first"), series=("NUM_SECSERIE", "size"), fob=("MTO_FOBDOL", "sum"),
         flete=("MTO_FLETEDOL", "sum"), seguro=("MTO_SEGDOL", "sum"), cif=("MTO_VALORADU", "sum"),
         maq=("maq", "sum"), conv=("conv", lambda s: ", ".join(sorted(set(s)))),
@@ -244,6 +272,35 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, cons
                                           ej=("DES_COMER", lambda s: s.value_counts().index[0]),
                                           dams=("dam", "nunique")).sort_values("cif", ascending=False)
     part["pct"] = part.cif / part.cif.sum() * 100
+
+    def vista(x):
+        dx = dec[dec.dam.isin(set(x.dam))]
+        pm = []
+        for mm in meses:
+            y = x[mes(x.f) == mm]
+            pm.append({"m": mm, "maq": r2(y[y.maq].MTO_VALORADU.sum()), "otros": r2(y[~y.maq].MTO_VALORADU.sum()),
+                       "dams": int(y.dam.nunique()), "uds_maq": int(y[y.maq].CNT_COMER.sum())})
+        cn = dx.groupby("canal").agg(n=("dam", "size"), cif=("cif", "sum")).reindex(["V", "D", "F"]).fillna(0)
+        cv = x.groupby("conv").agg(series=("dam", "size"), cif=("MTO_VALORADU", "sum")).sort_values("cif", ascending=False)
+        ad = dx.groupby("aduana").agg(n=("dam", "size"), cif=("cif", "sum"), flete_med=("flete_pct", "median"))
+        pt = x.groupby("NUM_PARTNANDI").agg(series=("dam", "size"), uds=("CNT_COMER", "sum"), cif=("MTO_VALORADU", "sum"),
+                                            ej=("DES_COMER", lambda s: s.value_counts().index[0]), dams=("dam", "nunique")).sort_values("cif", ascending=False)
+        pt["pct"] = pt.cif / max(pt.cif.sum(), 1e-9) * 100
+        return {
+            "mensual": pm,
+            "canal": [{"c": k, "n": int(v.n), "cif": r2(v.cif)} for k, v in cn.iterrows()],
+            "convenio": [{"k": k, "series": int(v.series), "cif": r2(v.cif)} for k, v in cv.iterrows()],
+            "aduana": [{"cod": k, "n": int(v.n), "cif": r2(v.cif), "flete_med": r2(v.flete_med)} for k, v in ad.iterrows()],
+            "partidas": [{"hs": k, "ej": v.ej, "series": int(v.series), "dams": int(v.dams), "uds": r2(v.uds), "cif": r2(v.cif), "pct": r2(v.pct)}
+                         for k, v in pt.head(40).iterrows()],
+            "kpi": {"cif": r2(x.MTO_VALORADU.sum()), "n_dam": int(x.dam.nunique()), "n_series": int(len(x)),
+                    "cif_maq": r2(x[x.maq].MTO_VALORADU.sum()), "uds_maq": int(x[x.maq].CNT_COMER.sum()),
+                    "cif_lib": r2(x[x.COD_TIPCONVENIO == "C"].MTO_VALORADU.sum()), "dam_verde": int((dx.canal == "V").sum())},
+        }
+    orden_dest = [k for k in ["271", "217", "280", "226", ""] if (m.dest == k).any()]
+    vistas = {"todas": vista(m)} | {(k or "sin"): vista(m[m.dest == k]) for k in orden_dest}
+    destinos = [{"k": k or "sin", "cod": k, "t": DESTINOS.get(k, k), **vistas[k or "sin"]["kpi"]} for k in orden_dest]
+    otros_reg = mt[mt.COD_REGIMEN != "10"].groupby("COD_REGIMEN").agg(dams=("dam", "nunique"), series=("dam", "size"), cif=("MTO_VALORADU", "sum"))
 
     # Descripción comercial sin número de parte / modelo (S/M)
     m["sm"] = m.DES_COMER.str.contains(r",\s*S/M\s*$", regex=True)
@@ -267,7 +324,7 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, cons
             if abs(dev) >= 0.3:
                 disp_series.append({"item": item, "dam": s.dam, "serie": int(s.NUM_SECSERIE), "fecha": s.f.strftime("%Y-%m-%d"),
                                     "hs": s.NUM_PARTNANDI, "cant": r2(s.CNT_COMER), "fob_u": r2(s.fob_u), "med": r2(row.med),
-                                    "dev": round(dev * 100, 1), "canal": s.CANAL})
+                                    "dev": round(dev * 100, 1), "canal": s.CANAL, "dest": s.dest})
 
     # Clasificación: un mismo número de parte en más de una subpartida
     clas = p.groupby("DES_COMER").agg(hs=("NUM_PARTNANDI", lambda s: sorted(set(s))), n=("dam", "size"),
@@ -275,21 +332,40 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, cons
     clas = clas[clas.hs.str.len() > 1].sort_values("n", ascending=False)
 
     # ---------------- Maquinaria importada ----------------
-    mq = m[m.maq].copy()
-    mq["cat"] = mq.DES_COMER.map(cat_maquina)
-    partes = mq.DES_COMER.str.split(",")
-    mq["marca"] = partes.str[1].str.strip()
-    mq["modelo"] = partes.str[2].str.strip()
-    txt = (mq.DES_FORMAPRESEN.fillna("") + " " + mq.DES_MATECOMP.fillna("") + " " + mq.DES_USOAPLIC.fillna("") + " " + mq.DES_OTROSCARAC.fillna(""))
-    mq["pin"] = txt.str.extract(r"PIN(?: NUMBER)?[#: ]*\*?([A-Z0-9]{17})\*?", expand=False)
-    vin = txt.str.extract(r"VIN[#: ]*([A-Z0-9]{17})", expand=False)
-    sn = txt.str.extract(r"(?:SERIAL(?: NUMBER)?|S/N|SERIE|UNIQUE ID)[#: ]*([A-Z0-9]{8,20})", expand=False)
-    mq["id"] = mq.pin.fillna(vin).fillna(sn).fillna("")
-    mq["anio"] = txt.str.extract(r"A[ÑN]O DE (?:FABRIC?ACION|MANUFACTURA)[: ]*(\d{4})", expand=False).fillna("")
-    mq["motor"] = txt.str.extract(r"(?:ENG(?:INE)?(?: S/N| NUMBER| #)?|NUMERO DE MOTOR)[: ]*([A-Z0-9]{8,12})", expand=False).fillna("")
-    mq["horas"] = txt.str.extract(r"HOURS[: ]*([\d.,]+)\s*HRS", expand=False).fillna("")
-    mq["usada"] = txt.str.contains(r"\bUSED\b|\bUSAD[OA]\b", regex=True) | (
-        pd.to_numeric(mq.anio, errors="coerce") <= mq.f.dt.year - 2)
+    mq = datos_maquina(m[m.maq])
+    dq = datos_maquina(dep70[dep70.maq]) if len(dep70) else mq.iloc[0:0]
+    clave_id = lambda x: x[-8:] if x else ""
+    mq["k"] = mq.id.map(clave_id)
+    dq["k"] = dq.id.map(clave_id)
+    dpk = dq[dq.k != ""].sort_values("f").drop_duplicates("k").set_index("k")
+    mq["dep_dam"] = mq.k.map(dpk.dam).fillna("")
+    mq["dep_f"] = mq.k.map(dpk.f.dt.strftime("%Y-%m-%d")).fillna("")
+    nac = mq[mq.k != ""].sort_values("f").drop_duplicates("k").set_index("k")
+    corte = mt.f.max()
+    deposito = []
+    for _, s in dq.sort_values("f").drop_duplicates(["dam", "NUM_SECSERIE"]).iterrows():
+        n = nac.loc[s.k] if s.k and s.k in nac.index else None
+        deposito.append({"dam": s.dam, "serie": int(s.NUM_SECSERIE), "f": s.f.strftime("%Y-%m-%d"), "canal": s.CANAL, "cat": s["cat"],
+                         "marca": s.marca, "modelo": s.modelo, "id": s.id, "cif": r2(s.MTO_VALORADU),
+                         "nac_dam": n.dam if n is not None else "", "nac_f": n.f.strftime("%Y-%m-%d") if n is not None else "",
+                         "nac_dest": n.dest if n is not None else "", "nac_conv": n.conv if n is not None else "",
+                         "dias": int(((n.f if n is not None else corte) - s.f).days)})
+    # Exportaciones (régimen 40): la descripción trae PIN, serie y motor
+    exportaciones = []
+    if len(exp40):
+        x40 = exp40.drop_duplicates(["dam", "DES_COMER"]).copy()
+        x40["pin"] = x40.DES_COMER.str.extract(r"PIN[: ]*([A-Z0-9]{17})", expand=False).fillna("")
+        x40["k"] = x40.pin.map(clave_id)
+        x40["motor"] = x40.DES_COMER.str.extract(r"MOTOR[: ]*([A-Z0-9]{8,12})", expand=False).fillna("")
+        x40["modelo"] = x40.DES_COMER.str.extract(r"MOD[.:]*\s*([A-Z0-9.]+?)(?:PIN|\s|,|$)", expand=False).fillna("")
+        for _, s in x40.sort_values("f").iterrows():
+            o = nac.loc[s.k] if s.k and s.k in nac.index else None
+            exportaciones.append({"dam": s.dam, "f": s.f.strftime("%Y-%m-%d"), "ad": s.COD_ADUANA, "desc": s.DES_COMER[:60].strip(),
+                                  "modelo": s.modelo, "pin": s.pin, "motor": s.motor, "fob": r2(s.MTO_FOBDOL),
+                                  "obs": s.DES_OTROSCARAC.strip() if isinstance(s.DES_OTROSCARAC, str) else "",
+                                  "imp_dam": o.dam if o is not None else "", "imp_f": o.f.strftime("%Y-%m-%d") if o is not None else "",
+                                  "imp_dest": o.dest if o is not None else "", "imp_conv": o.conv if o is not None else "",
+                                  "venta": ""})
 
     # ---------------- Ventas ----------------
     vig = e[e.estado == "0"]
@@ -327,7 +403,7 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, cons
     }), include_groups=False).reset_index().sort_values("usd", ascending=False)
     dom = cargar_domicilios(r_dom, r_ubi, consultas) if r_dom else None
     info = dom.to_dict("index") if dom is not None else {}
-    VACIO = {"zona": "", "departamento": "", "provincia": "", "distrito": "", "eruc": "", "condicion": "", "direccion": "", "actividad": "", "finsc": ""}
+    VACIO = {"zona": "", "departamento": "", "provincia": "", "distrito": "", "eruc": "", "condicion": "", "direccion": "", "actividad": "", "finsc": "", "circunscripcion": ""}
 
     def domicilio(doc, tcli):
         if tcli == "No domiciliado":
@@ -354,6 +430,22 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, cons
     vm["usado"] = vm.desc.map(norm).str.contains(r"\bUSAD[OA]S?\b")
     vm = pd.concat([vm, pd.DataFrame([domicilio(d, t) for d, t in zip(vm.doc, vm.tcli)], index=vm.index)], axis=1)
     vm["lugar"] = [lugar(r) for _, r in vm.iterrows()]
+    # Establecimiento emisor inferido por el número de la serie (FP03 → 03) según el domicilio de sus clientes
+    u_ref = pd.read_csv(r_ubi, dtype=str).fillna("")
+    circ_prov = (u_ref.groupby(["departamento", "provincia"]).circunscripcion.agg(lambda x: x.value_counts().index[0]).to_dict()
+                 if "circunscripcion" in u_ref else {})
+    establecimientos = {}
+    if dom is not None:
+        ex = e[["serie", "doc"]].assign(dig=e.serie.str[2:]).merge(dom[["departamento", "provincia"]], left_on="doc", right_index=True, how="inner")
+        ex = ex[ex.departamento != ""]
+        for dig, g in ex.groupby("dig"):
+            top = g.groupby(["departamento", "provincia"]).size().sort_values(ascending=False)
+            (dpt, prv), n = top.index[0], int(top.iloc[0])
+            circ = circ_prov.get((dpt, prv), "")
+            establecimientos[dig] = {"dig": dig, "dep": dpt, "prov": prv, "pct": round(n / len(g) * 100, 1), "n": int(len(g)),
+                                     "circ": circ, "dest": next((k for k, v in DEST_CIRC.items() if v == circ), "")}
+    vm["est"] = vm.serie.str[2:].map(lambda d: establecimientos.get(d, {}).get("prov", ""))
+    vm["est_circ"] = vm.serie.str[2:].map(lambda d: establecimientos.get(d, {}).get("circ", ""))
     fvm = vm[(vm.tipo == "01") & (vm.estado == "0")]
     por_dep = []
     if dom is not None:
@@ -417,9 +509,23 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, cons
         for _, s in cl[(cl.maq > 0) & (((cl.eruc != "") & (cl.eruc != "ACTIVO")) | ((cl.condicion != "") & (cl.condicion != "HABIDO")))].iterrows():
             alerta("Media", "Comprador de maquinaria no habido o con RUC no activo", s.doc, s.ult, s.nombre, s.doc,
                    f"RUC {s.eruc or 's/d'} · domicilio {s.condicion or 's/d'} · {int(s.maq)} máquinas · {lugar(s) or s.zona}", s.usd, "USD")
-    for _, s in vm[(vm.tipo == "01") & (vm.estado == "0") & (vm.tdoc == "0")].iterrows():
-        alerta("Alta", "Maquinaria vendida a no domiciliado", s.cpe, s.f.strftime("%Y-%m-%d"), s.nombre, s.doc,
-               f"{s.desc} · verificar DAM de exportación o reexportación", s.vv, s.moneda)
+    usadas_exp = set()
+    for _, s in vm[(vm.tipo == "01") & (vm.estado == "0") & (vm.tdoc == "0")].sort_values("f").iterrows():
+        cand = [x for x in exportaciones if x["dam"] not in usadas_exp and 0 <= (pd.Timestamp(x["f"]) - s.f).days <= 90]
+        if cand:
+            x = cand[0]; usadas_exp.add(x["dam"]); x["venta"] = s.cpe
+            alerta("Baja", "Maquinaria vendida a no domiciliado", s.cpe, s.f.strftime("%Y-%m-%d"), s.nombre, s.doc,
+                   f"{s.desc} · DAM de exportación probable {x['dam']} del {pd.Timestamp(x['f']):%d/%m/%Y} por {ADUANAS.get(x['ad'], x['ad'])} "
+                   f"(FOB USD {x['fob']:,.2f}, modelo {x['modelo']}, PIN {x['pin']}) · confirmar por número de serie", s.vv, s.moneda)
+        else:
+            alerta("Alta", "Maquinaria vendida a no domiciliado", s.cpe, s.f.strftime("%Y-%m-%d"), s.nombre, s.doc,
+                   f"{s.desc} · sin DAM de exportación en el periodo · verificar exportación o reexportación", s.vv, s.moneda)
+    if dom is not None:
+        otra = fvm[(fvm.zona == "ZTE") & (fvm.circunscripcion != "") & (fvm.est_circ != "") & (fvm.circunscripcion != fvm.est_circ)]
+        for _, s in otra.iterrows():
+            alerta("Media", "Máquina vendida a cliente de otra circunscripción amazónica", s.cpe, s.f.strftime("%Y-%m-%d"), s.nombre, s.doc,
+                   f"{s.desc} · vendida desde el establecimiento de {s.est.title()} ({s.est_circ}) a cliente domiciliado en {s.lugar} "
+                   f"({s.circunscripcion}) · establecimiento inferido por la serie", s.vv, s.moneda)
     for _, s in mq[mq.usada].iterrows():
         alerta("Media", "Maquinaria usada importada", f"{s.dam} serie {int(s.NUM_SECSERIE)}", s.f.strftime("%Y-%m-%d"),
                f"{s['cat']} {s.marca} {s.modelo}", "",
@@ -474,7 +580,9 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, cons
                 "venta": None if s is None else {"f": s.f.strftime("%Y-%m-%d"), "cli": s.nombre, "ruc": s.doc, "mon": s.moneda, "vv": r2(s.vv),
                                                  "igv": r2(s.igv), "desc": s.desc, "zona": s.zona, "lugar": s.lugar},
                 "baja": None if not b else {"cpe": b[0], "f": b[1], "igv": r2(b[2])},
+                "entrega_circ": ub.circunscripcion if ub is not None and hasattr(ub, "circunscripcion") else "",
                 "dam": None if i is None else {"dam": i.dam, "serie": int(i.NUM_SECSERIE), "f": i.f.strftime("%Y-%m-%d"), "canal": i.CANAL,
+                                               "dest": i.dest, "dest_circ": DEST_CIRC.get(i.dest, ""), "dep_dam": i.dep_dam, "dep_f": i.dep_f,
                                                "conv": i.conv, "cif": r2(i.MTO_VALORADU), "anio": i.anio, "modelo": i.modelo,
                                                "dias": int((s.f - i.f).days) if s is not None else None},
                 "cif_ref": r2(mq[(mq.modelo == (i.modelo if i is not None else c.get("modelo", ""))) & ~mq.usada].cif_u.median()) if (i is not None or c.get("modelo", "")) else None,
@@ -511,7 +619,7 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, cons
             "dam_desde": m.f.min().strftime("%Y-%m-%d"), "dam_hasta": m.f.max().strftime("%Y-%m-%d"),
             "cpe_desde": e.f.min().strftime("%Y-%m-%d"), "cpe_hasta": e.f.max().strftime("%Y-%m-%d"),
             "n_dam": int(m.dam.nunique()), "n_series": int(len(m)), "n_cpe": int(len(e)), "n_det": int(len(dl)),
-            "aduanas": ADUANAS, "canales": CANALES, "motivos": MOTIVOS_NC,
+            "aduanas": ADUANAS, "canales": CANALES, "motivos": MOTIVOS_NC, "destinos": DESTINOS, "regimenes": REGIMENES,
         },
         "kpi": {
             "cif": r2(m.MTO_VALORADU.sum()), "fob": r2(m.MTO_FOBDOL.sum()), "flete": r2(m.MTO_FLETEDOL.sum()),
@@ -547,6 +655,9 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, cons
             "por_dep": por_dep,
         },
         "imp": {
+            "vistas": vistas, "destinos": destinos,
+            "otros_reg": [{"reg": k, "t": REGIMENES.get(k, "Régimen " + k), "dams": int(v.dams), "series": int(v.series), "cif": r2(v.cif)}
+                          for k, v in otros_reg.iterrows()],
             "mensual": imp_mes,
             "canal": [{"c": k, "n": int(v.n), "cif": r2(v.cif)} for k, v in canal.iterrows()],
             "convenio": [{"k": k, "series": int(v.series), "cif": r2(v.cif)} for k, v in conv.iterrows()],
@@ -563,16 +674,18 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, cons
             "clas": [{"item": k, "hs": v.hs, "n": int(v.n), "dams": int(v.dams), "cif": r2(v.cif)} for k, v in clas.iterrows()],
         },
         "maq": {
-            "resumen": resumen_maq, "mensual": maq_mes, "puntos": puntos,
+            "resumen": resumen_maq, "mensual": maq_mes, "puntos": puntos, "deposito": deposito, "exportaciones": exportaciones,
+            "establecimientos": sorted(establecimientos.values(), key=lambda x: x["dig"]),
             "imp": [{"dam": s.dam, "serie": int(s.NUM_SECSERIE), "f": s.f.strftime("%Y-%m-%d"), "canal": s.CANAL, "hs": s.NUM_PARTNANDI,
                      "cat": s["cat"], "marca": s.marca, "modelo": s.modelo, "anio": s.anio, "id": s.id, "motor": s.motor,
-                     "usada": bool(s.usada), "horas": s.horas,
+                     "usada": bool(s.usada), "horas": s.horas, "dest": s.dest, "dep_dam": s.dep_dam, "dep_f": s.dep_f,
                      "cant": int(s.CNT_COMER), "fob": r2(s.MTO_FOBDOL), "cif": r2(s.MTO_VALORADU), "conv": s.conv}
                     for _, s in mq.sort_values("f").iterrows()],
             "ventas": [{"cpe": s.cpe, "f": s.f.strftime("%Y-%m-%d"), "ruc": s.doc, "cli": s.nombre, "tcli": s.tcli, "desc": s.desc,
                         "cat": s["cat"], "mon": s.moneda, "vv": r2(s.vv), "igv": r2(s.igv), "tot": r2(s.total),
                         "est": s.estado, "mot": s.tipo_ref if s.tipo == "07" else "", "usado": bool(s.usado),
-                        "zona": s.zona, "lugar": s.lugar, "dep": s.departamento, "cond": s.condicion, "eruc": s.eruc, "act": s.actividad}
+                        "zona": s.zona, "lugar": s.lugar, "dep": s.departamento, "cond": s.condicion, "eruc": s.eruc, "act": s.actividad,
+                        "est": s.est, "circ": s.circunscripcion}
                        for _, s in vm.sort_values("f").iterrows()],
         },
         "ventas": {
