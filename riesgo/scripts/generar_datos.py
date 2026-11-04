@@ -116,13 +116,57 @@ def leer_detalle(ruta):
     return dl
 
 
-def cargar_domicilios(r_dom, r_ubi):
-    """Admite ubigeo o, si falta, departamento/provincia/distrito por nombre; y la actividad económica."""
+def leer_consulta_ruc(rutas):
+    """Resultados de la consulta múltiple de RUC de SUNAT (ZIP o TXT separados por «|»)."""
+    import io
+    import zipfile
+    partes = []
+    for r in rutas or []:
+        fuentes = []
+        if zipfile.is_zipfile(r):
+            z = zipfile.ZipFile(r)
+            fuentes = [io.BytesIO(z.read(m)) for m in z.namelist() if m.lower().endswith(".txt")]
+        else:
+            fuentes = [r]
+        for f in fuentes:
+            t = pd.read_csv(f, sep="|", encoding="latin-1", dtype=str, index_col=False).fillna("")
+            t.columns = [norm(c) for c in t.columns]
+            t = t[[c for c in t.columns if c and not c.startswith("UNNAMED")]]
+            t = t.apply(lambda col: col.str.strip().replace({"-": ""}))
+            partes.append(t)
+    if not partes:
+        return pd.DataFrame(columns=["ruc"])
+    t = pd.concat(partes, ignore_index=True)
+    col = lambda *ns: next((c for c in t.columns if any(c.startswith(n) for n in ns)), None)
+    out = pd.DataFrame({"ruc": t[col("NUMERORUC", "RUC")]})
+    for destino, nombres in {"departamento_c": ("DEPARTAMENTO",), "provincia_c": ("PROVINCIA",), "distrito_c": ("DISTRITO",),
+                             "direccion_c": ("DIRECCION",), "actividad": ("PRINCIPAL",), "actividad2": ("SECUNDARIO 1",),
+                             "finsc": ("FECHA DE INSCRIPCION",), "tipo_contrib": ("TIPO DE CONTRIBUYENTE",),
+                             "estado_c": ("ESTADO DEL CONTRIBUYENTE",), "condicion_c": ("CONDICION DEL CONTRIBUYENTE",)}.items():
+        c = col(*nombres)
+        out[destino] = t[c] if c else ""
+    out["finsc"] = pd.to_datetime(out.finsc, format="%d/%m/%Y", errors="coerce").dt.strftime("%Y-%m-%d").fillna("")
+    return out.drop_duplicates("ruc", keep="last")
+
+
+def cargar_domicilios(r_dom, r_ubi, consultas=None):
+    """Admite ubigeo o, si falta, departamento/provincia/distrito por nombre; y la actividad económica.
+    Completa con la consulta múltiple de RUC: actividad, fecha de inscripción y, si el padrón no lo trae, el domicilio."""
     d = pd.read_csv(r_dom, dtype=str).fillna("")
     d.columns = [norm(c).lower().replace(" ", "_") for c in d.columns]
+    c = leer_consulta_ruc(consultas)
+    if len(c):
+        d = d.merge(c, on="ruc", how="outer").fillna("")
+        for a, b in (("departamento", "departamento_c"), ("provincia", "provincia_c"), ("distrito", "distrito_c"), ("direccion", "direccion_c"),
+                     ("estado", "estado_c"), ("condicion", "condicion_c")):
+            if a not in d:
+                d[a] = ""
+            sin = (d.get("ubigeo", "") == "") if a in ("departamento", "provincia", "distrito") else (d[a] == "")
+            d.loc[sin, a] = d.loc[sin, b]
+        d = d.drop(columns=[x for x in d.columns if x.endswith("_c")])
     u = pd.read_csv(r_ubi, dtype=str).fillna("")
     u = u[u.ubigeo.str.fullmatch(r"\d{6}")]
-    for c in ["ubigeo", "departamento", "provincia", "distrito", "estado", "condicion", "direccion", "actividad"]:
+    for c in ["ubigeo", "departamento", "provincia", "distrito", "estado", "condicion", "direccion", "actividad", "actividad2", "finsc", "tipo_contrib"]:
         if c not in d:
             d[c] = ""
     d["ubigeo"] = d.ubigeo.str.strip().str.zfill(6).where(d.ubigeo.str.strip() != "", "")
@@ -152,7 +196,7 @@ def mes(s):
     return s.dt.strftime("%Y-%m")
 
 
-def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None):
+def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, consultas=None):
     m = leer_dams(r_dams)
     e = leer_cpe(r_cpe)
     dl = leer_detalle(r_det)
@@ -263,9 +307,9 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None):
         "igv_n": int(((x.tipo == "01") & (x.igv > 0)).sum()),
         "ult": x.f.max().strftime("%Y-%m-%d"),
     }), include_groups=False).reset_index().sort_values("usd", ascending=False)
-    dom = cargar_domicilios(r_dom, r_ubi) if r_dom else None
+    dom = cargar_domicilios(r_dom, r_ubi, consultas) if r_dom else None
     info = dom.to_dict("index") if dom is not None else {}
-    VACIO = {"zona": "", "departamento": "", "provincia": "", "distrito": "", "eruc": "", "condicion": "", "direccion": "", "actividad": ""}
+    VACIO = {"zona": "", "departamento": "", "provincia": "", "distrito": "", "eruc": "", "condicion": "", "direccion": "", "actividad": "", "finsc": ""}
 
     def domicilio(doc, tcli):
         if tcli == "No domiciliado":
@@ -369,6 +413,16 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None):
     for _, s in vm[(vm.tipo == "01") & (vm.estado == "2")].iterrows():
         alerta("Media", "Factura de maquinaria dada de baja", s.cpe, s.f.strftime("%Y-%m-%d"), s.nombre, s.doc,
                f"{s.desc}", s.vv, s.moneda)
+    if dom is not None:
+        primera = fvm.groupby("doc").f.min()
+        for _, s in cl[(cl.maq > 0) & (cl.finsc != "")].iterrows():
+            if s.doc not in primera:
+                continue
+            dias = (primera[s.doc] - pd.Timestamp(s.finsc)).days
+            if 0 <= dias <= 180:
+                alerta("Media", "Comprador de maquinaria con RUC reciente", s.doc, primera[s.doc].strftime("%Y-%m-%d"), s.nombre, s.doc,
+                       f"RUC inscrito el {pd.Timestamp(s.finsc):%d/%m/%Y}; primera compra de maquinaria {dias} días después · {int(s.maq)} máquinas · "
+                       f"actividad: {s.actividad or 's/d'}", s.usd, "USD")
     multi = cl[cl.maq >= 3]
     for _, s in multi.iterrows():
         alerta("Media", "Cliente con 3 o más máquinas", s.doc, s.ult, s.nombre, s.doc,
@@ -473,7 +527,7 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None):
             "clientes": [{"ruc": s.doc, "nombre": s.nombre, "tipo": s.tipo, "n": int(s.n), "usd": r2(s.usd), "pen": r2(s.pen),
                           "nc_n": int(s.nc_n), "nc_usd": r2(s.nc_usd), "nc_pen": r2(s.nc_pen), "maq": int(s.maq),
                           "igv_n": int(s.igv_n), "ult": s.ult, "zona": s.zona, "lugar": lugar(s), "dep": s.departamento,
-                          "eruc": s.eruc, "cond": s.condicion, "dir": s.direccion, "act": s.actividad} for _, s in cl.iterrows()],
+                          "eruc": s.eruc, "cond": s.condicion, "dir": s.direccion, "act": s.actividad, "finsc": s.finsc} for _, s in cl.iterrows()],
         },
         "alertas": alertas,
     }
@@ -489,5 +543,6 @@ if __name__ == "__main__":
     ap.add_argument("--domicilios")
     ap.add_argument("--ubigeos", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "referencias", "ubigeo_zte.csv"))
     ap.add_argument("--portal", help="URL del portal público de comprobantes del emisor (va cifrada dentro de los datos)")
+    ap.add_argument("--consulta-ruc", nargs="*", default=[], help="Resultados de la consulta múltiple de RUC de SUNAT (ZIP o TXT)")
     a = ap.parse_args()
-    main(a.dams, a.cpe, a.detalle, a.salida, a.domicilios, a.ubigeos, a.portal)
+    main(a.dams, a.cpe, a.detalle, a.salida, a.domicilios, a.ubigeos, a.portal, a.consulta_ruc)

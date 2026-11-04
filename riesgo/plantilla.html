@@ -987,10 +987,10 @@ function vistaMaquinaria(sec) {
       { k: "usd", t: "USD", n: 1, f: f0 }, { k: "pen", t: "S/", n: 1, f: f0 }, { k: "igv", t: "Con IGV", n: 1, f: f0 }], Z.por_dep);
     gz.append(tz, td);
     if (conActividad()) {
-      const cuenta = new Map();
-      for (const v of Q.ventas) if (v.cpe.startsWith("01") && v.est === "0") { const a = v.act || "Sin dato"; cuenta.set(a, (cuenta.get(a) || 0) + 1); }
+      const cuenta = new Map(); let con = 0, tot = 0;
+      for (const v of Q.ventas) if (v.cpe.startsWith("01") && v.est === "0") { tot++; if (v.act) { con++; cuenta.set(v.act, (cuenta.get(v.act) || 0) + 1); } }
       const top = [...cuenta].sort((a, b) => b[1] - a[1]).slice(0, 10);
-      const ta = tarjeta("Actividad económica de los compradores", "Máquinas vendidas según la actividad principal declarada por el cliente. Una actividad ajena al uso de maquinaria pesada puede indicar intermediación.");
+      const ta = tarjeta("Actividad económica de los compradores", `Máquinas vendidas según la actividad principal (CIIU) del cliente en la consulta RUC de SUNAT; hay actividad para ${f0(con)} de ${f0(tot)} máquinas. Una actividad ajena al uso de maquinaria pesada puede indicar intermediación.`);
       sec.append(ta);
       impulsores(ta, top.map(([t, v]) => ({ t, v, c: "var(--s1)", icono: "maquinaria", ir: () => {} })));
     }
@@ -1078,7 +1078,7 @@ function vistaVentas(sec) {
   tabla(tc, { ph: "Buscar RUC o nombre…", cols: [{ k: "ruc", t: "RUC / doc.", c: 1 }, { k: "nombre", t: "Nombre", largo: 1 }, { k: "tipo", t: "Tipo" }, { k: "n", t: "Facturas", n: 1, f: f0 },
     ...(D.dom ? [{ k: "zona", t: "Zona", h: r => zonaH(r.zona), v: r => zonaT(r.zona) }, { k: "lugar", t: "Domicilio fiscal", largo: 1 },
       { v: r => [r.eruc, r.cond].filter(Boolean).join(" · "), t: "RUC (estado · condición)" }, { k: "dir", t: "Dirección", largo: 1 }] : []),
-    ...(conActividad() ? [{ k: "act", t: "Actividad económica", largo: 1 }] : []),
+    ...(conActividad() ? [{ k: "act", t: "Actividad económica", largo: 1 }, { k: "finsc", t: "Inscripción RUC", f: fecha, c: 1 }] : []),
     { k: "usd", t: "Ventas USD", n: 1, f: f0 }, { k: "pen", t: "Ventas S/", n: 1, f: f0 }, { k: "nc_n", t: "NC", n: 1, f: f0 }, { k: "maq", t: "Máquinas", n: 1, f: f0 },
     { k: "igv_n", t: "Con IGV", n: 1, f: f0 }, { k: "ult", t: "Última compra", f: fecha, c: 1 }],
     filas: V.clientes, filtros: [{ t: "Tipo", campo: "tipo", valor: r => r.tipo }, ...(D.dom ? [{ t: "Zona", campo: "zona", valor: r => zonaT(r.zona) }] : []),
