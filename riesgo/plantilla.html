@@ -225,6 +225,20 @@
   .paso.alerta { box-shadow: inset 3px 0 0 var(--critico); }
   .paso.pend { box-shadow: inset 3px 0 0 var(--aviso); }
   ol.acciones { margin: 12px 0 0; padding-left: 20px; font-size: 13.5px; display: grid; gap: 5px; }
+  .mks { display: inline-flex; gap: 4px; flex-wrap: wrap; min-width: 108px; }
+  .mk { width: 24px; height: 24px; border-radius: 7px; display: inline-grid; place-items: center; flex: none;
+    background: color-mix(in srgb, currentColor 13%, transparent); }
+  .mk svg.ic { width: 15px; height: 15px; stroke-width: 2; }
+  .leyenda-mk { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0 0 12px; font-size: 12.5px; color: var(--suave); }
+  .leyenda-mk span.it { display: inline-flex; align-items: center; gap: 6px; }
+  .igv-b { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 6px; font-size: 10.5px; font-weight: 750; line-height: 18px;
+    color: var(--critico); background: color-mix(in srgb, var(--critico) 13%, transparent); vertical-align: 1px; }
+  details.caso { padding: 0; }
+  details.caso > summary { list-style: none; cursor: pointer; padding: 16px 18px; display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; }
+  details.caso > summary::-webkit-details-marker { display: none; }
+  details.caso > summary::after { content: "▾"; margin-left: auto; color: var(--mudo); transition: transform .2s; }
+  details.caso[open] > summary::after { transform: rotate(180deg); }
+  details.caso .cuerpo-caso { padding: 0 18px 18px; }
   details.datos { margin-top: 10px; font-size: 13px; }
   details.datos summary { cursor: pointer; color: var(--suave); }
 
@@ -553,6 +567,16 @@ const ICONOS = {
   escudo: '<path d="M12 2.5l7.5 3.2v5.6c0 4.8-3.2 8.6-7.5 10.2-4.3-1.6-7.5-5.4-7.5-10.2V5.7z"/><path d="M8.7 12.2l2.3 2.3 4.4-4.6"/>',
   check: '<circle cx="12" cy="12" r="8.5"/><path d="M8.5 12.2l2.3 2.3 4.5-4.7"/>',
   pin: '<path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.3"/>',
+  pct: '<path d="M18.5 5.5l-13 13"/><circle cx="7" cy="7" r="2.4"/><circle cx="17" cy="17" r="2.4"/>',
+  engranaje: '<circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/>',
+  llave: '<path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3.5 17.5l3 3 5.8-5.8a4 4 0 0 0 5.4-5.4l-2.6 2.6-2.4-.6-.6-2.4z"/>',
+  monedas: '<ellipse cx="12" cy="6.5" rx="7" ry="3"/><path d="M5 6.5v5.5c0 1.7 3.1 3 7 3s7-1.3 7-3V6.5M5 12v5.5c0 1.7 3.1 3 7 3s7-1.3 7-3V12"/>',
+  globo: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z"/>',
+  edificio: '<path d="M3 21h18M5 21V10l7-5 7 5v11"/><path d="M9.5 21v-5.5h5V21"/>',
+  persona: '<circle cx="12" cy="8" r="3.5"/><path d="M5 20.5c1-3.6 3.8-5.6 7-5.6s6 2 7 5.6"/>',
+  doc: '<path d="M14 3H6.5A1.5 1.5 0 0 0 5 4.5v15A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V8z"/><path d="M14 3v5h5"/><path d="M9 14.5l2 2 4-4"/>',
+  enlace: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
+  salida: '<path d="M12 15V3.5M7.5 8l4.5-4.5L16.5 8"/><path d="M5 14v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5"/>',
 };
 const ic = k => `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">${ICONOS[k] || ""}</svg>`;
 
@@ -816,6 +840,24 @@ const portalDatos = r => {
   return { tipo: tipo === "07" ? "Nota Crédito" : tipo === "08" ? "Nota Débito" : "Factura", folio: `${serie}-${num}`,
     fecha: `${r.f.slice(8, 10)}-${r.f.slice(5, 7)}-${r.f.slice(0, 4)}`, monto: (+r.tot).toFixed(2) };
 };
+const MARCAS = {
+  igv: { t: "Con IGV: el monto suma el 18 % calculado", ic: "pct", c: "var(--critico)" },
+  ztc: { t: "Cliente domiciliado fuera de la ZTE", ic: "pin", c: "var(--s3)" },
+  zte: { t: "Cliente domiciliado en la ZTE", ic: "pin", c: "var(--s1)" },
+  ext: { t: "Cliente del extranjero", ic: "globo", c: "var(--suave)" },
+  maq: { t: "Maquinaria", ic: "maquinaria", c: "var(--texto)" },
+  rep: { t: "Repuestos", ic: "engranaje", c: "var(--suave)" },
+  ser: { t: "Servicio técnico", ic: "llave", c: "var(--suave)" },
+  otr: { t: "Otros ingresos", ic: "monedas", c: "var(--suave)" },
+  imp: { t: "Importación (DAM)", ic: "importaciones", c: "var(--suave)" },
+  pub: { t: "Entidad pública", ic: "edificio", c: "var(--suave)" },
+  pn: { t: "Persona natural", ic: "persona", c: "var(--suave)" },
+  xml: { t: "Factura revisada (XML del emisor)", ic: "doc", c: "var(--ok)" },
+  traza: { t: "Máquina enlazada con su DAM por número de serie", ic: "enlace", c: "var(--ok)" },
+  exp: { t: "Con DAM de exportación", ic: "salida", c: "var(--ok)" },
+};
+const marcasH = mk => `<span class="mks">${(mk || []).map(k => MARCAS[k] ? `<span class="mk" title="${esc(MARCAS[k].t)}" aria-label="${esc(MARCAS[k].t)}" style="color:${MARCAS[k].c}">${ic(MARCAS[k].ic)}</span>` : "").join("")}</span>`;
+const montoAlerta = r => r.monto == null ? null : r.igv ? Math.round(r.monto * 118) / 100 : r.monto;
 function conActividad() { return D.ventas.clientes.some(c => c.act); }
 function contarAlertas(tipo) { return D.alertas.filter(a => a.tipo === tipo).length; }
 function sumaAlertas(tipo, m) { return D.alertas.filter(a => a.tipo === tipo && a.mon === m).reduce((s, a) => s + (a.monto || 0), 0); }
@@ -1132,12 +1174,17 @@ function seccionesRegimenes(sec) {
 
 function fichasTrazabilidad(sec) {
   sec.append(el("h2", {}, "Trazabilidad por número de serie"),
-    el("p", { class: "nota" }, "Unidades documentadas con la factura del emisor: se enlaza la venta con su DAM por el número de serie de la máquina o del motor."));
-  for (const c of D.casos) {
-    const t = tarjeta(); sec.append(t);
+    el("p", { class: "nota" }, `${f0(D.casos.length)} unidades documentadas con la factura del emisor (${f0(D.casos.filter(c => c.dam).length)} enlazadas con su DAM por el número de serie de la máquina o del motor). Abra cada una para ver la cadena completa.`));
+  const casos = [...D.casos].sort((a, b) => (!!b.dam - !!a.dam) || ((b.venta && b.venta.zona === "ZTC") - (a.venta && a.venta.zona === "ZTC")));
+  casos.forEach((c, idx) => {
     const v = c.venta, m = c.dam;
-    t.append(el("h3", { html: `${esc(v ? v.desc : "Máquina")} · serie <span class="copiar" style="cursor:text">${esc(c.serie)}</span> · motor ${esc(c.motor || "s/d")}` }),
-      el("p", { class: "nota" }, `${c.fuente}${c.nota ? " · " + c.nota : ""}`));
+    const det = el("details", { class: "tarjeta caso", open: idx === 0 ? true : null }); sec.append(det);
+    const mk = [v && v.igv > 0 ? "igv" : "", v ? ({ ZTE: "zte", ZTC: "ztc", Extranjero: "ext" })[v.zona] || "" : "", "xml", m ? "traza" : ""].filter(Boolean);
+    det.append(el("summary", { html: `${marcasH(mk)}<b>${esc(c.cpe)}</b><span>${esc(v ? v.desc : "Máquina")} · serie <b>${esc(c.serie)}</b></span>`
+      + `<span class="etq">${m ? "DAM " + esc(m.dam) + " · " + esc(destT(m.dest)) : "Sin DAM en el periodo"}</span>`
+      + (v ? `<span class="etq">${esc(v.cli)} · ${esc(zonaT(v.zona))}</span>` : "") }));
+    const t = el("div", { class: "cuerpo-caso" }); det.append(t);
+    t.append(el("p", { class: "nota" }, `Motor ${c.motor || "s/d"} · ${c.fuente}${c.nota ? " · " + c.nota : ""}`));
     const cad = el("div", { class: "cadena" });
     cad.append(el("div", { class: "paso" + (m ? "" : " pend"), html: `<div class="n">${ic("importaciones")}1 · Importación</div>` + (m
       ? `<b>DAM ${esc(m.dam)} · serie ${m.serie}</b><div class="d">${fecha(m.f)} · canal ${CANAL[m.canal] || m.canal} · ${esc(convT(m.conv))}<br>Destino ${esc(destT(m.dest))} · CIF USD ${f0(m.cif)} · año ${esc(m.anio || "s/d")}`
@@ -1147,7 +1194,7 @@ function fichasTrazabilidad(sec) {
     if (v) cad.append(el("div", { class: "paso" + (v.igv > 0 ? "" : c.baja ? " alerta" : ""), html: `<div class="n">${ic("ventas")}${c.baja ? 3 : 2} · Venta</div><b>${esc(c.cpe)} · ${fecha(v.f)}</b><div class="d">${esc(v.cli)} (RUC ${esc(v.ruc)})<br>${mon(v.mon)} ${f0(v.vv)} · ${v.igv > 0 ? "con IGV " + f0(v.igv) : "sin IGV (operación exonerada)"}` +
       (m && m.dias != null ? `<br>${f0(m.dias)} días después de la DAM` : "") + (c.cif_ref ? `<br>Venta / CIF de referencia: ${NF2.format(v.vv / (m ? m.cif : c.cif_ref))}` : "") + `</div>` }));
     const fuera = c.entrega_zona === "ZTC" || (v && v.zona === "ZTC");
-    cad.append(el("div", { class: "paso" + (fuera ? " alerta" : ""), html: `<div class="n">${ic("pin")}${c.baja ? 4 : 3} · Destino</div><b>${esc(c.entrega || "s/d")} · ${zonaH(c.entrega_zona)}</b><div class="d">Dirección en la factura: ${esc(c.entrega_dir || "s/d")}` +
+    cad.append(el("div", { class: "paso" + (fuera ? " alerta" : ""), html: `<div class="n">${ic("pin")}${c.baja ? 4 : 3} · Destino</div><b>${c.entrega ? esc(c.entrega) + " · " + zonaH(c.entrega_zona) : "Ubicación de entrega no indicada"}</b><div class="d">Dirección en la factura: ${esc(c.entrega_dir || "s/d")}` +
       (c.entrega_circ ? `<br>Circunscripción de entrega: ${esc(c.entrega_circ)}` + (m && m.dest_circ && m.dest_circ !== c.entrega_circ ? ` (la DAM tenía destino en ${esc(m.dest_circ)})` : "") : "") +
       (v ? `<br>Domicilio fiscal (padrón): ${esc(v.lugar || "s/d")} · ${zonaT(v.zona)}` : "") + `</div>` }));
     t.append(cad);
@@ -1158,7 +1205,7 @@ function fichasTrazabilidad(sec) {
     if (c.baja) acc.push(`Pedir al emisor el sustento de la baja de ${esc(c.baja.cpe)} (emitida con IGV) y de su reemisión como operación exonerada.`);
     acc.push("Cruzar con la guía de remisión electrónica de la venta (punto de partida y de llegada) y con los registros de los controles en los corredores de salida.");
     t.append(el("h3", { style: "margin-top:14px" }, "Acciones sugeridas"), el("ol", { class: "acciones", html: acc.map(a => `<li>${a}</li>`).join("") }));
-  }
+  });
 }
 
 function vistaVentas(sec) {
@@ -1203,7 +1250,7 @@ function vistaVentas(sec) {
 
 function vistaAlertas(sec) {
   sec.append(el("h2", {}, "Alertas"),
-    el("p", { class: "nota" }, "Lista consolidada de indicios, ordenada por nivel. Alta: posible salida de bienes de la zona del beneficio o exportación sin sustento. Media: operaciones a rastrear o valores y clasificaciones a revisar. Baja: casos de seguimiento. Filtre por tipo y descargue el CSV para asignar casos."));
+    el("p", { class: "nota" }, "Lista consolidada de indicios, ordenada por nivel. Alta: posible salida de bienes de la zona del beneficio o exportación sin sustento. Media: operaciones a rastrear o valores y clasificaciones a revisar. Baja: casos de seguimiento. Filtre por tipo o por indicador y descargue el CSV para asignar casos."));
   const ks = el("div", { class: "kpis" });
   for (const n of ["Alta", "Media", "Baja"]) {
     const k = kpi("", f0(D.alertas.filter(a => a.nivel === n).length), [...new Set(D.alertas.filter(a => a.nivel === n).map(a => a.tipo))].length + " tipos de alerta");
@@ -1211,11 +1258,17 @@ function vistaAlertas(sec) {
   }
   sec.append(ks);
   const t = tarjeta(); sec.append(t);
+  t.append(el("div", { class: "leyenda-mk", html: Object.values(MARCAS).map(m => `<span class="it"><span class="mk" style="color:${m.c}">${ic(m.ic)}</span>${esc(m.t)}</span>`).join("") }),
+    el("p", { class: "nota" }, "En comprobantes con IGV el monto es el valor de venta más el 18 % calculado, sin redondear; pase el cursor sobre la etiqueta IGV para ver el valor de venta. Use el filtro «Indicador» para quedarse con un solo ícono."));
   tablaAlertas = tabla(t, { ph: "Buscar referencia, RUC, contraparte…", porPag: 25,
-    cols: [{ k: "nivel", t: "Nivel", h: r => NIVEL(r.nivel), v: r => ({ Alta: 0, Media: 1, Baja: 2 })[r.nivel], csv: r => r.nivel }, { k: "tipo", t: "Tipo" }, { k: "ref", t: "Referencia", c: 1 }, { k: "fecha", t: "Fecha", f: fecha, c: 1 },
+    cols: [{ k: "nivel", t: "Nivel", h: r => NIVEL(r.nivel), v: r => ({ Alta: 0, Media: 1, Baja: 2 })[r.nivel], csv: r => r.nivel }, { k: "tipo", t: "Tipo" },
+      { t: "Indicadores", v: r => (r.mk || []).map(k => MARCAS[k] ? MARCAS[k].t : k).join("; "), h: r => marcasH(r.mk) },
+      { k: "ref", t: "Referencia", c: 1 }, { k: "fecha", t: "Fecha", f: fecha, c: 1 },
       { k: "cp", t: "Contraparte", largo: 1 }, { k: "ruc", t: "RUC / doc.", c: 1 }, { k: "det", t: "Detalle", largo: 1 },
-      { k: "monto", t: "Monto", n: 1, f: (v, r) => v == null ? "–" : `${mon(r.mon)} ${f2(v)}` }, { k: "mon", t: "Moneda", f: v => v ? mon(v) : "–" }],
-    filas: D.alertas, filtros: [{ t: "Nivel", campo: "nivel", valor: r => r.nivel, opciones: ["Alta", "Media", "Baja"] }, { t: "Tipo", campo: "tipo", valor: r => r.tipo }],
+      { t: "Monto", n: 1, v: r => montoAlerta(r), h: r => r.monto == null ? "–" : `${mon(r.mon)} ${f2(montoAlerta(r))}` + (r.igv ? `<span class="igv-b" title="Valor de venta ${mon(r.mon)} ${f2(r.monto)} + IGV 18 % calculado">IGV</span>` : "") },
+      { k: "mon", t: "Moneda", f: v => v ? mon(v) : "–" }],
+    filas: D.alertas, filtros: [{ t: "Nivel", campo: "nivel", valor: r => r.nivel, opciones: ["Alta", "Media", "Baja"] }, { t: "Tipo", campo: "tipo", valor: r => r.tipo },
+      { t: "Indicador", campo: "mk", valor: r => (r.mk || []).map(k => MARCAS[k] ? MARCAS[k].t : k), opciones: Object.values(MARCAS).map(m => m.t) }],
     archivo: "alertas.csv" });
 }
 </script>

@@ -159,6 +159,52 @@ def ubicador(r_ubi):
     return buscar
 
 
+def leer_facturas_xml(rutas):
+    """Lee comprobantes electrónicos en XML (UBL 2.1 de SUNAT): archivos, carpetas o ZIP.
+    Devuelve una fila por ítem con la serie de la máquina y del motor que el emisor escribe en la descripción."""
+    import io
+    import zipfile
+    import xml.etree.ElementTree as ET
+    ns = {"cbc": "urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2",
+          "cac": "urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"}
+    fuentes = []
+    for r in rutas or []:
+        if os.path.isdir(r):
+            fuentes += [os.path.join(r, f) for f in sorted(os.listdir(r)) if f.lower().endswith(".xml")]
+        elif zipfile.is_zipfile(r):
+            z = zipfile.ZipFile(r)
+            fuentes += [io.BytesIO(z.read(n)) for n in z.namelist() if n.lower().endswith(".xml")]
+        else:
+            fuentes.append(r)
+    filas = []
+    for f in fuentes:
+        raiz = ET.parse(f).getroot()
+        tipo_doc = {"Invoice": "01", "CreditNote": "07", "DebitNote": "08"}.get(raiz.tag.split("}")[-1], "01")
+        t = lambda p, n=raiz: (n.findtext(p, default="", namespaces=ns) or "").strip()
+        cli = raiz.find("cac:AccountingCustomerParty/cac:Party", ns)
+        dir_cli = cli.find("cac:PostalAddress", ns) if cli is not None else None
+        if dir_cli is None and cli is not None:
+            dir_cli = cli.find("cac:PartyLegalEntity/cac:RegistrationAddress", ns)
+        td = lambda p: t(p, dir_cli) if dir_cli is not None else ""
+        base = {"cpe": f"{tipo_doc}-{t('cbc:ID')}", "f": t("cbc:IssueDate"), "mon": t("cbc:DocumentCurrencyCode"),
+                "oc": t("cac:OrderReference/cbc:ID"), "est_cod": t("cac:AccountingSupplierParty/cac:Party/cac:PartyLegalEntity/cac:RegistrationAddress/cbc:AddressTypeCode"),
+                "ruc_cli": t("cac:AccountingCustomerParty/cac:Party/cac:PartyIdentification/cbc:ID"),
+                "dir": td("cac:AddressLine/cbc:Line"), "dist": td("cbc:District"), "prov": td("cbc:CityName"), "dep": td("cbc:CountrySubentity"),
+                "guias": ", ".join(x.text or "" for x in raiz.findall("cac:DespatchDocumentReference/cbc:ID", ns)),
+                "igv_doc": t("cac:TaxTotal/cbc:TaxAmount"), "total": t("cac:LegalMonetaryTotal/cbc:PayableAmount")}
+        for ln in raiz.findall("cac:InvoiceLine", ns) + raiz.findall("cac:CreditNoteLine", ns):
+            desc = [x.text or "" for x in ln.findall("cac:Item/cbc:Description", ns)]
+            texto = " / ".join(d.strip() for d in desc if d.strip())
+            busca = lambda pat: (re.search(pat, norm(texto)) or [None, ""])[1]
+            filas.append({**base, "desc": texto,
+                          "serie": busca(r"SERIE (?:DE )?MAQUINA[: ]*([A-Z0-9-]{5,20})") or busca(r"\bPIN[: ]*([A-Z0-9]{17})") or busca(r"\bVIN[: ]*([A-Z0-9]{17})"),
+                          "motor": busca(r"SERIE (?:DE )?MOTOR[: ]*([A-Z0-9-]{5,20})"), "modelo": busca(r"MODELO[: ]*([A-Z0-9.\- ]+?)(?: /|$)"),
+                          "anio": busca(r"ANO DE FABRICACION[: ]*(\d{4})"), "horas": busca(r"HORAS DE USO[: ]*([\d.,]+)"),
+                          "exencion": t("cac:TaxTotal/cac:TaxSubtotal/cac:TaxCategory/cbc:TaxExemptionReasonCode", ln),
+                          "valor": t("cbc:LineExtensionAmount", ln)})
+    return pd.DataFrame(filas)
+
+
 def leer_consulta_ruc(rutas):
     """Resultados de la consulta múltiple de RUC de SUNAT (ZIP o TXT separados por «|»)."""
     import io
@@ -239,7 +285,7 @@ def mes(s):
     return s.dt.strftime("%Y-%m")
 
 
-def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, consultas=None, r_traz=None):
+def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, consultas=None, r_traz=None, r_xml=None):
     mt = leer_dams(r_dams)
     m = mt[mt.COD_REGIMEN == "10"].copy()        # importación para el consumo: base de todos los totales
     dep70 = mt[mt.COD_REGIMEN == "70"].copy()    # depósito aduanero: fuera de totales, solo para la cadena
@@ -561,9 +607,26 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, cons
 
     # Trazabilidad por número de serie (casos documentados con la factura del emisor)
     casos = []
-    if r_traz:
+    fx = leer_facturas_xml(r_xml)
+    xml_cpes = set(fx.cpe) if len(fx) else set()
+    filas_traz = pd.read_csv(r_traz, dtype=str).fillna("") if r_traz else pd.DataFrame(columns=["cpe"])
+    for col in ["cpe", "serie_maquina", "serie_motor", "modelo", "ubicacion_entrega", "direccion_entrega", "fuente", "nota"]:
+        if col not in filas_traz:
+            filas_traz[col] = ""
+    if len(fx):
+        maq_x = fx[fx.serie != ""]
+        auto = pd.DataFrame({
+            "cpe": maq_x.cpe, "serie_maquina": maq_x.serie, "serie_motor": maq_x.motor, "modelo": maq_x.modelo,
+            "ubicacion_entrega": [", ".join(x for x in (a, b, c) if x) if a and b and c else "" for a, b, c in zip(maq_x.dist, maq_x.prov, maq_x.dep)],
+            "direccion_entrega": maq_x.dir,
+            "fuente": "XML de la factura" + maq_x.est_cod.map(lambda x: f" · establecimiento {x}" if x else "")
+                      + maq_x.oc.map(lambda x: f" · orden de compra {x}" if x else "") + maq_x.guias.map(lambda x: f" · guías {x}" if x else ""),
+            "nota": maq_x.desc + maq_x.exencion.map(lambda x: {"10": " · gravada (código 10)", "20": " · exonerada (código 20)", "30": " · inafecta (código 30)"}.get(x, f" · afectación {x}" if x else ""))})
+        manual = set(filas_traz.cpe)
+        filas_traz = pd.concat([filas_traz, auto[~auto.cpe.isin(manual)]], ignore_index=True).fillna("")
+    if len(filas_traz):
         buscar = ubicador(r_ubi)
-        t = pd.read_csv(r_traz, dtype=str).fillna("")
+        t = filas_traz
         for _, c in t.iterrows():
             venta = vm[vm.cpe == c.cpe]
             s = venta.iloc[0] if len(venta) else None
@@ -609,6 +672,31 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, cons
                    s["fob_u"], "USD")
     orden = {"Alta": 0, "Media": 1, "Baja": 2}
     alertas.sort(key=lambda a: (orden[a["nivel"]], a["tipo"], a["fecha"] or ""))
+    info_cpe = e.set_index("cpe")[["igv", "linea", "tcli", "doc"]].to_dict("index")
+    zona_doc = dict(zip(cl.doc, cl.zona)) if "zona" in cl else {}
+    tcli_doc = dict(zip(cl.doc, cl.tipo))
+    trazados = {c["cpe"] for c in casos if c.get("dam")}
+    for a in alertas:
+        i = info_cpe.get(a["ref"])
+        mk = []
+        if i is not None:
+            if i["igv"] > 0:
+                mk.append("igv")
+            mk.append({"Maquinaria": "maq", "Repuestos": "rep", "Servicio técnico": "ser", "Otros ingresos": "otr"}.get(i["linea"], ""))
+        elif re.match(r"^\d{3}-\d{4}-\d{2}-", a["ref"]) or a["tipo"] in ("Mismo número de parte en varias subpartidas",):
+            mk.append("imp")
+        doc = a.get("ruc") or (i or {}).get("doc", "")
+        z = zona_doc.get(doc, "")
+        mk.append({"ZTE": "zte", "ZTC": "ztc", "Extranjero": "ext"}.get(z, ""))
+        mk.append({"Entidad pública": "pub", "Persona natural": "pn"}.get(tcli_doc.get(doc, ""), ""))
+        if a["ref"] in xml_cpes:
+            mk.append("xml")
+        if a["ref"] in trazados:
+            mk.append("traza")
+        if a["tipo"] == "Maquinaria vendida a no domiciliado" and a["nivel"] == "Baja":
+            mk.append("exp")
+        a["mk"] = [x for x in mk if x]
+        a["igv"] = bool(i is not None and i["igv"] > 0)
 
     # ---------------- Salida ----------------
     datos = {
@@ -700,6 +788,7 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, cons
                           "eruc": s.eruc, "cond": s.condicion, "dir": s.direccion, "act": s.actividad, "finsc": s.finsc} for _, s in cl.iterrows()],
         },
         "casos": casos,
+        "xml_cpes": sorted(xml_cpes),
         "alertas": alertas,
     }
     with open(salida, "w", encoding="utf-8") as f:
@@ -716,5 +805,6 @@ if __name__ == "__main__":
     ap.add_argument("--portal", help="URL del portal público de comprobantes del emisor (va cifrada dentro de los datos)")
     ap.add_argument("--consulta-ruc", nargs="*", default=[], help="Resultados de la consulta múltiple de RUC de SUNAT (ZIP o TXT)")
     ap.add_argument("--trazabilidad", help="CSV de casos: cpe, serie_maquina, serie_motor, modelo, ubicacion_entrega (DISTRITO, PROVINCIA, DEPARTAMENTO), direccion_entrega, fuente, nota")
+    ap.add_argument("--facturas-xml", nargs="*", default=[], help="XML de comprobantes del emisor (archivos, carpetas o ZIP)")
     a = ap.parse_args()
-    main(a.dams, a.cpe, a.detalle, a.salida, a.domicilios, a.ubigeos, a.portal, a.consulta_ruc, a.trazabilidad)
+    main(a.dams, a.cpe, a.detalle, a.salida, a.domicilios, a.ubigeos, a.portal, a.consulta_ruc, a.trazabilidad, a.facturas_xml)

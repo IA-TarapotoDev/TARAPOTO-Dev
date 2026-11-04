@@ -48,6 +48,10 @@ Para la actividad económica (CIIU) y la fecha de inscripción, agregue los resu
 
 **Trazabilidad por número de serie:** con `--trazabilidad casos.csv` (columnas `cpe, serie_maquina, serie_motor, modelo, ubicacion_entrega, direccion_entrega, fuente, nota`; `ubicacion_entrega` como «DISTRITO, PROVINCIA, DEPARTAMENTO») cada venta documentada con la factura del emisor se enlaza con su DAM por la serie de la máquina o del motor, y el tablero muestra la cadena importación → venta → destino con acciones sugeridas. El archivo de casos tiene datos de contribuyentes: no se versiona.
 
+**XML de las facturas del emisor:** con `--facturas-xml carpeta_o_zip` se leen los comprobantes en XML (UBL 2.1). De cada ítem se extraen la serie de la máquina y del motor, el modelo, el año, el código de afectación del IGV, el establecimiento emisor, la orden de compra y la dirección del cliente; cada máquina se enlaza automáticamente con su DAM y aparece como ficha en «Trazabilidad por número de serie». Los XML no se versionan.
+
+**Pestaña Alertas:** cada alerta lleva íconos (con IGV, zona del cliente, línea de negocio, tipo de cliente, factura revisada, enlazada con su DAM, con DAM de exportación) y un filtro «Indicador». En comprobantes con IGV, el monto mostrado es el valor de venta más el 18 % calculado.
+
 `referencias/ubigeo_zte.csv` asigna cada distrito INEI a la ZTE o a la ZTC. Se genera con `scripts/zona_ubigeo.py` a partir de la tabla de ubigeos de [jmcastagnetto/ubigeo-peru-aumentado](https://github.com/jmcastagnetto/ubigeo-peru-aumentado) (licencia MIT). Con domicilios, el tablero agrega la zona y el domicilio fiscal en clientes y ventas de maquinaria, un resumen por zona y departamento y dos alertas más.
 
 Formatos de entrada esperados:
