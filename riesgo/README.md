@@ -31,6 +31,21 @@ CLAVE_TABLERO_ARCHIVO=/ruta/privada/clave.txt \
 # 3. Publicar: copiar index.html a riesgo/index.html en la rama gh-pages
 ```
 
+### Domicilio fiscal de los clientes (opcional)
+
+Con el padrón reducido del RUC (público: https://www2.sunat.gob.pe/padron_reducido_ruc.zip) cada cliente se ubica por el ubigeo de su domicilio fiscal dentro o fuera de la ZTE (art. 3 de la Ley 27037, con las mismas reglas de `mapas/scripts/05_tematicos.py`):
+
+```bash
+# Extrae solo los RUC de los clientes (acepta el ZIP, el TXT o un CSV propio con RUC y UBIGEO)
+python3 -I riesgo/scripts/extraer_domicilios.py padron_reducido_ruc.zip CPEs_EMITIDOS.txt /ruta/privada/domicilios.csv
+
+# Genera el JSON con la zona de cada cliente
+python3 -I riesgo/scripts/generar_datos.py DAMs.csv CPEs_EMITIDOS.txt CPE_DETALLE_EMITIDO.txt /ruta/privada/datos.json \
+  --domicilios /ruta/privada/domicilios.csv
+```
+
+`referencias/ubigeo_zte.csv` asigna cada distrito INEI a la ZTE o a la ZTC. Se genera con `scripts/zona_ubigeo.py` a partir de la tabla de ubigeos de [jmcastagnetto/ubigeo-peru-aumentado](https://github.com/jmcastagnetto/ubigeo-peru-aumentado) (licencia MIT). Con domicilios, el tablero agrega la zona y el domicilio fiscal en clientes y ventas de maquinaria, un resumen por zona y departamento y dos alertas más.
+
 Formatos de entrada esperados:
 
 - **DAM** (CSV): `COD_ADUANA, ANN_PRESEN, COD_REGIMEN, NUM_DECLARACION, FEC_DECLARACION, COD_ADUDEST, NUM_DOCIDENT, NOM_RAZONSOCIAL, DIR_PARTIC, COD_TIPPARTIC, CANAL, NUM_PARTNANDI, NUM_SECSERIE, CNT_COMER, COD_UNICOMER, MTO_FOBDOL, MTO_FLETEDOL, MTO_SEGDOL, MTO_VALORADU, DES_COMER, DES_FORMAPRESEN, DES_MATECOMP, DES_USOAPLIC, DES_OTROSCARAC, COD_TIPCONVENIO, COD_CONVENIO`
@@ -49,7 +64,9 @@ Formatos de entrada esperados:
 | Media | Cliente con 3 o más máquinas | Cliente con tres o más facturas vigentes de maquinaria |
 | Media | Mismo número de parte en varias subpartidas | Misma descripción con número de parte declarada en más de una subpartida |
 | Media | Valor unitario atípico | FOB unitario a 50 % o más de la mediana del mismo número de parte (con al menos 3 series en 2 DAM) |
+| Alta | Maquinaria vendida a cliente domiciliado fuera de la ZTE | Factura vigente de maquinaria a un cliente cuyo domicilio fiscal (padrón RUC) está en la ZTC |
+| Media | Comprador de maquinaria no habido o con RUC no activo | Cliente con facturas de maquinaria cuyo RUC no está activo o cuyo domicilio figura como no habido |
 | Baja | Ventas a no domiciliado | Repuestos, servicios u otros ingresos facturados a clientes con documento de tipo 0 |
 | Baja | Repuestos o servicios con IGV | Factura vigente de repuestos o servicio técnico con IGV |
 
-Las alertas son indicios para el análisis de riesgo y no constituyen conclusiones. Los CPE no traen el domicilio del cliente, así que la ubicación de los compradores debe cruzarse con el padrón RUC.
+Las alertas son indicios para el análisis de riesgo y no constituyen conclusiones. El domicilio fiscal es el vigente en la fecha del padrón: puede diferir del que tenía el cliente al comprar y del lugar donde opera la máquina.

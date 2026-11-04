@@ -6,3 +6,5 @@ datos/
 *.zip
 clave*
 index.html
+!referencias/ubigeo_zte.csv
+__pycache__/

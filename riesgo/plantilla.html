@@ -112,6 +112,15 @@
   .seg { display: flex; gap: 2px; height: 28px; margin: 4px 0 8px; }
   .seg-b { border-radius: 4px; min-width: 3px; color: #fff; font-size: 12px; font-weight: 600; line-height: 28px; padding-left: 7px;
     white-space: nowrap; overflow: hidden; }
+  .zona { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+  .zona i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+  .hbar { display: grid; grid-template-columns: minmax(90px, 160px) 1fr 44px; gap: 6px 10px; align-items: center; font-size: 12.5px; }
+  .hbar .et { color: var(--suave); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hbar .pista { display: flex; gap: 2px; height: 16px; }
+  .hbar .pista span { border-radius: 0 4px 4px 0; min-width: 2px; }
+  .hbar .pista span + span { border-radius: 0 4px 4px 0; }
+  .hbar .pista span:not(:last-child) { border-radius: 0; }
+  .hbar .va { font-variant-numeric: tabular-nums; color: var(--texto); }
   details.datos { margin-top: 8px; font-size: 13px; }
   details.datos summary { cursor: pointer; color: var(--suave); }
   /* tablas */
@@ -479,6 +488,20 @@ const usd = v => "USD " + fc(v);
 const sol = v => "S/ " + fc(v);
 const CANAL = { V: "Verde", D: "Naranja", F: "Rojo" };
 const canalH = c => `<span class="canal ${c}"><i aria-hidden="true"></i>${CANAL[c] || c}</span>`;
+const ZONA = { ZTE: { t: "Amazonía (ZTE)", c: "var(--s1)" }, ZTC: { t: "Fuera de la ZTE (ZTC)", c: "var(--s2)" },
+  Extranjero: { t: "Extranjero", c: "var(--s3)" }, "Sin dato": { t: "Sin dato en el padrón", c: "var(--mudo)" } };
+const zonaT = z => (ZONA[z] || { t: z || "–" }).t;
+const zonaH = z => z ? `<span class="zona"><i style="background:${(ZONA[z] || {}).c || "var(--mudo)"}" aria-hidden="true"></i>${esc(zonaT(z))}</span>` : "–";
+function barrasH(host, filas, series, total) {
+  host.append(leyenda(series.map(s => ({ t: s.t, c: s.c }))));
+  const max = Math.max(...filas.map(total), 1), g = el("div", { class: "hbar" });
+  for (const f of filas) {
+    const pista = el("div", { class: "pista", role: "img", "aria-label": `${f.dep}: ` + series.map(s => `${s.t} ${f0(f[s.k])}`).join(", ") });
+    for (const s of series) if (f[s.k] > 0) pista.append(el("span", { style: `width:${f[s.k] / max * 100}%;background:${s.c}`, title: `${f.dep} · ${s.t}: ${f0(f[s.k])}` }));
+    g.append(el("div", { class: "et", title: f.dep }, f.dep), pista, el("div", { class: "va" }, f0(total(f))));
+  }
+  host.append(g);
+}
 const convT = k => k === "Sin beneficio" ? "Sin beneficio" : k.startsWith("C-") ? `Código liberatorio ${k.slice(2)}` : k.startsWith("I-") ? `TPI ${k.slice(2)}` : k;
 
 /* ---------- vistas ---------- */
@@ -534,7 +557,9 @@ function vistaResumen(sec) {
     kpi("Ventas facturadas (sin IGV)", usd(K.ven_usd), `y ${sol(K.ven_pen)} · ${f0(K.fac_n)} facturas · ${f0(K.clientes)} clientes`),
     kpi("Facturas con IGV", f0(K.igv_n), `${f0(K.igv_maq_n)} de maquinaria · el resto de ventas va sin IGV`),
     kpi("Notas de crédito", f0(K.nc_n), `${usd(K.nc_usd)} y ${sol(K.nc_pen)} · ${f0(K.maq_nc)} anulan o devuelven maquinaria`),
-    kpi("Alertas generadas", f0(D.alertas.length), ["Alta", "Media", "Baja"].map(n => `${f0(D.alertas.filter(a => a.nivel === n).length)} ${n.toLowerCase()}s`).join(" · ")),
+    D.dom
+      ? kpi("Máquinas vendidas fuera de la ZTE", f0(D.dom.maq.ZTC), `${pc(D.dom.maq.ZTC / D.kpi.maq_vend * 100)} de las vendidas · ${usd(D.dom.ztc_usd)} y ${sol(D.dom.ztc_pen)} · ${f0(D.dom.ztc_clientes)} clientes`)
+      : kpi("Alertas generadas", f0(D.alertas.length), ["Alta", "Media", "Baja"].map(n => `${f0(D.alertas.filter(a => a.nivel === n).length)} ${n.toLowerCase()}s`).join(" · ")),
   );
   sec.append(ks);
 
@@ -545,6 +570,12 @@ function vistaResumen(sec) {
     if (tipo) li.lastChild.append(" ", el("a", { href: "#alertas", onclick: e => { e.preventDefault(); irAlertas(tipo); } }, `Ver ${f0(contarAlertas(tipo))} alertas →`));
     ul.append(li);
   };
+  if (D.dom) {
+    const Z = D.dom;
+    item("Alta", `<b>${f0(Z.maq.ZTC)} de ${f0(K.maq_vend)} máquinas vendidas (${pc(Z.maq.ZTC / K.maq_vend * 100)}) se facturaron a ${f0(Z.ztc_clientes)} clientes con domicilio fiscal fuera de la ZTE</b> (USD ${fc(Z.ztc_usd)} y S/ ${fc(Z.ztc_pen)}). Solo ${f0(Z.ztc_igv)} de esas facturas llevan IGV. Si las unidades ingresaron con beneficio para la Amazonía, verificar dónde operan y si se regularizó su traslado.`, "Maquinaria vendida a cliente domiciliado fuera de la ZTE");
+    const nh = contarAlertas("Comprador de maquinaria no habido o con RUC no activo");
+    if (nh) item("Media", `<b>${f0(nh)} compradores de maquinaria figuran como no habidos o con RUC no activo</b> en el padrón. Son difíciles de ubicar y fiscalizar.`, "Comprador de maquinaria no habido o con RUC no activo");
+  }
   const igvMaqUsd = sumaAlertas("Maquinaria vendida con IGV", "USD"), igvMaqPen = sumaAlertas("Maquinaria vendida con IGV", "PEN");
   item("Alta", `<b>${f0(contarAlertas("Maquinaria vendida con IGV"))} facturas de maquinaria se emitieron con IGV</b> (USD ${fc(igvMaqUsd)} y S/ ${fc(igvMaqPen)} de valor de venta), aunque casi todas las demás ventas van sin IGV. Es un indicio de operación fuera del ámbito del beneficio: verificar con qué DAM y código liberatorio ingresó cada unidad y si se regularizó su salida de la zona.`, "Maquinaria vendida con IGV");
   item("Alta", `<b>${f0(contarAlertas("Maquinaria vendida a no domiciliado"))} máquinas se facturaron a un cliente no domiciliado</b> (USD ${fc(sumaAlertas("Maquinaria vendida a no domiciliado", "USD"))}). Verificar si existe DAM de exportación o reexportación y por qué aduana salieron.`, "Maquinaria vendida a no domiciliado");
@@ -562,7 +593,9 @@ function vistaResumen(sec) {
     "El detalle de los CPE repite el importe total del comprobante en cada ítem, así que no hay precio por ítem. En maquinaria cada factura corresponde a una sola unidad, de modo que su valor de venta es el precio unitario.",
     "Maquinaria importada: subpartidas 8429, 8701, 8502 y 8408, o valor en aduana unitario de USD 15 000 o más. El identificador (PIN, VIN o número de serie) se extrae de la descripción de la serie.",
     "Tipo de cliente: «Entidad pública» según el nombre (municipalidad, gobierno regional, etc.), «Persona natural» si el RUC empieza con 10 y «No domiciliado» si el documento es de tipo 0.",
-    "Los CPE no traen el domicilio del cliente. Para ubicar la maquinaria respecto de la zona del beneficio, descargue el CSV de clientes o de ventas de maquinaria y crúcelo con el padrón RUC.",
+    D.dom
+      ? `Domicilio fiscal según el padrón reducido del RUC del ${fecha(D.dom.fecha)} (${f0(D.dom.encontrados)} de ${f0(D.dom.rucs)} clientes ubicados). Es el domicilio vigente a esa fecha: puede diferir del que tenía el cliente al comprar y del lugar donde opera la máquina. La zona sigue el art. 3 de la Ley 27037 con las mismas reglas de los mapas de la Intendencia.`
+      : "Los CPE no traen el domicilio del cliente. Para ubicar la maquinaria respecto de la zona del beneficio, descargue el CSV de clientes o de ventas de maquinaria y crúcelo con el padrón RUC.",
   ].map(t => `<li>${t}</li>`).join("") }));
   sec.append(n);
 }
@@ -640,6 +673,22 @@ function vistaMaquinaria(sec) {
     { k: "venta_med", t: "Venta mediana USD", n: 1, f: f0 }, { k: "ratio", t: "Venta / CIF", n: 1, f: v => v == null ? "–" : NF2.format(v) },
     { k: "igv", t: "Con IGV", n: 1, f: f0 }, { k: "pub", t: "A entidades públicas", n: 1, f: f0 }], filas: Q.resumen, archivo: "maquinaria_por_tipo.csv" });
 
+  if (D.dom) {
+    const Z = D.dom;
+    sec.append(el("h2", {}, "Destino según el domicilio fiscal del comprador"),
+      el("p", { class: "nota" }, `Facturas vigentes de maquinaria según la zona del domicilio fiscal del cliente (padrón RUC del ${fecha(Z.fecha)}). El domicilio fiscal no prueba dónde opera la máquina, pero orienta la verificación en campo y en los corredores de salida.`));
+    const gz = el("div", { class: "rejilla" }); sec.append(gz);
+    const tz = tarjeta("Máquinas vendidas por zona");
+    segmentada(tz, ["ZTE", "ZTC", "Extranjero", "Sin dato"].map(z => ({ t: zonaT(z), v: Z.maq[z], c: ZONA[z].c })), v => f0(v) + " máquinas");
+    tabla(tz, { buscar: false, cols: [{ k: "z", t: "Zona", h: r => zonaH(r.z) }, { k: "n", t: "Máquinas", n: 1, f: f0 }, { v: r => r.n / K.maq_vend * 100, t: "%", n: 1, f: v => pc(v) }],
+      filas: ["ZTE", "ZTC", "Extranjero", "Sin dato"].map(z => ({ z, n: Z.maq[z] })), archivo: "maquinas_por_zona.csv" });
+    const td = tarjeta("Por departamento del domicilio fiscal", "Un departamento puede tener distritos dentro y fuera de la ZTE (por ejemplo, Huánuco, Cusco o Junín).");
+    barrasH(td, Z.por_dep.slice(0, 15), [{ k: "zte", t: "En la ZTE", c: ZONA.ZTE.c }, { k: "ztc", t: "Fuera de la ZTE", c: ZONA.ZTC.c }, { k: "otro", t: "Extranjero o sin dato", c: "var(--mudo)" }], f => f.n);
+    datosDetalle(td, [{ k: "dep", t: "Departamento" }, { k: "zte", t: "En la ZTE", n: 1, f: f0 }, { k: "ztc", t: "Fuera de la ZTE", n: 1, f: f0 }, { k: "otro", t: "Otro", n: 1, f: f0 },
+      { k: "usd", t: "USD", n: 1, f: f0 }, { k: "pen", t: "S/", n: 1, f: f0 }, { k: "igv", t: "Con IGV", n: 1, f: f0 }], Z.por_dep);
+    gz.append(tz, td);
+  }
+
   const filas = Q.resumen.filter(r => r.cif_med && r.n_usd >= 3 && r.cat !== "Otros");
   const pts = Q.puntos.filter(p => filas.some(f => f.cat === p.cat));
   sec.append(el("h2", {}, "Precio de venta frente al CIF"),
@@ -668,14 +717,18 @@ function vistaMaquinaria(sec) {
     if (r.tcli === "No domiciliado") o.push("No domiciliado");
     if (r.tcli === "Entidad pública") o.push("Entidad pública");
     if (r.usado) o.push("Usado");
+    if (r.zona === "ZTC") o.push("Fuera de la ZTE");
+    if (r.cond && r.cond !== "HABIDO") o.push("No habido");
     return o;
   };
   tabla(t5, { ph: "Buscar cliente, RUC, CPE, descripción…", cols: [{ k: "cpe", t: "CPE", c: 1 }, { k: "f", t: "Fecha", f: fecha, c: 1 }, { k: "cli", t: "Cliente", largo: 1 }, { k: "ruc", t: "RUC / doc.", c: 1 },
-    { k: "tcli", t: "Tipo de cliente" }, { k: "desc", t: "Descripción", largo: 1 }, { k: "cat", t: "Tipo" }, { k: "mon", t: "Moneda", f: mon },
+    { k: "tcli", t: "Tipo de cliente" }, ...(D.dom ? [{ k: "zona", t: "Zona", h: r => zonaH(r.zona), v: r => zonaT(r.zona) }, { k: "lugar", t: "Domicilio fiscal", largo: 1 }] : []),
+    { k: "desc", t: "Descripción", largo: 1 }, { k: "cat", t: "Tipo" }, { k: "mon", t: "Moneda", f: mon },
     { k: "vv", t: "Valor venta", n: 1, f: f2 }, { k: "igv", t: "IGV", n: 1, f: f2 },
     { v: r => obs(r).join(", ") + (r.mot ? ` (motivo ${r.mot}: ${D.meta.motivos[r.mot] || ""})` : ""), t: "Observaciones",
-      h: r => obs(r).map(t => `<span class="etq${["Con IGV", "No domiciliado", "Dado de baja"].includes(t) ? " fuerte" : ""}">${t}</span>`).join("") + (r.mot ? `<span class="etq">${esc(D.meta.motivos[r.mot] || r.mot)}</span>` : "") }],
-    filas: Q.ventas, filtros: [{ t: "Observación", campo: "obs", valor: obs }, { t: "Tipo de cliente", campo: "tcli", valor: r => r.tcli }, { t: "Tipo", campo: "cat", valor: r => r.cat }],
+      h: r => obs(r).map(t => `<span class="etq${["Con IGV", "No domiciliado", "Dado de baja", "Fuera de la ZTE", "No habido"].includes(t) ? " fuerte" : ""}">${t}</span>`).join("") + (r.mot ? `<span class="etq">${esc(D.meta.motivos[r.mot] || r.mot)}</span>` : "") }],
+    filas: Q.ventas, filtros: [{ t: "Observación", campo: "obs", valor: obs }, ...(D.dom ? [{ t: "Zona", campo: "zona", valor: r => zonaT(r.zona) }] : []),
+      { t: "Tipo de cliente", campo: "tcli", valor: r => r.tcli }, { t: "Tipo", campo: "cat", valor: r => r.cat }],
     archivo: "ventas_maquinaria.csv" });
 }
 
@@ -707,12 +760,15 @@ function vistaVentas(sec) {
   tb.append(el("div", { class: "kpis", style: "margin:4px 0 0" }, kpi("Dados de baja", f0(K.anul_n), `USD ${fc(K.anul_usd)} y S/ ${fc(K.anul_pen)} (importe total)`)));
   g2.append(tl, tcl, tn, tb);
 
-  sec.append(el("h2", {}, "Clientes"), el("p", { class: "nota" }, "Un cliente por RUC o documento. Descargue el CSV para cruzarlo con el padrón RUC (domicilio fiscal y actividad) y ubicar a los compradores respecto de la zona del beneficio."));
+  sec.append(el("h2", {}, "Clientes"), el("p", { class: "nota" }, "Un cliente por RUC o documento, con la zona de su domicilio fiscal cuando se cargó el padrón RUC. El CSV incluye todas las columnas."));
   const tc = tarjeta(); sec.append(tc);
   tabla(tc, { ph: "Buscar RUC o nombre…", cols: [{ k: "ruc", t: "RUC / doc.", c: 1 }, { k: "nombre", t: "Nombre", largo: 1 }, { k: "tipo", t: "Tipo" }, { k: "n", t: "Facturas", n: 1, f: f0 },
+    ...(D.dom ? [{ k: "zona", t: "Zona", h: r => zonaH(r.zona), v: r => zonaT(r.zona) }, { k: "lugar", t: "Domicilio fiscal", largo: 1 },
+      { v: r => [r.eruc, r.cond].filter(Boolean).join(" · "), t: "RUC (estado · condición)" }, { k: "dir", t: "Dirección", largo: 1 }] : []),
     { k: "usd", t: "Ventas USD", n: 1, f: f0 }, { k: "pen", t: "Ventas S/", n: 1, f: f0 }, { k: "nc_n", t: "NC", n: 1, f: f0 }, { k: "maq", t: "Máquinas", n: 1, f: f0 },
     { k: "igv_n", t: "Con IGV", n: 1, f: f0 }, { k: "ult", t: "Última compra", f: fecha, c: 1 }],
-    filas: V.clientes, filtros: [{ t: "Tipo", campo: "tipo", valor: r => r.tipo }, { t: "Compra maquinaria", campo: "maqs", valor: r => r.maq > 0 ? "Sí" : "No" }], archivo: "clientes.csv" });
+    filas: V.clientes, filtros: [{ t: "Tipo", campo: "tipo", valor: r => r.tipo }, ...(D.dom ? [{ t: "Zona", campo: "zona", valor: r => zonaT(r.zona) }] : []),
+      { t: "Compra maquinaria", campo: "maqs", valor: r => r.maq > 0 ? "Sí" : "No" }], archivo: "clientes.csv" });
 }
 
 function vistaAlertas(sec) {

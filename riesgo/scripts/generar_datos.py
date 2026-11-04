@@ -5,13 +5,19 @@
   3. Detalle de CPE emitidos (TXT separado por "|", una fila por ítem)
 
 Uso:
-  python3 -I generar_datos.py DAMS.csv CPE_EMITIDOS.txt CPE_DETALLE.txt salida.json
+  python3 -I generar_datos.py DAMS.csv CPE_EMITIDOS.txt CPE_DETALLE.txt salida.json \
+      [--domicilios domicilios.csv] [--ubigeos ../referencias/ubigeo_zte.csv]
+
+domicilios.csv sale de extraer_domicilios.py (padrón reducido del RUC). Con él, cada cliente
+se ubica por el ubigeo de su domicilio fiscal en la ZTE o en la ZTC (ver zona_ubigeo.py).
 
 Los archivos de origen y el JSON de salida contienen información con reserva
 tributaria: no se versionan (ver .gitignore). El JSON se publica solo cifrado
 (ver cifrar.py).
 """
+import argparse
 import json
+import os
 import re
 import sys
 import unicodedata
@@ -110,11 +116,20 @@ def leer_detalle(ruta):
     return dl
 
 
+def cargar_domicilios(r_dom, r_ubi):
+    d = pd.read_csv(r_dom, dtype=str).fillna("")
+    u = pd.read_csv(r_ubi, dtype=str).fillna("")
+    d["ubigeo"] = d.ubigeo.str.zfill(6).where(d.ubigeo != "", "")
+    d = d.merge(u, on="ubigeo", how="left").fillna("").rename(columns={"estado": "eruc"})
+    d["zona"] = d.zona.where(d.zona != "", "Sin dato")
+    return d.drop_duplicates("ruc").set_index("ruc")
+
+
 def mes(s):
     return s.dt.strftime("%Y-%m")
 
 
-def main(r_dams, r_cpe, r_det, salida):
+def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None):
     m = leer_dams(r_dams)
     e = leer_cpe(r_cpe)
     dl = leer_detalle(r_det)
@@ -225,6 +240,23 @@ def main(r_dams, r_cpe, r_det, salida):
         "igv_n": int(((x.tipo == "01") & (x.igv > 0)).sum()),
         "ult": x.f.max().strftime("%Y-%m-%d"),
     }), include_groups=False).reset_index().sort_values("usd", ascending=False)
+    dom = cargar_domicilios(r_dom, r_ubi) if r_dom else None
+    info = dom.to_dict("index") if dom is not None else {}
+    VACIO = {"zona": "", "departamento": "", "provincia": "", "distrito": "", "eruc": "", "condicion": "", "direccion": ""}
+
+    def domicilio(doc, tcli):
+        if tcli == "No domiciliado":
+            return {**VACIO, "zona": "Extranjero"}
+        if dom is None:
+            return VACIO
+        r = info.get(doc)
+        return {k: (r.get(k, "") if r else "") for k in VACIO} | {"zona": r["zona"] if r else "Sin dato"}
+
+    def lugar(r):
+        return ", ".join(x for x in (r["distrito"], r["provincia"], r["departamento"]) if x)
+
+    dcl = pd.DataFrame([domicilio(d, t) for d, t in zip(cl.doc, cl.tipo)], index=cl.index)
+    cl = pd.concat([cl, dcl], axis=1)
     tot_usd = cl.usd.sum()
     top10 = cl.head(10).usd.sum() / tot_usd * 100
     hhi = float(((cl.usd / tot_usd * 100) ** 2).sum())
@@ -235,6 +267,18 @@ def main(r_dams, r_cpe, r_det, salida):
     vm["desc"] = vm.desc.fillna("(sin detalle)")
     vm["cat"] = vm.desc.map(cat_maquina)
     vm["usado"] = vm.desc.map(norm).str.contains(r"\bUSAD[OA]S?\b")
+    vm = pd.concat([vm, pd.DataFrame([domicilio(d, t) for d, t in zip(vm.doc, vm.tcli)], index=vm.index)], axis=1)
+    vm["lugar"] = [lugar(r) for _, r in vm.iterrows()]
+    fvm = vm[(vm.tipo == "01") & (vm.estado == "0")]
+    por_dep = []
+    if dom is not None:
+        x = fvm.assign(dep=fvm.departamento.where(fvm.departamento != "", fvm.zona))
+        for dep, g in x.groupby("dep"):
+            por_dep.append({"dep": dep, "zte": int((g.zona == "ZTE").sum()), "ztc": int((g.zona == "ZTC").sum()),
+                            "otro": int((~g.zona.isin(["ZTE", "ZTC"])).sum()), "n": int(len(g)),
+                            "usd": r2(g[g.moneda == "USD"].vv.sum()), "pen": r2(g[g.moneda == "PEN"].vv.sum()),
+                            "igv": int((g.igv > 0).sum())})
+        por_dep.sort(key=lambda r: -r["n"])
 
     cats = ["Retroexcavadora", "Excavadora", "Minicargador", "Cargador frontal", "Motoniveladora", "Rodillo compactador",
             "Tractor agrícola", "Tractor de orugas", "Grupo electrógeno", "Motor diésel", "Motor marino", "Martillo hidráulico",
@@ -279,7 +323,15 @@ def main(r_dams, r_cpe, r_det, salida):
 
     for _, s in vm[(vm.tipo == "01") & (vm.estado == "0") & (vm.igv > 0)].iterrows():
         alerta("Alta", "Maquinaria vendida con IGV", s.cpe, s.f.strftime("%Y-%m-%d"), s.nombre, s.doc,
-               f"{s.desc} · IGV {s.igv:,.2f} · cliente: {s.tcli}", s.vv, s.moneda)
+               f"{s.desc} · IGV {s.igv:,.2f} · cliente: {s.tcli}" +
+               (f" · domicilio fiscal en {s.zona}" + (f" ({s.lugar})" if s.lugar else "") if dom is not None else ""), s.vv, s.moneda)
+    if dom is not None:
+        for _, s in fvm[fvm.zona == "ZTC"].iterrows():
+            alerta("Alta", "Maquinaria vendida a cliente domiciliado fuera de la ZTE", s.cpe, s.f.strftime("%Y-%m-%d"), s.nombre, s.doc,
+                   f"{s.desc} · domicilio fiscal: {s.lugar} · {'con' if s.igv > 0 else 'sin'} IGV · {s.direccion}", s.vv, s.moneda)
+        for _, s in cl[(cl.maq > 0) & (((cl.eruc != "") & (cl.eruc != "ACTIVO")) | ((cl.condicion != "") & (cl.condicion != "HABIDO")))].iterrows():
+            alerta("Media", "Comprador de maquinaria no habido o con RUC no activo", s.doc, s.ult, s.nombre, s.doc,
+                   f"RUC {s.eruc or 's/d'} · domicilio {s.condicion or 's/d'} · {int(s.maq)} máquinas · {lugar(s) or s.zona}", s.usd, "USD")
     for _, s in vm[(vm.tipo == "01") & (vm.estado == "0") & (vm.tdoc == "0")].iterrows():
         alerta("Alta", "Maquinaria vendida a no domiciliado", s.cpe, s.f.strftime("%Y-%m-%d"), s.nombre, s.doc,
                f"{s.desc} · verificar DAM de exportación o reexportación", s.vv, s.moneda)
@@ -347,6 +399,17 @@ def main(r_dams, r_cpe, r_det, salida):
             "sm_series": int(len(sm)), "sm_cif": r2(sm.MTO_VALORADU.sum()),
             "clas_n": int(len(clas)), "disp_n": int(len(disp)),
         },
+        "dom": None if dom is None else {
+            "fecha": (dom.fecha_padron.iloc[0] if len(dom) and "fecha_padron" in dom else ""),
+            "rucs": int((cl.tipo != "No domiciliado").sum()), "encontrados": int(cl.zona.isin(["ZTE", "ZTC"]).sum()),
+            "maq": {z: int((fvm.zona == z).sum()) for z in ["ZTE", "ZTC", "Extranjero", "Sin dato"]},
+            "ztc_usd": r2(fvm[(fvm.zona == "ZTC") & (fvm.moneda == "USD")].vv.sum()),
+            "ztc_pen": r2(fvm[(fvm.zona == "ZTC") & (fvm.moneda == "PEN")].vv.sum()),
+            "ztc_igv": int(((fvm.zona == "ZTC") & (fvm.igv > 0)).sum()),
+            "zte_igv": int(((fvm.zona == "ZTE") & (fvm.igv > 0)).sum()),
+            "ztc_clientes": int(fvm[fvm.zona == "ZTC"].doc.nunique()),
+            "por_dep": por_dep,
+        },
         "imp": {
             "mensual": imp_mes,
             "canal": [{"c": k, "n": int(v.n), "cif": r2(v.cif)} for k, v in canal.iterrows()],
@@ -372,7 +435,8 @@ def main(r_dams, r_cpe, r_det, salida):
                     for _, s in mq.sort_values("f").iterrows()],
             "ventas": [{"cpe": s.cpe, "f": s.f.strftime("%Y-%m-%d"), "ruc": s.doc, "cli": s.nombre, "tcli": s.tcli, "desc": s.desc,
                         "cat": s["cat"], "mon": s.moneda, "vv": r2(s.vv), "igv": r2(s.igv), "tot": r2(s.total),
-                        "est": s.estado, "mot": s.tipo_ref if s.tipo == "07" else "", "usado": bool(s.usado)}
+                        "est": s.estado, "mot": s.tipo_ref if s.tipo == "07" else "", "usado": bool(s.usado),
+                        "zona": s.zona, "lugar": s.lugar, "dep": s.departamento, "cond": s.condicion, "eruc": s.eruc}
                        for _, s in vm.sort_values("f").iterrows()],
         },
         "ventas": {
@@ -383,7 +447,8 @@ def main(r_dams, r_cpe, r_det, salida):
                                                         c=("doc", "size")).sort_values("usd", ascending=False).iterrows()],
             "clientes": [{"ruc": s.doc, "nombre": s.nombre, "tipo": s.tipo, "n": int(s.n), "usd": r2(s.usd), "pen": r2(s.pen),
                           "nc_n": int(s.nc_n), "nc_usd": r2(s.nc_usd), "nc_pen": r2(s.nc_pen), "maq": int(s.maq),
-                          "igv_n": int(s.igv_n), "ult": s.ult} for _, s in cl.iterrows()],
+                          "igv_n": int(s.igv_n), "ult": s.ult, "zona": s.zona, "lugar": lugar(s), "dep": s.departamento,
+                          "eruc": s.eruc, "cond": s.condicion, "dir": s.direccion} for _, s in cl.iterrows()],
         },
         "alertas": alertas,
     }
@@ -393,6 +458,10 @@ def main(r_dams, r_cpe, r_det, salida):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 5:
-        sys.exit(__doc__)
-    main(*sys.argv[1:])
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    for a in ("dams", "cpe", "detalle", "salida"):
+        ap.add_argument(a)
+    ap.add_argument("--domicilios")
+    ap.add_argument("--ubigeos", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "referencias", "ubigeo_zte.csv"))
+    a = ap.parse_args()
+    main(a.dams, a.cpe, a.detalle, a.salida, a.domicilios, a.ubigeos)
