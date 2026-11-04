@@ -41,6 +41,7 @@ ZTE_DIS_K = {(clave(a), clave(b)) for a, b in ZTE_DIS}
 
 def main(entrada, salida):
     u = pd.read_csv(entrada, dtype=str)
+    u = u[u.inei.fillna("").str.fullmatch(r"\d{6}")]  # descarta distritos sin código INEI
     u["dep_k"], u["prov_k"], u["dis_k"] = u.departamento.map(clave), u.provincia.map(clave), u.distrito.map(clave)
     pares_prov = set(zip(u.dep_k, u.prov_k))
     pares_dis = set(zip(u.prov_k, u.dis_k))

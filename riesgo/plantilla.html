@@ -855,7 +855,7 @@ function vistaResumen(sec) {
   };
   if (D.dom) {
     const Z = D.dom;
-    item("Alta", `<b>${f0(Z.maq.ZTC)} de ${f0(K.maq_vend)} máquinas vendidas (${pc(Z.maq.ZTC / K.maq_vend * 100)}) se facturaron a ${f0(Z.ztc_clientes)} clientes con domicilio fiscal fuera de la ZTE</b> (USD ${fc(Z.ztc_usd)} y S/ ${fc(Z.ztc_pen)}). Solo ${f0(Z.ztc_igv)} de esas facturas llevan IGV. Si las unidades ingresaron con beneficio para la Amazonía, verificar dónde operan y si se regularizó su traslado.`, "Maquinaria vendida a cliente domiciliado fuera de la ZTE");
+    item("Alta", `<b>${f0(Z.maq.ZTC)} de ${f0(K.maq_vend)} máquinas vendidas (${pc(Z.maq.ZTC / K.maq_vend * 100)}) se facturaron a ${f0(Z.ztc_clientes)} clientes con domicilio fiscal fuera de la ZTE</b> (USD ${fc(Z.ztc_usd)} y S/ ${fc(Z.ztc_pen)}). Solo ${f0(Z.ztc_igv)} de esas facturas llevan IGV. Si las unidades ingresaron con beneficio para la Amazonía, verificar dónde operan y si se regularizó su traslado. Otras ${f0(Z.maq["Sin dato"])} máquinas fueron a compradores sin domicilio en el padrón público (${f0(Z.sd_pn)} a personas naturales): para ubicarlas hay que consultar los sistemas internos.`, "Maquinaria vendida a cliente domiciliado fuera de la ZTE");
     const nh = contarAlertas("Comprador de maquinaria no habido o con RUC no activo");
     if (nh) item("Media", `<b>${f0(nh)} compradores de maquinaria figuran como no habidos o con RUC no activo</b> en el padrón. Son difíciles de ubicar y fiscalizar.`, "Comprador de maquinaria no habido o con RUC no activo");
   }
@@ -877,7 +877,7 @@ function vistaResumen(sec) {
     "Maquinaria importada: subpartidas 8429, 8701, 8502 y 8408, o valor en aduana unitario de USD 15 000 o más. El identificador (PIN, VIN o número de serie) se extrae de la descripción de la serie.",
     "Tipo de cliente: «Entidad pública» según el nombre (municipalidad, gobierno regional, etc.), «Persona natural» si el RUC empieza con 10 y «No domiciliado» si el documento es de tipo 0.",
     D.dom
-      ? `Domicilio fiscal según el padrón reducido del RUC del ${fecha(D.dom.fecha)} (${f0(D.dom.encontrados)} de ${f0(D.dom.rucs)} clientes ubicados). Es el domicilio vigente a esa fecha: puede diferir del que tenía el cliente al comprar y del lugar donde opera la máquina. La zona sigue el art. 3 de la Ley 27037 con las mismas reglas de los mapas de la Intendencia.`
+      ? `Domicilio fiscal según el padrón reducido del RUC del ${fecha(D.dom.fecha)} (${f0(D.dom.encontrados)} de ${f0(D.dom.rucs)} clientes ubicados). El padrón público no incluye el domicilio de las personas naturales (RUC 10): sus ${f0(D.dom.pn_sin)} RUC quedan «sin dato». Es el domicilio vigente a esa fecha: puede diferir del que tenía el cliente al comprar y del lugar donde opera la máquina. La zona sigue el art. 3 de la Ley 27037 con las mismas reglas de los mapas de la Intendencia.`
       : "Los CPE no traen el domicilio del cliente. Para ubicar la maquinaria respecto de la zona del beneficio, descargue el CSV de clientes o de ventas de maquinaria y crúcelo con el padrón RUC.",
   ].map(t => `<li>${t}</li>`).join("") }));
   sec.append(n);

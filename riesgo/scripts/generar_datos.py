@@ -121,6 +121,7 @@ def cargar_domicilios(r_dom, r_ubi):
     d = pd.read_csv(r_dom, dtype=str).fillna("")
     d.columns = [norm(c).lower().replace(" ", "_") for c in d.columns]
     u = pd.read_csv(r_ubi, dtype=str).fillna("")
+    u = u[u.ubigeo.str.fullmatch(r"\d{6}")]
     for c in ["ubigeo", "departamento", "provincia", "distrito", "estado", "condicion", "direccion", "actividad"]:
         if c not in d:
             d[c] = ""
@@ -142,6 +143,7 @@ def cargar_domicilios(r_dom, r_ubi):
     d["ubigeo"] = [ubigeo_por_nombre(r) for r in d.itertuples()]
     d = d.drop(columns=["departamento", "provincia", "distrito"])
     d = d.merge(u, on="ubigeo", how="left").fillna("").rename(columns={"estado": "eruc"})
+    d.loc[d.ubigeo == "", ["departamento", "provincia", "distrito", "zona"]] = ""
     d["zona"] = d.zona.where(d.zona != "", "Sin dato")
     return d.drop_duplicates("ruc").set_index("ruc")
 
@@ -293,7 +295,7 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None):
     fvm = vm[(vm.tipo == "01") & (vm.estado == "0")]
     por_dep = []
     if dom is not None:
-        x = fvm.assign(dep=fvm.departamento.where(fvm.departamento != "", fvm.zona))
+        x = fvm.assign(dep=fvm.departamento.where(fvm.departamento != "", fvm.zona.replace({"Sin dato": "Sin dato en el padrón"})))
         for dep, g in x.groupby("dep"):
             por_dep.append({"dep": dep, "zte": int((g.zona == "ZTE").sum()), "ztc": int((g.zona == "ZTC").sum()),
                             "otro": int((~g.zona.isin(["ZTE", "ZTC"])).sum()), "n": int(len(g)),
@@ -429,6 +431,8 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None):
             "ztc_igv": int(((fvm.zona == "ZTC") & (fvm.igv > 0)).sum()),
             "zte_igv": int(((fvm.zona == "ZTE") & (fvm.igv > 0)).sum()),
             "ztc_clientes": int(fvm[fvm.zona == "ZTC"].doc.nunique()),
+            "sd_pn": int(((fvm.zona == "Sin dato") & (fvm.tcli == "Persona natural")).sum()),
+            "pn_sin": int(((cl.tipo == "Persona natural") & (cl.zona == "Sin dato")).sum()),
             "por_dep": por_dep,
         },
         "imp": {
