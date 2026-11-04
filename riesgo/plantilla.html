@@ -9,83 +9,176 @@
 <style>
   :root {
     color-scheme: light;
-    --fondo: #f4f1e8; --sup: #fcfcfb; --texto: #1f261b; --oliva: #36432f; --acento: #7d9467;
-    --salvia: #dde5d0; --borde: #d6d0bd; --suave: #555d4d; --mudo: #7a7870; --rej: #e1e0d9; --eje: #c3c2b7;
-    --wash: rgba(54, 67, 47, .07);
-    --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a;
+    --fondo: #e4ebe8; --marco: #f4f7f6; --sup: #ffffff; --texto: #13211f; --suave: #55645f; --mudo: #7f8c88;
+    --rej: #e8edeb; --eje: #c9d2cf; --borde: #e2e8e5; --wash: rgba(15, 47, 45, .05);
+    --lat: #0f2f2d; --lat-txt: #93b4ac; --lat-act: #c6da52;
+    --oscuro: #12302e; --oscuro-2: #1b3f3c; --oscuro-txt: #e9f2ef; --oscuro-suave: #a9c3bc;
+    --lima: #a6bd2d; --lima-txt: #1d2a0b; --lima-suave: #eef4d2; --violeta: #6460dc; --violeta-suave: #ecebfc;
+    --oliva: #12302e; --acento: #a6bd2d; --salvia: #eef4d2;
+    --s1: #00988b; --s2: #9cb22a; --s3: #6460dc;
     --ok: #0ca30c; --aviso: #fab219; --serio: #ec835a; --critico: #d03b3b;
+    --sombra: 0 1px 2px rgba(15, 47, 45, .05), 0 10px 28px rgba(15, 47, 45, .07);
+    --radio: 18px;
   }
   @media (prefers-color-scheme: dark) {
     :root:where(:not([data-theme="light"])) {
       color-scheme: dark;
-      --fondo: #10120e; --sup: #1a1a19; --texto: #ecebe4; --oliva: #cbd8b6; --acento: #8fa877;
-      --salvia: #2a3324; --borde: #33372c; --suave: #bdc1b2; --mudo: #8f8d85; --rej: #2c2c2a; --eje: #45453f;
-      --wash: rgba(255, 255, 255, .06);
-      --s1: #3987e5; --s2: #d95926; --s3: #199e70;
+      --fondo: #050908; --marco: #0d1413; --sup: #18211f; --texto: #e6eeeb; --suave: #a7b6b1; --mudo: #7d8b87;
+      --rej: #25302d; --eje: #36423f; --borde: #233230; --wash: rgba(255, 255, 255, .05);
+      --lat: #081b19; --lat-txt: #7fa198; --lat-act: #c6da52;
+      --oscuro: #0e2725; --oscuro-2: #173a37; --oscuro-txt: #e9f2ef; --oscuro-suave: #9fbab3;
+      --lima: #b3c93e; --lima-txt: #1d2a0b; --lima-suave: #263117; --violeta: #8a83f0; --violeta-suave: #25233f;
+      --oliva: #d3e3a6; --acento: #b3c93e; --salvia: #263117;
+      --s1: #00909a; --s2: #8a9b1e; --s3: #807af0;
+      --sombra: 0 1px 2px rgba(0, 0, 0, .3), 0 10px 28px rgba(0, 0, 0, .25);
     }
   }
   :root[data-theme="dark"] {
     color-scheme: dark;
-    --fondo: #10120e; --sup: #1a1a19; --texto: #ecebe4; --oliva: #cbd8b6; --acento: #8fa877;
-    --salvia: #2a3324; --borde: #33372c; --suave: #bdc1b2; --mudo: #8f8d85; --rej: #2c2c2a; --eje: #45453f;
-    --wash: rgba(255, 255, 255, .06);
-    --s1: #3987e5; --s2: #d95926; --s3: #199e70;
+    --fondo: #050908; --marco: #0d1413; --sup: #18211f; --texto: #e6eeeb; --suave: #a7b6b1; --mudo: #7d8b87;
+    --rej: #25302d; --eje: #36423f; --borde: #233230; --wash: rgba(255, 255, 255, .05);
+    --lat: #081b19; --lat-txt: #7fa198; --lat-act: #c6da52;
+    --oscuro: #0e2725; --oscuro-2: #173a37; --oscuro-txt: #e9f2ef; --oscuro-suave: #9fbab3;
+    --lima: #b3c93e; --lima-txt: #1d2a0b; --lima-suave: #263117; --violeta: #8a83f0; --violeta-suave: #25233f;
+    --oliva: #d3e3a6; --acento: #b3c93e; --salvia: #263117;
+    --s1: #00909a; --s2: #8a9b1e; --s3: #807af0;
+    --sombra: 0 1px 2px rgba(0, 0, 0, .3), 0 10px 28px rgba(0, 0, 0, .25);
   }
   * { box-sizing: border-box; }
-  html, body { margin: 0; background: var(--fondo); color: var(--texto);
-    font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; font-size: 15px; line-height: 1.45; }
-  body { overflow-x: hidden; }
+  html, body { margin: 0; color: var(--texto); font-size: 15px; line-height: 1.45;
+    font-family: Inter, "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif; }
+  body { background: radial-gradient(1200px 600px at 85% -10%, color-mix(in srgb, var(--s1) 14%, transparent), transparent 60%),
+    radial-gradient(900px 500px at -10% 110%, color-mix(in srgb, var(--s3) 10%, transparent), transparent 60%), var(--fondo);
+    min-height: 100vh; overflow-x: hidden; }
   a { color: var(--s1); }
-  header.cab { padding: 14px 16px 0; border-left: 6px solid var(--acento); border-bottom: 1px solid var(--borde); }
-  .sup { margin: 0 0 3px; font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: var(--mudo); }
-  h1 { margin: 0; font-size: clamp(19px, 2.6vw, 28px); line-height: 1.2; color: var(--oliva); }
-  .sub { margin: 5px 0 12px; font-size: 13px; color: var(--suave); }
-  .pestanas { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; margin: 0 -16px; padding: 0 16px; }
-  .pestanas::-webkit-scrollbar { display: none; }
-  .pestana { appearance: none; border: 0; border-bottom: 3px solid transparent; background: none; color: var(--suave);
-    padding: 9px 12px 8px; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; white-space: nowrap; }
-  .pestana[aria-selected="true"] { color: var(--oliva); border-bottom-color: var(--oliva); }
-  .pestana .cnt { display: inline-block; min-width: 20px; margin-left: 4px; padding: 0 6px; border-radius: 10px; font-size: 11.5px;
-    background: var(--salvia); color: var(--oliva); }
-  main { max-width: 1240px; margin: 0 auto; padding: 16px; }
+  svg.ic { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+  /* ---------- marco: barra lateral + cuerpo ---------- */
+  .marco { display: flex; max-width: 1480px; margin: 16px auto; min-height: calc(100vh - 32px); background: var(--marco);
+    border-radius: 26px; box-shadow: 0 30px 80px rgba(15, 47, 45, .14); overflow: hidden; }
+  .lateral { width: 92px; flex: none; background: var(--lat); padding: 18px 0; }
+  .lat-int { position: sticky; top: 18px; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .logo { width: 48px; height: 48px; border-radius: 50%; display: grid; place-items: center; margin-bottom: 18px;
+    background: radial-gradient(circle at 30% 30%, #2f6f68, #134440); color: var(--lat-act); box-shadow: inset 0 0 0 2px rgba(198, 218, 82, .35); }
+  .logo svg.ic { width: 24px; height: 24px; }
+  .nav { display: flex; flex-direction: column; gap: 6px; width: 100%; padding: 0 10px; }
+  .nav-it { appearance: none; border: 0; background: none; color: var(--lat-txt); font: inherit; cursor: pointer; width: 100%;
+    display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 2px; border-radius: 14px; position: relative; }
+  .nav-it span { font-size: 10.5px; letter-spacing: .01em; }
+  .nav-it:hover { color: #d9e8e3; background: rgba(255, 255, 255, .05); }
+  .nav-it[aria-selected="true"] { color: var(--lat-act); background: rgba(198, 218, 82, .12); }
+  .nav-it[aria-selected="true"]::before { content: ""; position: absolute; left: -10px; top: 12px; bottom: 12px; width: 3px; border-radius: 0 3px 3px 0; background: var(--lat-act); }
+  .nav-it .cnt { position: absolute; top: 4px; right: 10px; min-width: 18px; padding: 0 5px; border-radius: 9px; font-size: 10px; line-height: 16px;
+    background: var(--critico); color: #fff; font-weight: 700; }
+  .cuerpo { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+  header.cab { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: flex-start; justify-content: space-between; padding: 26px 30px 6px; }
+  .sup { margin: 0 0 4px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--mudo); }
+  h1 { margin: 0; font-size: clamp(20px, 2.3vw, 28px); line-height: 1.2; color: var(--texto); font-weight: 700; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; }
+  .trazos { display: inline-flex; gap: 6px; align-items: center; }
+  .trazos i { display: block; height: 5px; border-radius: 3px; background: var(--lima); width: 34px; }
+  .trazos i + i { width: 18px; background: var(--eje); }
+  .sub { margin: 6px 0 0; font-size: 13px; color: var(--suave); }
+  .acc { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .pill { display: inline-flex; align-items: center; gap: 8px; border-radius: 999px; padding: 9px 16px; font: inherit; font-size: 13px; font-weight: 600;
+    border: 1px solid var(--borde); background: var(--sup); color: var(--texto); text-decoration: none; cursor: pointer; white-space: nowrap; }
+  .pill.oscura { background: var(--oscuro); border-color: var(--oscuro); color: var(--oscuro-txt); }
+  .pill.lima { background: var(--lima); border-color: var(--lima); color: var(--lima-txt); }
+  .pill.violeta { background: var(--violeta); border-color: var(--violeta); color: #fff; }
+  .pill:hover { filter: brightness(1.05); }
+
+  main { padding: 16px 30px 10px; }
   section.vista { display: none; }
-  section.vista.activa { display: block; }
-  h2 { margin: 26px 0 4px; font-size: 18px; color: var(--oliva); }
+  section.vista.activa { display: block; animation: aparecer .25s ease; }
+  @keyframes aparecer { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  h2 { margin: 28px 0 4px; font-size: 17px; color: var(--texto); font-weight: 700; }
   h2:first-child { margin-top: 4px; }
-  h3 { margin: 0 0 2px; font-size: 15px; color: var(--texto); }
-  p.nota { margin: 0 0 12px; font-size: 13px; color: var(--suave); max-width: 900px; }
-  .tarjeta { background: var(--sup); border: 1px solid var(--borde); border-radius: 8px; padding: 14px; margin: 0 0 14px; min-width: 0; }
+  h3 { margin: 0 0 4px; font-size: 15px; color: var(--texto); font-weight: 650; }
+  p.nota { margin: 0 0 12px; font-size: 13px; color: var(--suave); max-width: 920px; }
+  .tarjeta { background: var(--sup); border-radius: var(--radio); padding: 18px; margin: 0 0 16px; min-width: 0; box-shadow: var(--sombra); }
   .tarjeta > p.nota:last-child { margin-bottom: 0; }
-  .rejilla { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); }
+  .rejilla { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); margin-bottom: 16px; }
   .rejilla > .tarjeta { margin: 0; }
-  .kpis { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr)); margin-bottom: 14px; }
-  .kpi { background: var(--sup); border: 1px solid var(--borde); border-radius: 8px; padding: 12px 14px; min-width: 0; }
+  .g12 { display: grid; gap: 16px; grid-template-columns: repeat(12, minmax(0, 1fr)); margin-bottom: 16px; }
+  .g12 > * { margin: 0; }
+  .c3 { grid-column: span 3; } .c4 { grid-column: span 4; } .c5 { grid-column: span 5; } .c7 { grid-column: span 7; } .c8 { grid-column: span 8; } .c12 { grid-column: span 12; }
+  @media (max-width: 1280px) { .c3 { grid-column: span 6; } .c4, .c8 { grid-column: span 12; } .c5, .c7 { grid-column: span 12; } }
+  @media (max-width: 680px) { .c3 { grid-column: span 12; } }
+  .kpis { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr)); margin-bottom: 16px; }
+  .kpi { background: var(--sup); border-radius: 14px; padding: 14px 16px; min-width: 0; box-shadow: var(--sombra); }
   .kpi .et { font-size: 12.5px; color: var(--suave); }
-  .kpi .va { font-size: 24px; font-weight: 650; line-height: 1.2; margin: 3px 0 2px; color: var(--texto); overflow-wrap: anywhere; }
+  .kpi .va { font-size: 24px; font-weight: 700; line-height: 1.2; margin: 3px 0 2px; overflow-wrap: anywhere; }
   .kpi .de { font-size: 12px; color: var(--mudo); }
-  .kpis.cuatro { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  @media (max-width: 960px) { .kpis.cuatro { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-  @media (max-width: 440px) { .kpis.cuatro { grid-template-columns: 1fr; } }
-  .kpi.heroe { grid-column: span 2; border-left: 5px solid var(--acento); }
-  .kpi.heroe .va { font-size: clamp(32px, 5vw, 48px); }
-  @media (max-width: 440px) { .kpi.heroe { grid-column: auto; } }
+
+  /* ---------- tarjetas destacadas (estilo «planes») ---------- */
+  .plan { position: relative; background: var(--sup); border-radius: 22px; padding: 18px 18px 16px; box-shadow: var(--sombra); display: flex; flex-direction: column;
+    gap: 10px; min-height: 300px; overflow: hidden; }
+  .plan header { display: flex; align-items: center; gap: 10px; }
+  .plan .ico { width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; background: var(--lima-suave); color: #6c7c12; }
+  .plan.violeta .ico { background: var(--violeta-suave); color: var(--violeta); }
+  .plan h3 { margin: 0; font-size: 18px; }
+  .plan .chip { margin-left: auto; font-size: 10.5px; letter-spacing: .03em; padding: 3px 8px; border-radius: 999px; background: var(--wash); color: var(--suave); white-space: nowrap; }
+  .plan .valor { font-size: clamp(24px, 2.4vw, 32px); font-weight: 750; line-height: 1.1; margin-top: 4px; }
+  .plan .sub2 { font-size: 12.5px; color: var(--suave); margin-top: -4px; }
+  .plan ul { list-style: none; margin: 2px 0 0; padding: 0; display: grid; gap: 7px; font-size: 13px; color: var(--suave); }
+  .plan li { display: flex; gap: 9px; align-items: baseline; }
+  .plan li i { width: 8px; height: 8px; border-radius: 50%; flex: none; transform: translateY(-1px); }
+  .plan .pie { margin-top: auto; display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; }
+  .plan .mini { flex: 1; max-width: 62%; height: 70px; }
+  .plan.oscuro { background: linear-gradient(160deg, var(--oscuro-2), var(--oscuro) 55%); color: var(--oscuro-txt); }
+  .plan.oscuro h3 { color: var(--oscuro-txt); }
+  .plan.oscuro .ico { background: rgba(255, 255, 255, .08); color: var(--lat-act); }
+  .plan.oscuro .sub2, .plan.oscuro ul { color: var(--oscuro-suave); }
+  .plan.oscuro .chip { background: rgba(255, 255, 255, .1); color: var(--oscuro-suave); }
+  .plan.oscuro .pill { background: #0a1f1d; border-color: #2c5551; color: var(--oscuro-txt); }
+
+  /* ---------- anillos, dona y barras de nivel ---------- */
+  .anillos { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .anillo { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 4px; padding: 6px 4px; }
+  .anillo .tit { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 600; min-height: 34px; }
+  .anillo .tit svg.ic { width: 18px; height: 18px; color: var(--suave); }
+  .anillo svg.g { width: 118px; height: 118px; }
+  .anillo .num { font-size: 22px; font-weight: 750; fill: var(--texto); }
+  .anillo .de { font-size: 12px; color: var(--mudo); max-width: 190px; }
+  .dona { display: grid; grid-template-columns: 170px minmax(0, 380px); gap: 20px; align-items: center; }
+  @media (max-width: 460px) { .dona { grid-template-columns: 1fr; justify-items: center; } }
+  .dona svg { width: 170px; height: 170px; }
+  .dona .num { font-size: 24px; font-weight: 750; fill: var(--texto); }
+  .dona .lbl { font-size: 11px; fill: var(--mudo); }
+  .lista { list-style: none; margin: 0; padding: 0; display: grid; gap: 9px; font-size: 13px; width: 100%; }
+  .lista li { display: grid; grid-template-columns: 12px 1fr auto auto; gap: 8px; align-items: center; }
+  .lista li i { width: 10px; height: 10px; border-radius: 50%; }
+  .lista .v { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .lista .p { font-variant-numeric: tabular-nums; color: var(--mudo); min-width: 46px; text-align: right; }
+  .drivers { display: grid; gap: 14px; }
+  .driver { display: grid; grid-template-columns: 30px 1fr auto; gap: 4px 10px; align-items: center; font-size: 13px; cursor: pointer; }
+  .driver .ic-n { width: 30px; height: 30px; border-radius: 10px; display: grid; place-items: center; background: var(--wash); grid-row: span 2; }
+  .driver .ic-n svg.ic { width: 16px; height: 16px; }
+  .driver .t { color: var(--texto); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .driver .v { font-variant-numeric: tabular-nums; font-weight: 650; }
+  .driver .pista { grid-column: 2 / 4; height: 8px; border-radius: 4px; background: var(--rej); overflow: hidden; }
+  .driver .pista span { display: block; height: 100%; border-radius: 4px; }
+  .driver:hover .t { text-decoration: underline; }
+
   ul.hallazgos { margin: 0; padding: 0; list-style: none; }
-  ul.hallazgos li { padding: 10px 0; border-top: 1px solid var(--rej); display: grid; grid-template-columns: 74px 1fr; gap: 10px; align-items: start; }
-  ul.hallazgos li:first-child { border-top: 0; padding-top: 0; }
+  ul.hallazgos li { padding: 12px 0; border-top: 1px solid var(--rej); display: grid; grid-template-columns: 74px 1fr; gap: 10px; align-items: start; }
+  ul.hallazgos li:first-child { border-top: 0; padding-top: 2px; }
   ul.hallazgos .txt { font-size: 14px; }
-  ul.hallazgos .txt a { white-space: nowrap; font-size: 13px; }
-  .nivel { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+  ul.hallazgos .txt a { white-space: nowrap; font-size: 13px; font-weight: 600; }
+  .nivel { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 650; white-space: nowrap; }
   .nivel i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex: none; }
   .nivel.Alta i { background: var(--critico); border-radius: 2px; transform: rotate(45deg); }
   .nivel.Media i { background: var(--serio); }
   .nivel.Baja i { background: var(--aviso); border-radius: 2px; }
-  .canal { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+  .canal, .zona { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
   .canal i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
   .canal.V i { background: var(--ok); } .canal.D i { background: var(--serio); } .canal.F i { background: var(--critico); }
-  .etq { display: inline-block; margin: 1px 3px 1px 0; padding: 0 6px; border-radius: 4px; font-size: 11.5px; line-height: 18px;
-    border: 1px solid var(--borde); color: var(--suave); white-space: nowrap; }
-  .etq.fuerte { border-color: var(--critico); color: var(--texto); }
-  /* gráficos */
+  .zona i { width: 9px; height: 9px; border-radius: 3px; display: inline-block; }
+  .etq { display: inline-block; margin: 1px 3px 1px 0; padding: 0 7px; border-radius: 999px; font-size: 11.5px; line-height: 19px;
+    background: var(--wash); color: var(--suave); white-space: nowrap; }
+  .etq.fuerte { background: color-mix(in srgb, var(--critico) 13%, transparent); color: var(--texto); }
+
+  /* ---------- gráficos ---------- */
   .graf { position: relative; }
   .graf-area { width: 100%; }
   .graf svg { display: block; overflow: visible; }
@@ -98,96 +191,121 @@
   .graf .pto { stroke: var(--sup); stroke-width: 1.5; fill-opacity: .8; }
   .graf .pto.on { fill-opacity: 1; stroke: var(--texto); }
   .graf .ref { stroke: var(--texto); stroke-width: 2.5; stroke-linecap: round; }
-  .leyenda { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 0 0 8px; font-size: 12.5px; color: var(--suave); }
+  .graf .cruz { stroke: var(--eje); stroke-width: 1; }
+  .leyenda { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 0 0 10px; font-size: 12.5px; color: var(--suave); }
   .leyenda span { display: inline-flex; align-items: center; gap: 6px; }
-  .leyenda .sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+  .leyenda .sw { width: 12px; height: 12px; border-radius: 4px; display: inline-block; }
   .leyenda .sw.punto { border-radius: 50%; }
   .leyenda .sw.linea { width: 3px; height: 14px; border-radius: 1px; background: var(--texto); }
   .tip { position: absolute; pointer-events: none; z-index: 5; background: var(--sup); color: var(--texto); border: 1px solid var(--borde);
-    border-radius: 6px; padding: 7px 9px; font-size: 12.5px; box-shadow: 0 4px 14px rgba(0,0,0,.14); min-width: 140px; max-width: 280px; }
+    border-radius: 10px; padding: 8px 10px; font-size: 12.5px; box-shadow: 0 8px 24px rgba(0,0,0,.14); min-width: 150px; max-width: 280px; }
   .tip b { display: block; margin-bottom: 3px; }
   .tip .fila { display: flex; justify-content: space-between; gap: 12px; font-variant-numeric: tabular-nums; }
   .tip .fila span:first-child { display: inline-flex; align-items: center; gap: 5px; color: var(--suave); }
-  .tip .sw { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
-  .seg { display: flex; gap: 2px; height: 28px; margin: 4px 0 8px; }
-  .seg-b { border-radius: 4px; min-width: 3px; color: #fff; font-size: 12px; font-weight: 600; line-height: 28px; padding-left: 7px;
-    white-space: nowrap; overflow: hidden; }
-  .zona { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
-  .zona i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
-  .hbar { display: grid; grid-template-columns: minmax(90px, 160px) 1fr 44px; gap: 6px 10px; align-items: center; font-size: 12.5px; }
+  .tip .sw { width: 9px; height: 9px; border-radius: 3px; display: inline-block; }
+  .seg { display: flex; gap: 2px; height: 28px; margin: 6px 0 10px; }
+  .seg-b { border-radius: 6px; min-width: 3px; color: #fff; font-size: 12px; font-weight: 650; line-height: 28px; padding-left: 8px; white-space: nowrap; overflow: hidden; }
+  .hbar { display: grid; grid-template-columns: minmax(90px, 160px) 1fr 44px; gap: 7px 10px; align-items: center; font-size: 12.5px; }
   .hbar .et { color: var(--suave); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .hbar .pista { display: flex; gap: 2px; height: 16px; }
-  .hbar .pista span { border-radius: 0 4px 4px 0; min-width: 2px; }
-  .hbar .pista span + span { border-radius: 0 4px 4px 0; }
-  .hbar .pista span:not(:last-child) { border-radius: 0; }
-  .hbar .va { font-variant-numeric: tabular-nums; color: var(--texto); }
-  details.datos { margin-top: 8px; font-size: 13px; }
+  .hbar .pista { display: flex; gap: 2px; height: 14px; }
+  .hbar .pista span { border-radius: 0; min-width: 2px; }
+  .hbar .pista span:last-child { border-radius: 0 5px 5px 0; }
+  .hbar .va { font-variant-numeric: tabular-nums; }
+  details.datos { margin-top: 10px; font-size: 13px; }
   details.datos summary { cursor: pointer; color: var(--suave); }
-  /* tablas */
-  .barra-tabla { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 8px; }
-  .barra-tabla input[type=search], .barra-tabla select { font: inherit; font-size: 14px; padding: 7px 9px; border: 1px solid var(--borde);
-    border-radius: 6px; background: var(--fondo); color: var(--texto); min-width: 0; }
+
+  /* ---------- tablas ---------- */
+  .barra-tabla { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 10px; }
+  .barra-tabla input[type=search], .barra-tabla select { font: inherit; font-size: 14px; padding: 8px 12px; border: 1px solid var(--borde);
+    border-radius: 999px; background: var(--marco); color: var(--texto); min-width: 0; }
   .barra-tabla input[type=search] { flex: 1 1 200px; }
   .barra-tabla select { flex: 0 1 auto; max-width: 100%; }
   .barra-tabla .cuenta { font-size: 12.5px; color: var(--mudo); margin-left: auto; }
-  .btn { appearance: none; font: inherit; font-size: 13px; font-weight: 600; padding: 7px 12px; border-radius: 6px; cursor: pointer;
-    background: var(--salvia); color: var(--oliva); border: 1px solid var(--acento); }
-  .btn:hover { filter: brightness(.97); }
-  .btn.principal { background: var(--oliva); border-color: var(--oliva); color: var(--sup); }
-  .envoltura { overflow-x: auto; max-width: 100%; border: 1px solid var(--rej); border-radius: 6px; }
+  .btn { appearance: none; font: inherit; font-size: 13px; font-weight: 650; padding: 8px 14px; border-radius: 999px; cursor: pointer;
+    background: var(--oscuro); color: var(--oscuro-txt); border: 0; }
+  .btn:hover { filter: brightness(1.15); }
+  .btn.principal { background: var(--lima); color: var(--lima-txt); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .envoltura { overflow-x: auto; max-width: 100%; border-radius: 12px; border: 1px solid var(--rej); }
   table { border-collapse: collapse; width: 100%; font-size: 13px; }
-  th, td { padding: 6px 9px; text-align: left; border-bottom: 1px solid var(--rej); vertical-align: top; }
-  th { position: sticky; top: 0; background: var(--sup); font-size: 12px; color: var(--suave); font-weight: 600; cursor: pointer;
-    white-space: nowrap; user-select: none; }
+  th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--rej); vertical-align: top; }
+  th { position: sticky; top: 0; background: var(--marco); font-size: 12px; color: var(--suave); font-weight: 650; cursor: pointer; white-space: nowrap; user-select: none; }
   th[aria-sort="ascending"]::after { content: " ▲"; font-size: 9px; }
   th[aria-sort="descending"]::after { content: " ▼"; font-size: 9px; }
   td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
   td.c { white-space: nowrap; }
   td.largo { min-width: 220px; }
+  tbody tr:last-child td { border-bottom: 0; }
   tbody tr:hover { background: var(--wash); }
-  .mas { margin-top: 8px; }
-  /* candado */
-  #candado { max-width: 520px; }
-  #candado form { display: grid; gap: 10px; }
-  #candado label { font-size: 14px; font-weight: 600; }
-  #candado input { font: inherit; font-size: 16px; padding: 10px 12px; border: 1px solid var(--borde); border-radius: 6px; background: var(--sup); color: var(--texto); }
+  .mas { margin-top: 10px; }
+
+  /* ---------- candado ---------- */
+  #candado { display: grid; place-items: center; min-height: 60vh; }
+  #candado .tarjeta { max-width: 520px; width: 100%; padding: 26px; }
+  #candado form { display: grid; gap: 10px; margin-top: 8px; }
+  #candado label { font-size: 14px; font-weight: 650; }
+  #candado input { font: inherit; font-size: 16px; padding: 12px 16px; border: 1px solid var(--borde); border-radius: 999px; background: var(--marco); color: var(--texto); }
   #candado .error { color: var(--critico); font-size: 13.5px; min-height: 1.2em; margin: 0; }
-  footer { max-width: 1240px; margin: 0 auto; padding: 4px 16px 24px; font-size: 11.5px; color: var(--mudo); }
+  footer { padding: 8px 30px 26px; font-size: 11.5px; color: var(--mudo); }
   .cargando { opacity: .6; pointer-events: none; }
-  @media (max-width: 600px) {
-    header.cab { padding: 10px 12px 0; }
-    main { padding: 12px; }
-    .tarjeta { padding: 12px; }
-    .kpi .va { font-size: 21px; }
+
+  /* ---------- móvil: la barra lateral pasa abajo ---------- */
+  @media (max-width: 760px) {
+    .marco { margin: 0; border-radius: 0; min-height: 100vh; box-shadow: none; display: block; }
+    .lateral { position: fixed; z-index: 20; left: 0; right: 0; bottom: 0; width: auto;
+      padding: 6px 8px calc(6px + env(safe-area-inset-bottom)); border-radius: 18px 18px 0 0; box-shadow: 0 -8px 24px rgba(0,0,0,.18); }
+    .lat-int { position: static; flex-direction: row; }
+    .lateral .logo { display: none; }
+    .nav { flex-direction: row; padding: 0; gap: 2px; }
+    .nav-it { padding: 6px 2px; border-radius: 12px; }
+    .nav-it[aria-selected="true"]::before { left: 20%; right: 20%; top: -6px; bottom: auto; width: auto; height: 3px; border-radius: 0 0 3px 3px; }
+    .nav-it .cnt { right: 6px; }
+    .lateral:not(:has(.nav:not([hidden]))) { display: none; }
+    header.cab { padding: 16px 14px 4px; }
+    main { padding: 10px 12px; }
+    footer { padding: 0 14px 96px; }
+    .tarjeta { padding: 14px; }
     ul.hallazgos li { grid-template-columns: 1fr; gap: 3px; }
-    .pestanas { margin: 0 -12px; padding: 0 12px; }
+    .plan { min-height: 0; }
   }
 </style>
 </head>
 <body>
-<header class="cab">
-  <p class="sup">SUNAT · Intendencia de Aduana de Tarapoto · Equipo de Gestión de Riesgo</p>
-  <h1 id="titulo">Tablero de gestión de riesgo</h1>
-  <p class="sub" id="sub">Acceso restringido</p>
-  <nav class="pestanas" id="pestanas" role="tablist" aria-label="Secciones del tablero" hidden></nav>
-</header>
+<div class="marco">
+  <aside class="lateral" aria-label="Navegación">
+    <div class="lat-int">
+    <div class="logo" aria-hidden="true"><svg class="ic" viewBox="0 0 24 24"><path d="M12 2.5l7.5 3.2v5.6c0 4.8-3.2 8.6-7.5 10.2-4.3-1.6-7.5-5.4-7.5-10.2V5.7z"/><path d="M8.7 12.2l2.3 2.3 4.4-4.6"/></svg></div>
+    <nav class="nav" id="pestanas" role="tablist" aria-label="Secciones del tablero" hidden></nav>
+    </div>
+  </aside>
+  <div class="cuerpo">
+    <header class="cab">
+      <div>
+        <p class="sup">SUNAT · Intendencia de Aduana de Tarapoto · Equipo de Gestión de Riesgo</p>
+        <h1><span id="titulo">Tablero de gestión de riesgo</span><span class="trazos" aria-hidden="true"><i></i><i></i></span></h1>
+        <p class="sub" id="sub">Acceso restringido</p>
+      </div>
+      <div class="acc" id="acc"></div>
+    </header>
 
-<main id="candado">
-  <div class="tarjeta">
-    <h2>Acceso restringido</h2>
-    <p class="nota">Este tablero contiene información con reserva tributaria y está cifrado (AES-256-GCM). Ingrese la clave de acceso entregada al equipo. La clave no se envía a ningún servidor: el descifrado se hace en este navegador.</p>
-    <form id="form-clave" autocomplete="off">
-      <label for="clave">Clave de acceso</label>
-      <input id="clave" type="password" required autocomplete="off" spellcheck="false">
-      <p class="error" id="error" role="alert"></p>
-      <div><button class="btn principal" type="submit" id="abrir">Abrir tablero</button></div>
-    </form>
+    <main id="candado">
+      <div class="tarjeta">
+        <h2>Acceso restringido</h2>
+        <p class="nota">Este tablero contiene información con reserva tributaria y está cifrado (AES-256-GCM). Ingrese la clave de acceso entregada al equipo. La clave no se envía a ningún servidor: el descifrado se hace en este navegador.</p>
+        <form id="form-clave" autocomplete="off">
+          <label for="clave">Clave de acceso</label>
+          <input id="clave" type="password" required autocomplete="off" spellcheck="false">
+          <p class="error" id="error" role="alert"></p>
+          <div><button class="btn principal" type="submit" id="abrir">Abrir tablero</button></div>
+        </form>
+      </div>
+    </main>
+
+    <main id="app" hidden></main>
+
+    <footer id="pie">Uso interno. Información sujeta a reserva tributaria (art. 85 del Código Tributario).</footer>
   </div>
-</main>
-
-<main id="app" hidden></main>
-
-<footer id="pie">Uso interno. Información sujeta a reserva tributaria (art. 85 del Código Tributario).</footer>
+</div>
 
 <script id="cifrado" type="application/json">__CIFRADO__</script>
 <script>
@@ -355,7 +473,7 @@ function segmentada(host, partes, fv) {
   for (const p of partes) {
     if (!(p.v > 0)) continue;
     const sh = p.v / tot;
-    const b = el("div", { class: "seg-b", style: `flex:${sh} 1 0;background:${p.c};${p.oscuro ? "color:#0b0b0b" : ""}`, title: `${p.t}: ${fv(p.v)} · ${pc(sh * 100)}` });
+    const b = el("div", { class: "seg-b", style: `flex:${sh} 1 0;background:${p.c};${p.oscuro || /--s2|--aviso|--lima/.test(p.c) ? "color:#1d2a0b" : ""}`, title: `${p.t}: ${fv(p.v)} · ${pc(sh * 100)}` });
     if (sh >= 0.09) b.textContent = pc(sh * 100, 0);
     bar.append(b);
   }
@@ -407,6 +525,132 @@ function franja(host, filas, puntos) {
     });
   };
   registrar(draw);
+}
+
+/* ---------- íconos ---------- */
+const ICONOS = {
+  resumen: '<rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2"/>',
+  importaciones: '<path d="M20.5 7.5L12 3 3.5 7.5 12 12z"/><path d="M3.5 7.5v9L12 21l8.5-4.5v-9"/><path d="M12 12v9"/>',
+  maquinaria: '<path d="M2.5 6.5h11v9h-11z"/><path d="M13.5 9.5h4l3 3.2v2.8h-7z"/><circle cx="6.5" cy="17.5" r="1.8"/><circle cx="16.5" cy="17.5" r="1.8"/>',
+  ventas: '<path d="M6 2.8h12v18.4l-3-1.8-3 1.8-3-1.8-3 1.8z"/><path d="M9 7.5h6M9 11h6M9 14.5h3.5"/>',
+  alertas: '<path d="M12 3.5l9.5 16.5h-19z"/><path d="M12 10v4.5M12 17.4v.1"/>',
+  candado: '<rect x="5" y="10.5" width="14" height="10" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/>',
+  calendario: '<rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 9.5h17M8 3v4M16 3v4"/>',
+  escudo: '<path d="M12 2.5l7.5 3.2v5.6c0 4.8-3.2 8.6-7.5 10.2-4.3-1.6-7.5-5.4-7.5-10.2V5.7z"/><path d="M8.7 12.2l2.3 2.3 4.4-4.6"/>',
+  check: '<circle cx="12" cy="12" r="8.5"/><path d="M8.5 12.2l2.3 2.3 4.5-4.7"/>',
+  pin: '<path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.3"/>',
+};
+const ic = k => `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">${ICONOS[k] || ""}</svg>`;
+
+/* Barras mínimas de tendencia para las tarjetas destacadas */
+function mini(host, valores, color, etiqueta) {
+  const draw = () => {
+    const W = Math.max(110, host.clientWidth || 160), H = host.clientHeight || 70, n = valores.length, gap = 2;
+    const max = Math.max(...valores, 1e-9), bw = Math.max(2, (W - gap * (n - 1)) / n);
+    let s = `<svg width="${W}" height="${H}" role="img" aria-label="${esc(etiqueta)}">`;
+    valores.forEach((v, i) => { const h = Math.max(2, v / max * (H - 2)); s += barra(i * (bw + gap), H - h, bw, h, Math.min(3, bw / 2), color); });
+    host.innerHTML = s + "</svg>";
+  };
+  registrar(draw);
+}
+
+/* Tarjeta destacada al estilo de «planes» */
+function plan(o) {
+  const t = el("article", { class: "plan c3 " + (o.clase || "") });
+  t.append(el("header", {}, el("span", { class: "ico", html: ic(o.icono) }), el("h3", {}, o.titulo), o.chip ? el("span", { class: "chip" }, o.chip) : null),
+    el("div", { class: "valor" }, o.valor), el("div", { class: "sub2" }, o.sub),
+    el("ul", {}, o.puntos.map(p => el("li", {}, el("i", { style: `background:${o.punto}` }), el("span", { html: p })))));
+  const m = el("div", { class: "mini" });
+  t.append(el("div", { class: "pie" }, el("a", { class: "pill " + (o.pill || ""), href: "#" + o.destino }, o.boton, " →"), m));
+  setTimeout(() => mini(m, o.serie, o.color, o.mini), 0);
+  return t;
+}
+
+/* Líneas por mes con cruz y tooltip */
+function lineas(host, o) {
+  host.classList.add("graf");
+  host.append(leyenda(o.series.map(s => ({ t: s.t, c: s.c }))));
+  const area = el("div", { class: "graf-area" }), tip = el("div", { class: "tip", hidden: true });
+  host.append(area, tip);
+  const draw = () => {
+    if (!area.offsetParent) return;
+    const W = Math.max(240, area.clientWidth), H = o.h || 200, M = { t: 8, r: 10, b: 22, l: 34 };
+    const iw = W - M.l - M.r, ih = H - M.t - M.b, n = o.datos.length;
+    const vmax = Math.max(...o.datos.flatMap(d => o.series.map(s => +d[s.k] || 0)), 1e-9), paso = pasoBonito(vmax / 4), ymax = Math.ceil(vmax / paso) * paso;
+    const x = i => M.l + (n === 1 ? iw / 2 : i * iw / (n - 1)), y = v => M.t + ih - v / ymax * ih;
+    let s = `<svg width="${W}" height="${H}" role="img" aria-label="${esc(o.titulo || "")}">`;
+    for (let v = 0; v <= ymax + paso / 1e6; v += paso) {
+      const yy = y(v).toFixed(1);
+      s += `<line class="${v === 0 ? "eje" : "rej"}" x1="${M.l}" x2="${W - M.r}" y1="${yy}" y2="${yy}"/><text class="tick" x="${M.l - 6}" y="${+yy + 4}" text-anchor="end">${o.fy(v)}</text>`;
+    }
+    const cada = iw / n >= 40 ? 1 : iw / n >= 20 ? 3 : 6;
+    o.datos.forEach((d, i) => { if (i % cada === 0) s += `<text class="tick" x="${x(i)}" y="${H - 6}" text-anchor="middle">${mesCorto(d.m)}</text>`; });
+    o.series.forEach((se, j) => {
+      const pts = o.datos.map((d, i) => [x(i).toFixed(1), y(+d[se.k] || 0).toFixed(1)]);
+      if (j === 0) s += `<path d="M${pts.join("L")}L${pts[n - 1][0]},${y(0)}L${pts[0][0]},${y(0)}Z" style="fill:${se.c};fill-opacity:.10;stroke:none"/>`;
+      s += `<path d="M${pts.join("L")}" style="fill:none;stroke:${se.c};stroke-width:2;stroke-linejoin:round;stroke-linecap:round"/>`;
+      s += `<circle cx="${pts[n - 1][0]}" cy="${pts[n - 1][1]}" r="4" style="fill:${se.c};stroke:var(--sup);stroke-width:2"/>`;
+    });
+    s += `<line class="cruz" x1="0" x2="0" y1="${M.t}" y2="${M.t + ih}" visibility="hidden"/>`;
+    o.series.forEach((se, j) => { s += `<circle class="mk" data-j="${j}" r="4" style="fill:${se.c};stroke:var(--sup);stroke-width:2" visibility="hidden"/>`; });
+    const band = iw / Math.max(1, n - 1);
+    o.datos.forEach((d, i) => { s += `<rect class="hit" data-i="${i}" x="${Math.max(M.l, x(i) - band / 2)}" y="${M.t}" width="${band}" height="${ih}"/>`; });
+    area.innerHTML = s + "</svg>";
+    const cruz = $(".cruz", area), mks = $$(".mk", area);
+    $$(".hit", area).forEach(r => {
+      const i = +r.dataset.i, d = o.datos[i];
+      const mostrar = ev => {
+        cruz.setAttribute("x1", x(i)); cruz.setAttribute("x2", x(i)); cruz.setAttribute("visibility", "visible");
+        mks.forEach(m => { const se = o.series[+m.dataset.j]; m.setAttribute("cx", x(i)); m.setAttribute("cy", y(+d[se.k] || 0)); m.setAttribute("visibility", "visible"); });
+        let h = `<b>${mesLargo(d.m)}</b>`;
+        for (const se of o.series) h += `<div class="fila"><span><i class="sw" style="background:${se.c}"></i>${esc(se.t)}</span><span>${o.ft(+d[se.k] || 0)}</span></div>`;
+        tip.innerHTML = h; tip.hidden = false;
+        const b = host.getBoundingClientRect(); posTip(tip, host, ev.clientX - b.left, ev.clientY - b.top);
+      };
+      r.addEventListener("pointerenter", mostrar); r.addEventListener("pointermove", mostrar);
+      r.addEventListener("pointerleave", () => { cruz.setAttribute("visibility", "hidden"); mks.forEach(m => m.setAttribute("visibility", "hidden")); tip.hidden = true; });
+    });
+  };
+  registrar(draw);
+}
+
+/* Anillo de porcentaje */
+function anillo(host, o) {
+  const r = 46, C = 2 * Math.PI * r, p = Math.max(0, Math.min(100, o.v));
+  host.append(el("div", { class: "anillo" },
+    el("div", { class: "tit", html: ic(o.icono) + esc(o.t) }),
+    el("div", { html: `<svg class="g" viewBox="0 0 120 120" role="img" aria-label="${esc(o.t)}: ${pc(o.v)}">` +
+      `<circle cx="60" cy="60" r="${r}" fill="none" stroke-width="11" style="stroke:color-mix(in srgb, ${o.c} 16%, transparent)"/>` +
+      `<circle cx="60" cy="60" r="${r}" fill="none" stroke-width="11" stroke-linecap="round" style="stroke:${o.c}" stroke-dasharray="${(C * p / 100).toFixed(1)} ${C.toFixed(1)}" transform="rotate(-90 60 60)"/>` +
+      `<text x="60" y="68" text-anchor="middle" class="num">${pc(o.v, 0)}</text></svg>` }),
+    el("div", { class: "de" }, o.de)));
+}
+
+/* Dona con leyenda numerada */
+function dona(host, partes, centro, centroEt) {
+  const tot = partes.reduce((a, p) => a + p.v, 0) || 1, r = 66, sw = 24, C = 2 * Math.PI * r, vivas = partes.filter(p => p.v > 0);
+  let acc = 0, s = `<svg viewBox="0 0 170 170" role="img" aria-label="${esc(partes.map(p => `${p.t}: ${f0(p.v)}`).join("; "))}">`;
+  for (const p of vivas) {
+    const len = p.v / tot * C, gap = vivas.length > 1 ? 2.5 : 0;
+    s += `<circle cx="85" cy="85" r="${r}" fill="none" stroke-width="${sw}" style="stroke:${p.c}" stroke-dasharray="${Math.max(0.6, len - gap).toFixed(2)} ${C.toFixed(2)}" stroke-dashoffset="${(-acc).toFixed(2)}" transform="rotate(-90 85 85)"><title>${esc(p.t)}: ${f0(p.v)} (${pc(p.v / tot * 100)})</title></circle>`;
+    acc += len;
+  }
+  s += `<text x="85" y="88" text-anchor="middle" class="num">${esc(centro)}</text><text x="85" y="106" text-anchor="middle" class="lbl">${esc(centroEt)}</text></svg>`;
+  host.append(el("div", { class: "dona" }, el("div", { html: s }),
+    el("ul", { class: "lista" }, partes.map(p => el("li", {}, el("i", { style: `background:${p.c}` }), el("span", {}, p.t), el("span", { class: "v" }, f0(p.v)), el("span", { class: "p" }, pc(p.v / tot * 100)))))));
+}
+
+/* Barras de «principales impulsores»: tipos de alerta */
+function impulsores(host, filas) {
+  const max = Math.max(...filas.map(f => f.v), 1), g = el("div", { class: "drivers" });
+  for (const f of filas) {
+    const d = el("div", { class: "driver", role: "button", tabindex: "0", title: `Ver alertas: ${f.t}` },
+      el("div", { class: "ic-n", style: `color:${f.c}`, html: ic(f.icono) }), el("div", { class: "t" }, f.t), el("div", { class: "v" }, f0(f.v)),
+      el("div", { class: "pista" }, el("span", { style: `width:${f.v / max * 100}%;background:${f.c}` })));
+    d.addEventListener("click", f.ir); d.addEventListener("keydown", e => { if (e.key === "Enter") f.ir(); });
+    g.append(d);
+  }
+  host.append(g);
 }
 
 /* ---------- tabla con búsqueda, filtros, orden y CSV ---------- */
@@ -488,8 +732,8 @@ const usd = v => "USD " + fc(v);
 const sol = v => "S/ " + fc(v);
 const CANAL = { V: "Verde", D: "Naranja", F: "Rojo" };
 const canalH = c => `<span class="canal ${c}"><i aria-hidden="true"></i>${CANAL[c] || c}</span>`;
-const ZONA = { ZTE: { t: "Amazonía (ZTE)", c: "var(--s1)" }, ZTC: { t: "Fuera de la ZTE (ZTC)", c: "var(--s2)" },
-  Extranjero: { t: "Extranjero", c: "var(--s3)" }, "Sin dato": { t: "Sin dato en el padrón", c: "var(--mudo)" } };
+const ZONA = { ZTE: { t: "Amazonía (ZTE)", c: "var(--s1)" }, ZTC: { t: "Fuera de la ZTE (ZTC)", c: "var(--s3)" },
+  Extranjero: { t: "Extranjero", c: "var(--s2)" }, "Sin dato": { t: "Sin dato en el padrón", c: "var(--mudo)" } };
 const zonaT = z => (ZONA[z] || { t: z || "–" }).t;
 const zonaH = z => z ? `<span class="zona"><i style="background:${(ZONA[z] || {}).c || "var(--mudo)"}" aria-hidden="true"></i>${esc(zonaT(z))}</span>` : "–";
 function barrasH(host, filas, series, total) {
@@ -512,16 +756,19 @@ const VISTAS = [
 let tablaAlertas = null;
 
 function iniciar() {
-  const M = D.meta, K = D.kpi;
+  const M = D.meta;
   document.title = "Tablero de riesgo · " + M.contribuyente;
-  $("#titulo").textContent = `Perfil de riesgo: ${M.contribuyente} (RUC ${M.ruc})`;
-  $("#sub").textContent = `Importaciones (DAM, régimen 10) y ventas (CPE emitidos) · ${mesLargo(M.desde)} – ${mesLargo(M.hasta)} · datos al ${fecha(M.generado)}`;
+  $("#titulo").textContent = `Perfil de riesgo: ${M.contribuyente}`;
+  $("#sub").textContent = `RUC ${M.ruc} · importaciones (DAM, régimen 10) y ventas (CPE emitidos) · datos al ${fecha(M.generado)}`;
+  $("#acc").append(el("span", { class: "pill", html: ic("calendario") + `${mesLargo(M.desde)} – ${mesLargo(M.hasta)}` }),
+    el("button", { class: "pill oscura", type: "button", title: "Cierra el tablero y borra los datos de la memoria del navegador",
+      onclick: () => location.replace(location.pathname), html: ic("candado") + "Cerrar tablero" }));
   const nav = $("#pestanas"); nav.hidden = false;
   const app = $("#app"); app.hidden = false;
   for (const v of VISTAS) {
-    const b = el("button", { class: "pestana", role: "tab", id: "tab-" + v.id, "aria-controls": v.id, "aria-selected": "false",
-      onclick: () => { location.hash = v.id; } }, v.t);
-    if (v.id === "alertas") b.append(el("span", { class: "cnt" }, f0(D.alertas.length)));
+    const b = el("button", { class: "nav-it", role: "tab", id: "tab-" + v.id, "aria-controls": v.id, "aria-selected": "false",
+      onclick: () => { location.hash = v.id; }, html: ic(v.id) + `<span>${v.t}</span>` });
+    if (v.id === "alertas") b.append(el("span", { class: "cnt" }, fc(D.alertas.filter(a => a.nivel === "Alta").length)));
     nav.append(b);
     app.append(el("section", { class: "vista", id: v.id, role: "tabpanel", "aria-labelledby": "tab-" + v.id }));
   }
@@ -544,24 +791,59 @@ function contarAlertas(tipo) { return D.alertas.filter(a => a.tipo === tipo).len
 function sumaAlertas(tipo, m) { return D.alertas.filter(a => a.tipo === tipo && a.mon === m).reduce((s, a) => s + (a.monto || 0), 0); }
 
 function vistaResumen(sec) {
-  const M = D.meta, K = D.kpi;
-  const lib = D.imp.convenio.find(c => c.k.startsWith("C-"));
-  const verdeMaq = K.maq_verde_cif / K.cif_maq * 100;
-  sec.append(el("h2", {}, "Indicadores clave"),
-    el("p", { class: "nota" }, `${f0(M.n_dam)} DAM (${f0(M.n_series)} series) entre el ${fecha(M.dam_desde)} y el ${fecha(M.dam_hasta)}; ${f0(M.n_cpe)} CPE emitidos y ${f0(M.n_det)} líneas de detalle entre el ${fecha(M.cpe_desde)} y el ${fecha(M.cpe_hasta)}.`));
-  const ks = el("div", { class: "kpis cuatro" });
-  ks.append(
-    kpi(`CIF importado con ${convT(lib.k).toLowerCase()}`, usd(lib.cif), `${pc(lib.cif / K.cif * 100)} del CIF total (USD ${fc(K.cif)}) · aduana de destino ${D.imp.dams[0]?.dest || ""} (${M.aduanas[D.imp.dams[0]?.dest] || ""})`, true),
-    kpi("Maquinaria importada", f0(K.uds_maq) + " unidades", `USD ${fc(K.cif_maq)} · ${pc(K.cif_maq / K.cif * 100)} del CIF · ${f0(K.maq_usada)} usadas`),
-    kpi("DAM en canal verde", pc(K.dam_verde / M.n_dam * 100), `${f0(K.dam_verde)} de ${f0(M.n_dam)} DAM · ${pc(verdeMaq)} del CIF de maquinaria`),
-    kpi("Ventas facturadas (sin IGV)", usd(K.ven_usd), `y ${sol(K.ven_pen)} · ${f0(K.fac_n)} facturas · ${f0(K.clientes)} clientes`),
-    kpi("Facturas con IGV", f0(K.igv_n), `${f0(K.igv_maq_n)} de maquinaria · el resto de ventas va sin IGV`),
-    kpi("Notas de crédito", f0(K.nc_n), `${usd(K.nc_usd)} y ${sol(K.nc_pen)} · ${f0(K.maq_nc)} anulan o devuelven maquinaria`),
-    D.dom
-      ? kpi("Máquinas vendidas fuera de la ZTE", f0(D.dom.maq.ZTC), `${pc(D.dom.maq.ZTC / D.kpi.maq_vend * 100)} de las vendidas · ${usd(D.dom.ztc_usd)} y ${sol(D.dom.ztc_pen)} · ${f0(D.dom.ztc_clientes)} clientes`)
-      : kpi("Alertas generadas", f0(D.alertas.length), ["Alta", "Media", "Baja"].map(n => `${f0(D.alertas.filter(a => a.nivel === n).length)} ${n.toLowerCase()}s`).join(" · ")),
-  );
-  sec.append(ks);
+  const M = D.meta, K = D.kpi, I = D.imp, Q = D.maq, V = D.ventas;
+  const lib = I.convenio.find(c => c.k.startsWith("C-")) || { k: "C-", cif: 0 };
+
+  /* Fila 1: tarjetas destacadas y tendencia de máquinas */
+  const f1 = el("div", { class: "g12" }); sec.append(f1);
+  f1.append(
+    plan({ icono: "importaciones", titulo: "Importaciones", chip: `${f0(M.n_dam)} DAM`, valor: usd(K.cif), sub: `CIF importado · ${f0(M.n_series)} series`,
+      punto: "var(--lima)", puntos: [`<b>${pc(lib.cif / K.cif * 100)}</b> con ${esc(convT(lib.k).toLowerCase())}`, `Maquinaria: <b>${pc(K.cif_maq / K.cif * 100)}</b> del CIF`,
+        `Canal verde: <b>${pc(K.dam_verde / M.n_dam * 100)}</b> de las DAM`, `<b>${f0(K.maq_usada)}</b> máquinas declaradas usadas`],
+      serie: I.mensual.map(d => d.maq + d.otros), color: "var(--lima)", mini: "CIF importado por mes", boton: "Importaciones", destino: "importaciones", pill: "lima" }),
+    plan({ clase: "oscuro", icono: "maquinaria", titulo: "Maquinaria", chip: "Prioridad", valor: `${f0(K.uds_maq)} · ${f0(K.maq_vend)}`, sub: "importadas · vendidas en el periodo",
+      punto: "var(--lat-act)", puntos: [
+        D.dom ? `<b>${f0(D.dom.maq.ZTC)}</b> vendidas fuera de la ZTE` : `<b>${f0(contarAlertas("Maquinaria vendida a no domiciliado"))}</b> vendidas a no domiciliados`,
+        `<b>${f0(K.igv_maq_n)}</b> vendidas con IGV`, `<b>${f0(K.maq_nc)}</b> ventas anuladas o devueltas`,
+        `<b>${f0(contarAlertas("Cliente con 3 o más máquinas"))}</b> clientes con 3 o más máquinas`],
+      serie: Q.mensual.map(d => d.vend), color: "var(--s1)", mini: "Máquinas vendidas por mes", boton: "Maquinaria", destino: "maquinaria" }),
+    plan({ clase: "violeta", icono: "ventas", titulo: "Ventas", chip: `${f0(K.clientes)} clientes`, valor: usd(K.ven_usd), sub: `y ${sol(K.ven_pen)} · valor sin IGV`,
+      punto: "var(--violeta)", puntos: [`<b>${f0(K.fac_n)}</b> facturas emitidas`, `<b>${f0(K.igv_n)}</b> facturas con IGV`,
+        `<b>${f0(K.nc_n)}</b> notas de crédito`, `<b>${f0(K.anul_n)}</b> comprobantes dados de baja`],
+      serie: V.mensual.map(d => d.usd), color: "var(--violeta)", mini: "Ventas en USD por mes", boton: "Ventas", destino: "ventas", pill: "violeta" }));
+  const tl = tarjeta("Máquinas por mes", "Importadas (DAM) y vendidas (facturas vigentes)."); tl.classList.add("c3"); f1.append(tl);
+  lineas(tl, { titulo: "Máquinas importadas y vendidas por mes", datos: Q.mensual,
+    series: [{ k: "imp", t: "Importadas", c: "var(--s1)" }, { k: "vend", t: "Vendidas", c: "var(--s3)" }], fy: f0, ft: v => f0(v) + " uds.", h: 196 });
+
+  /* Fila 2: anillos de exposición y dona */
+  const f2 = el("div", { class: "g12" }); sec.append(f2);
+  const ta = tarjeta("Indicadores de exposición", `${f0(M.n_dam)} DAM entre el ${fecha(M.dam_desde)} y el ${fecha(M.dam_hasta)}; ${f0(M.n_cpe)} CPE entre el ${fecha(M.cpe_desde)} y el ${fecha(M.cpe_hasta)}.`);
+  ta.classList.add("c8");
+  const an = el("div", { class: "anillos" }); ta.append(an);
+  anillo(an, { t: "Código liberatorio", icono: "escudo", v: lib.cif / K.cif * 100, c: "var(--s2)", de: `${usd(lib.cif)} del CIF con ${convT(lib.k).toLowerCase()}` });
+  anillo(an, { t: "DAM en canal verde", icono: "check", v: K.dam_verde / M.n_dam * 100, c: "var(--s1)", de: `${f0(K.dam_verde)} de ${f0(M.n_dam)} DAM` });
+  anillo(an, { t: "Maquinaria en el CIF", icono: "maquinaria", v: K.cif_maq / K.cif * 100, c: "var(--s3)", de: `${f0(K.uds_maq)} unidades · ${usd(K.cif_maq)}` });
+  if (D.dom) anillo(an, { t: "Vendidas fuera de la ZTE", icono: "pin", v: D.dom.maq.ZTC / K.maq_vend * 100, c: "var(--critico)", de: `${f0(D.dom.maq.ZTC)} de ${f0(K.maq_vend)} máquinas vendidas` });
+  else anillo(an, { t: "Maquinaria con IGV", icono: "ventas", v: K.igv_maq_n / K.maq_vend * 100, c: "var(--critico)", de: `${f0(K.igv_maq_n)} de ${f0(K.maq_vend)} facturas de maquinaria` });
+  const td = tarjeta(D.dom ? "Máquinas vendidas por zona del comprador" : "Máquinas vendidas por tipo de cliente"); td.classList.add("c4");
+  if (D.dom) dona(td, ["ZTE", "ZTC", "Extranjero", "Sin dato"].map(z => ({ t: zonaT(z), v: D.dom.maq[z], c: ZONA[z].c })), f0(K.maq_vend), "máquinas");
+  else {
+    const col = { "Empresa": "var(--s1)", "Persona natural": "var(--s2)", "Entidad pública": "var(--s3)", "No domiciliado": "var(--mudo)" };
+    dona(td, V.tcli.map(t => ({ t: t.t, v: t.maq, c: col[t.t] || "var(--mudo)" })), f0(K.maq_vend), "máquinas");
+  }
+  f2.append(ta, td);
+
+  /* Fila 3: actividad de importación y principales alertas */
+  const f3 = el("div", { class: "g12" }); sec.append(f3);
+  const tc = tarjeta("Actividad de importación", "CIF importado por mes."); tc.classList.add("c7");
+  columnas(tc, { titulo: "CIF importado por mes", datos: I.mensual, apilado: true,
+    series: [{ k: "maq", t: "Maquinaria", c: "var(--s1)" }, { k: "otros", t: "Repuestos y otros", c: "var(--s2)" }], fy: fc, ft: v => "USD " + f0(v), h: 230 });
+  const tdv = tarjeta("Principales alertas", "Tipos de alerta por nivel y número de casos. Elija uno para ver la lista."); tdv.classList.add("c5");
+  const ord = { Alta: 0, Media: 1, Baja: 2 }, colN = { Alta: "var(--critico)", Media: "var(--serio)", Baja: "var(--aviso)" };
+  const tipos = [...new Map(D.alertas.map(a => [a.tipo, a.nivel]))].map(([t, n]) => ({ t, n, v: contarAlertas(t) }))
+    .sort((a, b) => ord[a.n] - ord[b.n] || b.v - a.v).slice(0, 6);
+  impulsores(tdv, tipos.map(x => ({ t: `${x.n} · ${x.t}`, v: x.v, c: colN[x.n], icono: "alertas", ir: () => irAlertas(x.t) })));
+  f3.append(tc, tdv);
 
   const h = tarjeta("Hallazgos para priorizar", "Cada hallazgo enlaza con la lista de alertas filtrada. Son indicios para análisis, no conclusiones: requieren verificación con el padrón RUC, la documentación de la DAM y el control en campo.");
   const ul = el("ul", { class: "hallazgos" });
