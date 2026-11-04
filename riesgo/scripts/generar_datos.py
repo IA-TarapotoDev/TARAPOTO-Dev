@@ -152,7 +152,7 @@ def mes(s):
     return s.dt.strftime("%Y-%m")
 
 
-def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None):
+def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None):
     m = leer_dams(r_dams)
     e = leer_cpe(r_cpe)
     dl = leer_detalle(r_det)
@@ -396,7 +396,7 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None):
         "meta": {
             "contribuyente": m.NOM_RAZONSOCIAL.iloc[0], "ruc": m.NUM_DOCIDENT.iloc[0],
             "domicilios": sorted(m.DIR_PARTIC.dropna().unique().tolist()),
-            "desde": meses[0], "hasta": meses[-1], "generado": date.today().isoformat(),
+            "desde": meses[0], "hasta": meses[-1], "generado": date.today().isoformat(), "portal": portal or "",
             "dam_desde": m.f.min().strftime("%Y-%m-%d"), "dam_hasta": m.f.max().strftime("%Y-%m-%d"),
             "cpe_desde": e.f.min().strftime("%Y-%m-%d"), "cpe_hasta": e.f.max().strftime("%Y-%m-%d"),
             "n_dam": int(m.dam.nunique()), "n_series": int(len(m)), "n_cpe": int(len(e)), "n_det": int(len(dl)),
@@ -488,5 +488,6 @@ if __name__ == "__main__":
         ap.add_argument(a)
     ap.add_argument("--domicilios")
     ap.add_argument("--ubigeos", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "referencias", "ubigeo_zte.csv"))
+    ap.add_argument("--portal", help="URL del portal público de comprobantes del emisor (va cifrada dentro de los datos)")
     a = ap.parse_args()
-    main(a.dams, a.cpe, a.detalle, a.salida, a.domicilios, a.ubigeos)
+    main(a.dams, a.cpe, a.detalle, a.salida, a.domicilios, a.ubigeos, a.portal)

@@ -211,6 +211,11 @@
   .hbar .pista span { border-radius: 0; min-width: 2px; }
   .hbar .pista span:last-child { border-radius: 0 5px 5px 0; }
   .hbar .va { font-variant-numeric: tabular-nums; }
+  .copiar { appearance: none; border: 1px solid var(--borde); background: var(--marco); color: var(--texto); border-radius: 8px; padding: 1px 7px;
+    font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; cursor: copy; margin: 1px 3px 1px 0; white-space: nowrap; }
+  .copiar:hover { border-color: var(--s1); }
+  .copiar.ok { border-color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
+  .copiar.ok::after { content: " ✓"; color: var(--ok); }
   details.datos { margin-top: 10px; font-size: 13px; }
   details.datos summary { cursor: pointer; color: var(--suave); }
 
@@ -787,6 +792,17 @@ function activar() {
 }
 function irAlertas(tipo) { location.hash = "alertas"; if (tablaAlertas) tablaAlertas.filtrar("tipo", tipo); }
 
+const copiable = t => `<button class="copiar" type="button" data-c="${esc(t)}" title="Copiar">${esc(t)}</button>`;
+document.addEventListener("click", e => {
+  const b = e.target.closest(".copiar"); if (!b) return;
+  const listo = () => { b.classList.add("ok"); setTimeout(() => b.classList.remove("ok"), 1200); };
+  if (navigator.clipboard) navigator.clipboard.writeText(b.dataset.c).then(listo, () => {}); 
+});
+const portalDatos = r => {
+  const [tipo, serie, num] = r.cpe.split("-");
+  return { tipo: tipo === "07" ? "Nota Crédito" : tipo === "08" ? "Nota Débito" : "Factura", folio: `${serie}-${num}`,
+    fecha: `${r.f.slice(8, 10)}-${r.f.slice(5, 7)}-${r.f.slice(0, 4)}`, monto: (+r.tot).toFixed(2) };
+};
 function conActividad() { return D.ventas.clientes.some(c => c.act); }
 function contarAlertas(tipo) { return D.alertas.filter(a => a.tipo === tipo).length; }
 function sumaAlertas(tipo, m) { return D.alertas.filter(a => a.tipo === tipo && a.mon === m).reduce((s, a) => s + (a.monto || 0), 0); }
@@ -1000,6 +1016,9 @@ function vistaMaquinaria(sec) {
   sec.append(el("h2", {}, "Ventas de maquinaria"),
     el("p", { class: "nota" }, "Facturas y notas de crédito de la serie de maquinaria (FP). Use el filtro de observaciones para aislar ventas con IGV, a no domiciliados, anuladas o dadas de baja."));
   const t5 = tarjeta(); sec.append(t5);
+  if (D.meta.portal) t5.append(el("p", { class: "nota" }, "Para ver un comprobante en el ",
+    el("a", { href: D.meta.portal, target: "_blank", rel: "noopener noreferrer" }, "portal público de comprobantes del emisor"),
+    ", elija el tipo y copie con un clic el folio, la fecha y el monto total de la columna «Consulta en el portal». El portal pide además resolver un captcha."));
   const obs = r => {
     const o = [];
     if (r.cpe.startsWith("07")) o.push("Nota de crédito");
@@ -1017,6 +1036,8 @@ function vistaMaquinaria(sec) {
     ...(conActividad() ? [{ k: "act", t: "Actividad económica", largo: 1 }] : []),
     { k: "desc", t: "Descripción", largo: 1 }, { k: "cat", t: "Tipo" }, { k: "mon", t: "Moneda", f: mon },
     { k: "vv", t: "Valor venta", n: 1, f: f2 }, { k: "igv", t: "IGV", n: 1, f: f2 },
+    ...(D.meta.portal ? [{ t: "Consulta en el portal", v: r => { const p = portalDatos(r); return `${p.tipo} ${p.folio} ${p.fecha} ${p.monto}`; },
+      h: r => { const p = portalDatos(r); return `<span class="etq">${p.tipo}</span>${copiable(p.folio)}${copiable(p.fecha)}${copiable(p.monto)}`; } }] : []),
     { v: r => obs(r).join(", ") + (r.mot ? ` (motivo ${r.mot}: ${D.meta.motivos[r.mot] || ""})` : ""), t: "Observaciones",
       h: r => obs(r).map(t => `<span class="etq${["Con IGV", "No domiciliado", "Dado de baja", "Fuera de la ZTE", "No habido"].includes(t) ? " fuerte" : ""}">${t}</span>`).join("") + (r.mot ? `<span class="etq">${esc(D.meta.motivos[r.mot] || r.mot)}</span>` : "") }],
     filas: Q.ventas, filtros: [{ t: "Observación", campo: "obs", valor: obs }, ...(D.dom ? [{ t: "Zona", campo: "zona", valor: r => zonaT(r.zona) }] : []),
