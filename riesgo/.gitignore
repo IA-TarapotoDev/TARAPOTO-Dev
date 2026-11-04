@@ -1,0 +1,8 @@
+# Datos de origen, JSON generado, claves y páginas compiladas: nunca se versionan
+datos/
+*.json
+*.csv
+*.txt
+*.zip
+clave*
+index.html
