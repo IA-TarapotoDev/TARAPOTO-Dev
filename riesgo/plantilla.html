@@ -217,8 +217,13 @@ const NIVEL = n => `<span class="nivel ${n}"><i aria-hidden="true"></i>${n}</spa
 let D = null;
 
 /* ---------- descifrado ---------- */
+function leerCarga() {
+  try { const p = JSON.parse($("#cifrado").textContent); return p && p.c ? p : null; } catch (e) { return null; }
+}
+const CARGA = leerCarga();
+const normalizarClave = s => s.normalize("NFKC").replace(/[\u2010-\u2015\u2212]/g, "-").replace(/\s+/g, "");
 async function descifrar(clave) {
-  const p = JSON.parse($("#cifrado").textContent);
+  const p = CARGA;
   const b = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
   const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(clave), "PBKDF2", false, ["deriveKey"]);
   const key = await crypto.subtle.deriveKey({ name: "PBKDF2", salt: b(p.s), iterations: p.it, hash: "SHA-256" },
@@ -228,13 +233,17 @@ async function descifrar(clave) {
   return JSON.parse(await new Response(flujo).text());
 }
 
+if (!CARGA) {
+  $("#error").textContent = "Este archivo es la plantilla y no contiene datos. Abra la página publicada o el archivo riesgo/index.html de la rama gh-pages.";
+  $("#clave").disabled = true; $("#abrir").disabled = true;
+}
 $("#form-clave").addEventListener("submit", async ev => {
   ev.preventDefault();
   const f = ev.currentTarget, err = $("#error");
   err.textContent = "";
   f.classList.add("cargando"); $("#abrir").textContent = "Descifrando…";
   try {
-    D = await descifrar($("#clave").value.trim());
+    D = await descifrar(normalizarClave($("#clave").value));
   } catch (e) {
     err.textContent = (window.crypto && crypto.subtle && window.DecompressionStream)
       ? "Clave incorrecta. Revise mayúsculas, minúsculas y guiones."
