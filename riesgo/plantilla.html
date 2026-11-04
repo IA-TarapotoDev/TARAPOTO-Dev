@@ -787,6 +787,7 @@ function activar() {
 }
 function irAlertas(tipo) { location.hash = "alertas"; if (tablaAlertas) tablaAlertas.filtrar("tipo", tipo); }
 
+function conActividad() { return D.ventas.clientes.some(c => c.act); }
 function contarAlertas(tipo) { return D.alertas.filter(a => a.tipo === tipo).length; }
 function sumaAlertas(tipo, m) { return D.alertas.filter(a => a.tipo === tipo && a.mon === m).reduce((s, a) => s + (a.monto || 0), 0); }
 
@@ -969,6 +970,14 @@ function vistaMaquinaria(sec) {
     datosDetalle(td, [{ k: "dep", t: "Departamento" }, { k: "zte", t: "En la ZTE", n: 1, f: f0 }, { k: "ztc", t: "Fuera de la ZTE", n: 1, f: f0 }, { k: "otro", t: "Otro", n: 1, f: f0 },
       { k: "usd", t: "USD", n: 1, f: f0 }, { k: "pen", t: "S/", n: 1, f: f0 }, { k: "igv", t: "Con IGV", n: 1, f: f0 }], Z.por_dep);
     gz.append(tz, td);
+    if (conActividad()) {
+      const cuenta = new Map();
+      for (const v of Q.ventas) if (v.cpe.startsWith("01") && v.est === "0") { const a = v.act || "Sin dato"; cuenta.set(a, (cuenta.get(a) || 0) + 1); }
+      const top = [...cuenta].sort((a, b) => b[1] - a[1]).slice(0, 10);
+      const ta = tarjeta("Actividad económica de los compradores", "Máquinas vendidas según la actividad principal declarada por el cliente. Una actividad ajena al uso de maquinaria pesada puede indicar intermediación.");
+      sec.append(ta);
+      impulsores(ta, top.map(([t, v]) => ({ t, v, c: "var(--s1)", icono: "maquinaria", ir: () => {} })));
+    }
   }
 
   const filas = Q.resumen.filter(r => r.cif_med && r.n_usd >= 3 && r.cat !== "Otros");
@@ -1005,6 +1014,7 @@ function vistaMaquinaria(sec) {
   };
   tabla(t5, { ph: "Buscar cliente, RUC, CPE, descripción…", cols: [{ k: "cpe", t: "CPE", c: 1 }, { k: "f", t: "Fecha", f: fecha, c: 1 }, { k: "cli", t: "Cliente", largo: 1 }, { k: "ruc", t: "RUC / doc.", c: 1 },
     { k: "tcli", t: "Tipo de cliente" }, ...(D.dom ? [{ k: "zona", t: "Zona", h: r => zonaH(r.zona), v: r => zonaT(r.zona) }, { k: "lugar", t: "Domicilio fiscal", largo: 1 }] : []),
+    ...(conActividad() ? [{ k: "act", t: "Actividad económica", largo: 1 }] : []),
     { k: "desc", t: "Descripción", largo: 1 }, { k: "cat", t: "Tipo" }, { k: "mon", t: "Moneda", f: mon },
     { k: "vv", t: "Valor venta", n: 1, f: f2 }, { k: "igv", t: "IGV", n: 1, f: f2 },
     { v: r => obs(r).join(", ") + (r.mot ? ` (motivo ${r.mot}: ${D.meta.motivos[r.mot] || ""})` : ""), t: "Observaciones",
@@ -1047,6 +1057,7 @@ function vistaVentas(sec) {
   tabla(tc, { ph: "Buscar RUC o nombre…", cols: [{ k: "ruc", t: "RUC / doc.", c: 1 }, { k: "nombre", t: "Nombre", largo: 1 }, { k: "tipo", t: "Tipo" }, { k: "n", t: "Facturas", n: 1, f: f0 },
     ...(D.dom ? [{ k: "zona", t: "Zona", h: r => zonaH(r.zona), v: r => zonaT(r.zona) }, { k: "lugar", t: "Domicilio fiscal", largo: 1 },
       { v: r => [r.eruc, r.cond].filter(Boolean).join(" · "), t: "RUC (estado · condición)" }, { k: "dir", t: "Dirección", largo: 1 }] : []),
+    ...(conActividad() ? [{ k: "act", t: "Actividad económica", largo: 1 }] : []),
     { k: "usd", t: "Ventas USD", n: 1, f: f0 }, { k: "pen", t: "Ventas S/", n: 1, f: f0 }, { k: "nc_n", t: "NC", n: 1, f: f0 }, { k: "maq", t: "Máquinas", n: 1, f: f0 },
     { k: "igv_n", t: "Con IGV", n: 1, f: f0 }, { k: "ult", t: "Última compra", f: fecha, c: 1 }],
     filas: V.clientes, filtros: [{ t: "Tipo", campo: "tipo", valor: r => r.tipo }, ...(D.dom ? [{ t: "Zona", campo: "zona", valor: r => zonaT(r.zona) }] : []),

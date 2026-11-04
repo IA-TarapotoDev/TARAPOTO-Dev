@@ -117,9 +117,30 @@ def leer_detalle(ruta):
 
 
 def cargar_domicilios(r_dom, r_ubi):
+    """Admite ubigeo o, si falta, departamento/provincia/distrito por nombre; y la actividad económica."""
     d = pd.read_csv(r_dom, dtype=str).fillna("")
+    d.columns = [norm(c).lower().replace(" ", "_") for c in d.columns]
     u = pd.read_csv(r_ubi, dtype=str).fillna("")
-    d["ubigeo"] = d.ubigeo.str.zfill(6).where(d.ubigeo != "", "")
+    for c in ["ubigeo", "departamento", "provincia", "distrito", "estado", "condicion", "direccion", "actividad"]:
+        if c not in d:
+            d[c] = ""
+    d["ubigeo"] = d.ubigeo.str.strip().str.zfill(6).where(d.ubigeo.str.strip() != "", "")
+    k = lambda x: re.sub(r"[^A-Z ]", " ", norm(x)).split()
+    clave = lambda *xs: " | ".join(" ".join(k(x)) for x in xs)
+    por_3 = {clave(a, b, c): g for g, a, b, c in zip(u.ubigeo, u.departamento, u.provincia, u.distrito)}
+    por_2 = {}
+    for g, a, c in zip(u.ubigeo, u.departamento, u.distrito):
+        por_2.setdefault(clave(a, c), []).append(g)
+    def ubigeo_por_nombre(r):
+        if r.ubigeo or not r.distrito:
+            return r.ubigeo
+        g = por_3.get(clave(r.departamento, r.provincia, r.distrito))
+        if g:
+            return g
+        c = por_2.get(clave(r.departamento, r.distrito), [])
+        return c[0] if len(c) == 1 else ""
+    d["ubigeo"] = [ubigeo_por_nombre(r) for r in d.itertuples()]
+    d = d.drop(columns=["departamento", "provincia", "distrito"])
     d = d.merge(u, on="ubigeo", how="left").fillna("").rename(columns={"estado": "eruc"})
     d["zona"] = d.zona.where(d.zona != "", "Sin dato")
     return d.drop_duplicates("ruc").set_index("ruc")
@@ -242,7 +263,7 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None):
     }), include_groups=False).reset_index().sort_values("usd", ascending=False)
     dom = cargar_domicilios(r_dom, r_ubi) if r_dom else None
     info = dom.to_dict("index") if dom is not None else {}
-    VACIO = {"zona": "", "departamento": "", "provincia": "", "distrito": "", "eruc": "", "condicion": "", "direccion": ""}
+    VACIO = {"zona": "", "departamento": "", "provincia": "", "distrito": "", "eruc": "", "condicion": "", "direccion": "", "actividad": ""}
 
     def domicilio(doc, tcli):
         if tcli == "No domiciliado":
@@ -436,7 +457,7 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None):
             "ventas": [{"cpe": s.cpe, "f": s.f.strftime("%Y-%m-%d"), "ruc": s.doc, "cli": s.nombre, "tcli": s.tcli, "desc": s.desc,
                         "cat": s["cat"], "mon": s.moneda, "vv": r2(s.vv), "igv": r2(s.igv), "tot": r2(s.total),
                         "est": s.estado, "mot": s.tipo_ref if s.tipo == "07" else "", "usado": bool(s.usado),
-                        "zona": s.zona, "lugar": s.lugar, "dep": s.departamento, "cond": s.condicion, "eruc": s.eruc}
+                        "zona": s.zona, "lugar": s.lugar, "dep": s.departamento, "cond": s.condicion, "eruc": s.eruc, "act": s.actividad}
                        for _, s in vm.sort_values("f").iterrows()],
         },
         "ventas": {
@@ -448,7 +469,7 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None):
             "clientes": [{"ruc": s.doc, "nombre": s.nombre, "tipo": s.tipo, "n": int(s.n), "usd": r2(s.usd), "pen": r2(s.pen),
                           "nc_n": int(s.nc_n), "nc_usd": r2(s.nc_usd), "nc_pen": r2(s.nc_pen), "maq": int(s.maq),
                           "igv_n": int(s.igv_n), "ult": s.ult, "zona": s.zona, "lugar": lugar(s), "dep": s.departamento,
-                          "eruc": s.eruc, "cond": s.condicion, "dir": s.direccion} for _, s in cl.iterrows()],
+                          "eruc": s.eruc, "cond": s.condicion, "dir": s.direccion, "act": s.actividad} for _, s in cl.iterrows()],
         },
         "alertas": alertas,
     }
