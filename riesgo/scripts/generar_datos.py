@@ -116,6 +116,24 @@ def leer_detalle(ruta):
     return dl
 
 
+def ubicador(r_ubi):
+    """Devuelve una función (departamento, provincia, distrito) -> fila del ubigeo (o None)."""
+    u = pd.read_csv(r_ubi, dtype=str).fillna("")
+    u = u[u.ubigeo.str.fullmatch(r"\d{6}")]
+    k = lambda x: " ".join(re.sub(r"[^A-Z ]", " ", norm(x)).split())
+    por_3 = {(k(r.departamento), k(r.provincia), k(r.distrito)): r for r in u.itertuples()}
+    por_2 = {}
+    for r in u.itertuples():
+        por_2.setdefault((k(r.departamento), k(r.distrito)), []).append(r)
+    def buscar(dep, prov, dist):
+        r = por_3.get((k(dep), k(prov), k(dist)))
+        if r is None:
+            c = por_2.get((k(dep), k(dist)), [])
+            r = c[0] if len(c) == 1 else None
+        return r
+    return buscar
+
+
 def leer_consulta_ruc(rutas):
     """Resultados de la consulta múltiple de RUC de SUNAT (ZIP o TXT separados por «|»)."""
     import io
@@ -196,7 +214,7 @@ def mes(s):
     return s.dt.strftime("%Y-%m")
 
 
-def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, consultas=None):
+def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, consultas=None, r_traz=None):
     m = leer_dams(r_dams)
     e = leer_cpe(r_cpe)
     dl = leer_detalle(r_det)
@@ -423,6 +441,45 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, cons
                 alerta("Media", "Comprador de maquinaria con RUC reciente", s.doc, primera[s.doc].strftime("%Y-%m-%d"), s.nombre, s.doc,
                        f"RUC inscrito el {pd.Timestamp(s.finsc):%d/%m/%Y}; primera compra de maquinaria {dias} días después · {int(s.maq)} máquinas · "
                        f"actividad: {s.actividad or 's/d'}", s.usd, "USD")
+    bajas_igv = e[(e.tipo == "01") & (e.estado == "2") & (e.igv > 0)]
+    vig_sin = e[(e.tipo == "01") & (e.estado == "0") & (e.igv == 0)]
+    reem = bajas_igv.merge(vig_sin, on=["doc", "moneda"], suffixes=("_b", "_r"))
+    reem = reem[((reem.vv_b - reem.vv_r).abs() < 1) & (reem.f_r >= reem.f_b) & ((reem.f_r - reem.f_b).dt.days <= 30)]
+    reem = reem[(reem.linea_b == "Maquinaria") | (reem.igv_b >= 100)]  # umbral de materialidad fuera de maquinaria
+    reem = reem.sort_values("f_r").drop_duplicates("cpe_b")
+    for _, s in reem.iterrows():
+        alerta("Alta" if s.linea_b == "Maquinaria" else "Media", "Factura con IGV dada de baja y reemitida sin IGV", s.cpe_r, s.f_r.strftime("%Y-%m-%d"),
+               s.nombre_b, s.doc, f"{s.cpe_b} del {s.f_b:%d/%m/%Y} con IGV {s.moneda} {s.igv_b:,.2f}, dada de baja; reemitida como {s.cpe_r} "
+               f"del {s.f_r:%d/%m/%Y} sin IGV · línea {s.linea_b}", s.vv_r, s.moneda)
+    reemitidas = dict(zip(reem.cpe_r, zip(reem.cpe_b, reem.f_b.dt.strftime("%Y-%m-%d"), reem.igv_b)))
+
+    # Trazabilidad por número de serie (casos documentados con la factura del emisor)
+    casos = []
+    if r_traz:
+        buscar = ubicador(r_ubi)
+        t = pd.read_csv(r_traz, dtype=str).fillna("")
+        for _, c in t.iterrows():
+            venta = vm[vm.cpe == c.cpe]
+            s = venta.iloc[0] if len(venta) else None
+            imp = mq[(c.serie_maquina != "") & mq.id.str.endswith(c.serie_maquina)]
+            if not len(imp) and c.serie_motor:
+                imp = mq[mq.motor == c.serie_motor]
+            i = imp.iloc[0] if len(imp) else None
+            partes = [x.strip() for x in c.ubicacion_entrega.split(",")]
+            ub = buscar(partes[2], partes[1], partes[0]) if len(partes) == 3 else None
+            b = reemitidas.get(c.cpe)
+            casos.append({
+                "cpe": c.cpe, "serie": c.serie_maquina, "motor": c.serie_motor, "fuente": c.fuente, "nota": c.nota,
+                "entrega": c.ubicacion_entrega, "entrega_dir": c.direccion_entrega, "entrega_zona": ub.zona if ub is not None else "Sin dato",
+                "venta": None if s is None else {"f": s.f.strftime("%Y-%m-%d"), "cli": s.nombre, "ruc": s.doc, "mon": s.moneda, "vv": r2(s.vv),
+                                                 "igv": r2(s.igv), "desc": s.desc, "zona": s.zona, "lugar": s.lugar},
+                "baja": None if not b else {"cpe": b[0], "f": b[1], "igv": r2(b[2])},
+                "dam": None if i is None else {"dam": i.dam, "serie": int(i.NUM_SECSERIE), "f": i.f.strftime("%Y-%m-%d"), "canal": i.CANAL,
+                                               "conv": i.conv, "cif": r2(i.MTO_VALORADU), "anio": i.anio, "modelo": i.modelo,
+                                               "dias": int((s.f - i.f).days) if s is not None else None},
+                "cif_ref": r2(mq[(mq.modelo == (i.modelo if i is not None else c.get("modelo", ""))) & ~mq.usada].cif_u.median()) if (i is not None or c.get("modelo", "")) else None,
+            })
+
     multi = cl[cl.maq >= 3]
     for _, s in multi.iterrows():
         alerta("Media", "Cliente con 3 o más máquinas", s.doc, s.ult, s.nombre, s.doc,
@@ -529,6 +586,7 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, cons
                           "igv_n": int(s.igv_n), "ult": s.ult, "zona": s.zona, "lugar": lugar(s), "dep": s.departamento,
                           "eruc": s.eruc, "cond": s.condicion, "dir": s.direccion, "act": s.actividad, "finsc": s.finsc} for _, s in cl.iterrows()],
         },
+        "casos": casos,
         "alertas": alertas,
     }
     with open(salida, "w", encoding="utf-8") as f:
@@ -544,5 +602,6 @@ if __name__ == "__main__":
     ap.add_argument("--ubigeos", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "referencias", "ubigeo_zte.csv"))
     ap.add_argument("--portal", help="URL del portal público de comprobantes del emisor (va cifrada dentro de los datos)")
     ap.add_argument("--consulta-ruc", nargs="*", default=[], help="Resultados de la consulta múltiple de RUC de SUNAT (ZIP o TXT)")
+    ap.add_argument("--trazabilidad", help="CSV de casos: cpe, serie_maquina, serie_motor, modelo, ubicacion_entrega (DISTRITO, PROVINCIA, DEPARTAMENTO), direccion_entrega, fuente, nota")
     a = ap.parse_args()
-    main(a.dams, a.cpe, a.detalle, a.salida, a.domicilios, a.ubigeos, a.portal, a.consulta_ruc)
+    main(a.dams, a.cpe, a.detalle, a.salida, a.domicilios, a.ubigeos, a.portal, a.consulta_ruc, a.trazabilidad)

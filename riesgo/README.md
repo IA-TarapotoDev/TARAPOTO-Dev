@@ -46,6 +46,8 @@ python3 -I riesgo/scripts/generar_datos.py DAMs.csv CPEs_EMITIDOS.txt CPE_DETALL
 
 Para la actividad económica (CIIU) y la fecha de inscripción, agregue los resultados de la **consulta múltiple de RUC** de SUNAT (ZIP o TXT, hasta 100 RUC por consulta) con `--consulta-ruc resultado1.zip resultado2.zip …`. La consulta pública no muestra el domicilio de las personas naturales.
 
+**Trazabilidad por número de serie:** con `--trazabilidad casos.csv` (columnas `cpe, serie_maquina, serie_motor, modelo, ubicacion_entrega, direccion_entrega, fuente, nota`; `ubicacion_entrega` como «DISTRITO, PROVINCIA, DEPARTAMENTO») cada venta documentada con la factura del emisor se enlaza con su DAM por la serie de la máquina o del motor, y el tablero muestra la cadena importación → venta → destino con acciones sugeridas. El archivo de casos tiene datos de contribuyentes: no se versiona.
+
 `referencias/ubigeo_zte.csv` asigna cada distrito INEI a la ZTE o a la ZTC. Se genera con `scripts/zona_ubigeo.py` a partir de la tabla de ubigeos de [jmcastagnetto/ubigeo-peru-aumentado](https://github.com/jmcastagnetto/ubigeo-peru-aumentado) (licencia MIT). Con domicilios, el tablero agrega la zona y el domicilio fiscal en clientes y ventas de maquinaria, un resumen por zona y departamento y dos alertas más.
 
 Formatos de entrada esperados:
@@ -67,6 +69,7 @@ Formatos de entrada esperados:
 | Media | Mismo número de parte en varias subpartidas | Misma descripción con número de parte declarada en más de una subpartida |
 | Media | Valor unitario atípico | FOB unitario a 50 % o más de la mediana del mismo número de parte (con al menos 3 series en 2 DAM) |
 | Alta | Maquinaria vendida a cliente domiciliado fuera de la ZTE | Factura vigente de maquinaria a un cliente cuyo domicilio fiscal (padrón RUC) está en la ZTC |
+| Alta / Media | Factura con IGV dada de baja y reemitida sin IGV | Factura con IGV dada de baja y, en los 30 días siguientes, otra factura vigente sin IGV al mismo cliente, en la misma moneda y por el mismo valor (alta si es de maquinaria; fuera de maquinaria, solo si el IGV de la factura dada de baja es de 100 o más) |
 | Media | Comprador de maquinaria con RUC reciente | La primera compra de maquinaria ocurre dentro de los 180 días siguientes a la inscripción del RUC |
 | Media | Comprador de maquinaria no habido o con RUC no activo | Cliente con facturas de maquinaria cuyo RUC no está activo o cuyo domicilio figura como no habido |
 | Baja | Ventas a no domiciliado | Repuestos, servicios u otros ingresos facturados a clientes con documento de tipo 0 |

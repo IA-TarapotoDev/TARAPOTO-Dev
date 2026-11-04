@@ -216,6 +216,15 @@
   .copiar:hover { border-color: var(--s1); }
   .copiar.ok { border-color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
   .copiar.ok::after { content: " ✓"; color: var(--ok); }
+  .cadena { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: 12px; margin-top: 10px; }
+  .paso { border-radius: 14px; background: var(--marco); padding: 12px 14px; position: relative; font-size: 13px; }
+  .paso .n { font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: var(--mudo); margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
+  .paso .n svg.ic { width: 16px; height: 16px; }
+  .paso b { display: block; font-size: 14px; margin-bottom: 2px; }
+  .paso .d { color: var(--suave); }
+  .paso.alerta { box-shadow: inset 3px 0 0 var(--critico); }
+  .paso.pend { box-shadow: inset 3px 0 0 var(--aviso); }
+  ol.acciones { margin: 12px 0 0; padding-left: 20px; font-size: 13.5px; display: grid; gap: 5px; }
   details.datos { margin-top: 10px; font-size: 13px; }
   details.datos summary { cursor: pointer; color: var(--suave); }
 
@@ -875,6 +884,8 @@ function vistaResumen(sec) {
     const nh = contarAlertas("Comprador de maquinaria no habido o con RUC no activo");
     if (nh) item("Media", `<b>${f0(nh)} compradores de maquinaria figuran como no habidos o con RUC no activo</b> en el padrón. Son difíciles de ubicar y fiscalizar.`, "Comprador de maquinaria no habido o con RUC no activo");
   }
+  { const tipo = "Factura con IGV dada de baja y reemitida sin IGV", n = contarAlertas(tipo), nm = D.alertas.filter(a => a.tipo === tipo && a.nivel === "Alta").length;
+    if (n) item(nm ? "Alta" : "Media", `<b>${f0(n)} facturas emitidas con IGV se dieron de baja y se reemitieron sin IGV</b> al mismo cliente y por el mismo monto en menos de 30 días (${f0(nm)} de maquinaria; en otras líneas solo se cuentan las de IGV de 100 o más). El cambio de gravada a exonerada debe sustentarse con la entrega dentro de la zona.`, tipo); }
   const igvMaqUsd = sumaAlertas("Maquinaria vendida con IGV", "USD"), igvMaqPen = sumaAlertas("Maquinaria vendida con IGV", "PEN");
   item("Alta", `<b>${f0(contarAlertas("Maquinaria vendida con IGV"))} facturas de maquinaria se emitieron con IGV</b> (USD ${fc(igvMaqUsd)} y S/ ${fc(igvMaqPen)} de valor de venta), aunque casi todas las demás ventas van sin IGV. Es un indicio de operación fuera del ámbito del beneficio: verificar con qué DAM y código liberatorio ingresó cada unidad y si se regularizó su salida de la zona.`, "Maquinaria vendida con IGV");
   item("Alta", `<b>${f0(contarAlertas("Maquinaria vendida a no domiciliado"))} máquinas se facturaron a un cliente no domiciliado</b> (USD ${fc(sumaAlertas("Maquinaria vendida a no domiciliado", "USD"))}). Verificar si existe DAM de exportación o reexportación y por qué aduana salieron.`, "Maquinaria vendida a no domiciliado");
@@ -957,6 +968,7 @@ function vistaImportaciones(sec) {
 
 function vistaMaquinaria(sec) {
   const Q = D.maq, K = D.kpi;
+  if ((D.casos || []).length) fichasTrazabilidad(sec);
   sec.append(el("h2", {}, "Unidades importadas y vendidas"),
     el("p", { class: "nota" }, "Máquinas por mes: importadas según la fecha de la DAM y vendidas según la fecha de la factura vigente. Las ventas pueden incluir unidades importadas antes del periodo."));
   const t1 = tarjeta(); sec.append(t1);
@@ -1043,6 +1055,34 @@ function vistaMaquinaria(sec) {
     filas: Q.ventas, filtros: [{ t: "Observación", campo: "obs", valor: obs }, ...(D.dom ? [{ t: "Zona", campo: "zona", valor: r => zonaT(r.zona) }] : []),
       { t: "Tipo de cliente", campo: "tcli", valor: r => r.tcli }, { t: "Tipo", campo: "cat", valor: r => r.cat }],
     archivo: "ventas_maquinaria.csv" });
+}
+
+function fichasTrazabilidad(sec) {
+  sec.append(el("h2", {}, "Trazabilidad por número de serie"),
+    el("p", { class: "nota" }, "Unidades documentadas con la factura del emisor: se enlaza la venta con su DAM por el número de serie de la máquina o del motor."));
+  for (const c of D.casos) {
+    const t = tarjeta(); sec.append(t);
+    const v = c.venta, m = c.dam;
+    t.append(el("h3", { html: `${esc(v ? v.desc : "Máquina")} · serie <span class="copiar" style="cursor:text">${esc(c.serie)}</span> · motor ${esc(c.motor || "s/d")}` }),
+      el("p", { class: "nota" }, `${c.fuente}${c.nota ? " · " + c.nota : ""}`));
+    const cad = el("div", { class: "cadena" });
+    cad.append(el("div", { class: "paso" + (m ? "" : " pend"), html: `<div class="n">${ic("importaciones")}1 · Importación</div>` + (m
+      ? `<b>DAM ${esc(m.dam)} · serie ${m.serie}</b><div class="d">${fecha(m.f)} · canal ${CANAL[m.canal] || m.canal} · ${esc(convT(m.conv))}<br>CIF USD ${f0(m.cif)} · año ${esc(m.anio || "s/d")}</div>`
+      : `<b>DAM no encontrada en el periodo</b><div class="d">La serie no está en las DAM de ${mesLargo(D.meta.desde)} a ${mesLargo(D.meta.hasta)}: probablemente se importó antes. Buscar la DAM por serie y motor en el sistema aduanero.</div>`) }));
+    if (c.baja) cad.append(el("div", { class: "paso alerta", html: `<div class="n">${ic("ventas")}2 · Factura dada de baja</div><b>${esc(c.baja.cpe)} · ${fecha(c.baja.f)}</b><div class="d">Emitida <b style="display:inline">con IGV ${v ? mon(v.mon) : ""} ${f0(c.baja.igv)}</b> y dada de baja.</div>` }));
+    if (v) cad.append(el("div", { class: "paso" + (v.igv > 0 ? "" : c.baja ? " alerta" : ""), html: `<div class="n">${ic("ventas")}${c.baja ? 3 : 2} · Venta</div><b>${esc(c.cpe)} · ${fecha(v.f)}</b><div class="d">${esc(v.cli)} (RUC ${esc(v.ruc)})<br>${mon(v.mon)} ${f0(v.vv)} · ${v.igv > 0 ? "con IGV " + f0(v.igv) : "sin IGV (operación exonerada)"}` +
+      (m && m.dias != null ? `<br>${f0(m.dias)} días después de la DAM` : "") + (c.cif_ref ? `<br>Venta / CIF de referencia: ${NF2.format(v.vv / (m ? m.cif : c.cif_ref))}` : "") + `</div>` }));
+    const fuera = c.entrega_zona === "ZTC" || (v && v.zona === "ZTC");
+    cad.append(el("div", { class: "paso" + (fuera ? " alerta" : ""), html: `<div class="n">${ic("pin")}${c.baja ? 4 : 3} · Destino</div><b>${esc(c.entrega || "s/d")} · ${zonaH(c.entrega_zona)}</b><div class="d">Dirección en la factura: ${esc(c.entrega_dir || "s/d")}` +
+      (v ? `<br>Domicilio fiscal (padrón): ${esc(v.lugar || "s/d")} · ${zonaT(v.zona)}` : "") + `</div>` }));
+    t.append(cad);
+    const acc = [];
+    if (!m) acc.push(`Ubicar la DAM de importación por la serie <b>${esc(c.serie)}</b> y el motor <b>${esc(c.motor)}</b> y verificar el código liberatorio con que ingresó.`);
+    if (fuera) acc.push("Verificar en campo dónde opera la máquina y si se regularizó su salida de la zona del beneficio.");
+    if (c.baja) acc.push(`Pedir al emisor el sustento de la baja de ${esc(c.baja.cpe)} (emitida con IGV) y de su reemisión como operación exonerada.`);
+    acc.push("Cruzar con la guía de remisión electrónica de la venta (punto de partida y de llegada) y con los registros de los controles en los corredores de salida.");
+    t.append(el("h3", { style: "margin-top:14px" }, "Acciones sugeridas"), el("ol", { class: "acciones", html: acc.map(a => `<li>${a}</li>`).join("") }));
+  }
 }
 
 function vistaVentas(sec) {
