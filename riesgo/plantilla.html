@@ -186,6 +186,17 @@
   tr.fila-det[aria-expanded="true"] > td { background: var(--wash); border-bottom-color: transparent; }
   tr.fila-det:focus-visible { outline: 2px solid var(--s1); outline-offset: -2px; }
   tr.detalle > td { padding: 0; background: var(--marco); cursor: default; }
+  tr.grupo { cursor: pointer; }
+  tr.grupo > td { padding: 0; background: color-mix(in srgb, var(--marco) 70%, var(--sup)); border-bottom: 1px solid var(--eje); }
+  tr.grupo:hover > td { background: var(--wash); }
+  tr.grupo:focus-visible { outline: 2px solid var(--s1); outline-offset: -2px; }
+  .cab-g { position: sticky; left: 0; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; padding: 10px 12px; font-size: 13px; }
+  .cab-g .fl-g { color: var(--mudo); transition: transform .15s; display: inline-block; width: 12px; }
+  tr.grupo[aria-expanded="true"] .fl-g { transform: rotate(90deg); }
+  .cab-g b.g { font-size: 14px; }
+  .cab-g .sub-g { color: var(--suave); }
+  .cab-g .der { margin-left: auto; display: inline-flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
+  .barra-tabla select.agrupar { font-weight: 650; border-color: var(--s1); }
   tr.detalle:hover { background: none; }
   .ficha { padding: 14px 16px 18px; display: grid; gap: 12px; position: sticky; left: 0; }
   .ficha-acc { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; font-size: 13px; }
@@ -442,12 +453,19 @@ function segmentada(host, partes, fv) {
 
 /* ---------- tabla con búsqueda, filtros, orden, CSV y ficha desplegable ---------- */
 function tabla(host, o) {
-  const cols = o.cols, porPag = o.porPag || 15;
-  let filas = o.filas.slice(), orden = o.orden || null, mostrar = porPag, q = "";
-  const abiertos = new Set();
+  const cols = o.cols, porPag = o.porPag || 15, grupos = o.grupos || [];
+  let filas = o.filas.slice(), orden = o.orden || null, mostrar = porPag, q = "", grupo = null, claves = [];
+  const abiertos = new Set(), gAbiertos = new Set();
   const filtros = (o.filtros || []).map(f => ({ ...f, val: "" }));
   const barraT = el("div", { class: "barra-tabla" });
-  let inp = null;
+  const memoria = o.id ? "tablero-agrupar-" + o.id : null;
+  let selG = null, todos = null, inp = null;
+  if (grupos.length) {
+    selG = el("select", { class: "agrupar", "aria-label": "Agrupar por" }, el("option", { value: "" }, "Agrupar por: nada"),
+      grupos.map(g => el("option", { value: g.id }, "Agrupar por: " + g.t)));
+    selG.addEventListener("change", () => usarGrupo(selG.value));
+    barraT.append(selG);
+  }
   if (o.buscar !== false) {
     inp = el("input", { type: "search", placeholder: o.ph || "Buscar…", "aria-label": "Buscar en la tabla" });
     inp.addEventListener("input", () => { q = sinTilde(inp.value.trim()); mostrar = porPag; pintar(); });
@@ -460,6 +478,11 @@ function tabla(host, o) {
     f.sel = sel; barraT.append(sel);
   }
   const cuenta = el("span", { class: "cuenta" });
+  if (grupos.length) {
+    todos = el("button", { class: "btn claro", type: "button", hidden: true, onclick: () => {
+      const abrir = !claves.every(k => gAbiertos.has(k)); claves.forEach(k => abrir ? gAbiertos.add(k) : gAbiertos.delete(k)); pintar(); } }, "Abrir todos");
+    barraT.append(todos);
+  }
   barraT.append(cuenta, el("button", { class: "btn", type: "button", onclick: () => descargar(), title: "Descargar las filas filtradas en CSV" }, "CSV"));
   const tbl = el("table"), thead = el("thead"), tbody = el("tbody"), trh = el("tr");
   cols.forEach((c, i) => {
@@ -478,9 +501,42 @@ function tabla(host, o) {
   const texto = r => sinTilde(cols.map(c => c.csv ? c.csv(r) : valor(c, r)).join(" ") + " " + (o.extraBusqueda ? o.extraBusqueda(r) : ""));
   const indice = new Map(o.filas.map(r => [r, texto(r)]));
   const filtradas = () => filas.filter(r => (!q || indice.get(r).includes(q)) && filtros.every(f => !f.val || [].concat(f.valor(r)).includes(f.val)));
-  const ajustar = n => { n.style.width = Math.max(260, env.clientWidth - 2) + "px"; return n; };
+  const ancho = () => Math.max(260, env.clientWidth - 2) + "px";
+  const ajustar = n => { n.style.width = ancho(); return n; };
   const filaDet = r => el("tr", { class: "detalle" }, el("td", { colspan: vis.length }, ajustar(o.detalle(r))));
-  window.addEventListener("resize", () => $$(":scope > tbody > tr.detalle > td > .ficha", tbl).forEach(ajustar));
+  window.addEventListener("resize", () => $$(":scope > tbody > tr > td > .ficha, :scope > tbody > tr > td > .cab-g", tbl).forEach(ajustar));
+  const claveDe = r => String(grupo.clave(r) ?? "");
+  function filaDatos(r) {
+    const tr = el("tr", {}, vis.map(c => {
+      const v = valor(c, r), td = el("td", { class: c.n ? "n" : c.largo ? "largo" : c.c ? "c" : null });
+      if (c.h) td.innerHTML = c.h(r); else td.textContent = c.f ? c.f(v, r) : (v ?? "–");
+      return td;
+    }));
+    if (!o.detalle) return [tr];
+    tr.classList.add("fila-det"); tr.tabIndex = 0; tr.setAttribute("aria-expanded", abiertos.has(r) ? "true" : "false");
+    const alternar = ev => {
+      if (ev.target.closest("button, a, input, select")) return;
+      if (abiertos.has(r)) { abiertos.delete(r); tr.nextElementSibling?.classList.contains("detalle") && tr.nextElementSibling.remove(); tr.setAttribute("aria-expanded", "false"); }
+      else { abiertos.add(r); tr.after(filaDet(r)); tr.setAttribute("aria-expanded", "true"); }
+    };
+    tr.addEventListener("click", alternar);
+    tr.addEventListener("keydown", ev => { if ((ev.key === "Enter" || ev.key === " ") && ev.target === tr) { ev.preventDefault(); alternar(ev); } });
+    return abiertos.has(r) ? [tr, filaDet(r)] : [tr];
+  }
+  function filaGrupo(g) {
+    const ab = gAbiertos.has(g.k);
+    const tr = el("tr", { class: "grupo", tabindex: "0", "aria-expanded": ab ? "true" : "false" },
+      el("td", { colspan: vis.length }, ajustar(el("div", { class: "cab-g", html: `<span class="fl-g" aria-hidden="true">▸</span>` + grupo.cabecera(g.k, g.rs) }))));
+    const alternar = ev => {
+      if (ev.target.closest("button, a, input, select")) return;
+      ab ? gAbiertos.delete(g.k) : gAbiertos.add(g.k); pintar();
+      const t = $$("tr.grupo", tbody).find(x => x.dataset.g === g.k); if (t) t.focus({ preventScroll: true });
+    };
+    tr.dataset.g = g.k;
+    tr.addEventListener("click", alternar);
+    tr.addEventListener("keydown", ev => { if ((ev.key === "Enter" || ev.key === " ") && ev.target === tr) { ev.preventDefault(); alternar(ev); } });
+    return tr;
+  }
   function pintar() {
     if (orden) {
       const c = cols[orden.i];
@@ -490,50 +546,60 @@ function tabla(host, o) {
     }
     $$("th", trh).forEach((th, j) => { const i = cols.indexOf(vis[j]); th.setAttribute("aria-sort", orden && orden.i === i ? (orden.d > 0 ? "ascending" : "descending") : "none"); });
     const fs = filtradas(), nodos = [];
-    for (const r of fs.slice(0, mostrar)) {
-      const tr = el("tr", {}, vis.map(c => {
-        const v = valor(c, r), td = el("td", { class: c.n ? "n" : c.largo ? "largo" : c.c ? "c" : null });
-        if (c.h) td.innerHTML = c.h(r); else td.textContent = c.f ? c.f(v, r) : (v ?? "–");
-        return td;
-      }));
-      nodos.push(tr);
-      if (o.detalle) {
-        tr.classList.add("fila-det"); tr.tabIndex = 0; tr.setAttribute("aria-expanded", abiertos.has(r) ? "true" : "false");
-        const alternar = ev => {
-          if (ev.target.closest("button, a, input, select")) return;
-          if (abiertos.has(r)) { abiertos.delete(r); tr.nextElementSibling?.classList.contains("detalle") && tr.nextElementSibling.remove(); tr.setAttribute("aria-expanded", "false"); }
-          else { abiertos.add(r); tr.after(filaDet(r)); tr.setAttribute("aria-expanded", "true"); }
-        };
-        tr.addEventListener("click", alternar);
-        tr.addEventListener("keydown", ev => { if ((ev.key === "Enter" || ev.key === " ") && ev.target === tr) { ev.preventDefault(); alternar(ev); } });
-        if (abiertos.has(r)) nodos.push(filaDet(r));
+    if (grupo) {
+      const mapa = new Map();
+      for (const r of fs) { const k = claveDe(r); if (!mapa.has(k)) mapa.set(k, []); mapa.get(k).push(r); }
+      const gs = [...mapa].map(([k, rs]) => ({ k, rs }));
+      gs.sort((a, b) => (a.k === "") - (b.k === "") || (grupo.orden || o.ordenGrupos || ((x, y) => y.rs.length - x.rs.length))(a, b) || a.k.localeCompare(b.k, "es"));
+      claves = gs.map(g => g.k);
+      for (const g of gs) {
+        nodos.push(filaGrupo(g));
+        if (gAbiertos.has(g.k)) for (const r of g.rs) nodos.push(...filaDatos(r));
       }
+      cuenta.textContent = `${f0(gs.length)} ${gs.length === 1 ? "grupo" : "grupos"} · ${f0(fs.length)} filas`;
+      mas.hidden = true;
+      todos.hidden = !gs.length; todos.textContent = gs.length && gs.every(g => gAbiertos.has(g.k)) ? "Cerrar todos" : "Abrir todos";
+    } else {
+      for (const r of fs.slice(0, mostrar)) nodos.push(...filaDatos(r));
+      cuenta.textContent = `${f0(Math.min(mostrar, fs.length))} de ${f0(fs.length)}`;
+      mas.hidden = fs.length <= mostrar;
+      if (todos) todos.hidden = true;
     }
     tbody.replaceChildren(...nodos);
     if (!fs.length) tbody.append(el("tr", {}, el("td", { colspan: vis.length }, "Sin resultados.")));
-    cuenta.textContent = `${f0(Math.min(mostrar, fs.length))} de ${f0(fs.length)}`;
-    mas.hidden = fs.length <= mostrar;
+  }
+  function usarGrupo(id, recordar = true) {
+    grupo = grupos.find(g => g.id === id) || null; gAbiertos.clear(); mostrar = porPag;
+    if (selG) selG.value = grupo ? grupo.id : "";
+    try { if (memoria && recordar) localStorage.setItem(memoria, grupo ? grupo.id : ""); } catch (e) { /* sin almacenamiento: no se recuerda */ }
+    pintar();
   }
   function descargar() {
     const q2 = v => { const s = String(v ?? ""); return /[",\n;]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
     const cs = cols.filter(c => c.csv !== false);
-    const lineas = [cs.map(c => q2(c.t)).join(",")].concat(filtradas().map(r => cs.map(c => q2(c.csv ? c.csv(r) : valor(c, r))).join(",")));
+    const pre = grupo ? [q2("Grupo: " + grupo.t)] : [];
+    const lineas = [pre.concat(cs.map(c => q2(c.t))).join(",")].concat(filtradas().map(r =>
+      (grupo ? [q2(grupo.texto ? grupo.texto(claveDe(r), r) : claveDe(r))] : []).concat(cs.map(c => q2(c.csv ? c.csv(r) : valor(c, r)))).join(",")));
     const a = el("a", { href: URL.createObjectURL(new Blob(["﻿" + lineas.join("\r\n")], { type: "text/csv;charset=utf-8" })), download: o.archivo || "tabla.csv" });
     document.body.append(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
   }
-  pintar();
+  let inicial = o.agrupar || "";
+  try { if (memoria && localStorage.getItem(memoria) != null) inicial = localStorage.getItem(memoria); } catch (e) { /* sin almacenamiento */ }
+  usarGrupo(inicial, false);
   return {
     filtrar(valores) {
       if (inp) inp.value = ""; q = "";
       for (const f of filtros) { f.val = valores[f.campo] || ""; f.sel.value = f.val; }
       mostrar = porPag; pintar();
     },
+    agrupar: usarGrupo,
     abrir(pred, termino) {
       const r = o.filas.find(pred); if (!r) return;
       for (const f of filtros) { f.val = ""; f.sel.value = ""; }
       if (inp) inp.value = termino; q = sinTilde(termino);
-      abiertos.add(r); mostrar = porPag; pintar();
-      setTimeout(() => { const tr = $("tr[aria-expanded='true']", tbody); if (tr) { tr.scrollIntoView({ block: "center" }); tr.focus({ preventScroll: true }); } }, 60);
+      abiertos.add(r); if (grupo) gAbiertos.add(claveDe(r));
+      mostrar = porPag; pintar();
+      setTimeout(() => { const tr = $("tr.fila-det[aria-expanded='true']", tbody); if (tr) { tr.scrollIntoView({ block: "center" }); tr.focus({ preventScroll: true }); } }, 60);
     },
   };
 }
@@ -778,7 +844,7 @@ function irAlertas(filtro) {
   if (filtro.mot) val.mot = D.meta.texto[filtro.mot];
   if (filtro.mk) val.mk = MARCAS[filtro.mk].t;
   if (filtro.estado) val.estado = filtro.estado;
-  setTimeout(() => tablaAlertas.filtrar(val), 0);
+  setTimeout(() => { tablaAlertas.agrupar("", false); tablaAlertas.filtrar(val); }, 0);
 }
 function irMaquinas(filtro) { location.hash = "maquinas"; setTimeout(() => tablaMaquinas.filtrar({ mk: filtro.mk ? MARCAS[filtro.mk].t : "" }), 0); }
 function irCaso(cpe) {
@@ -865,6 +931,57 @@ function csvPendientes() {
   document.body.append(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
 }
 
+/* Cabeceras de grupo */
+const MERC = ["Maquinaria amarilla", "Maquinaria agrícola", "Motores y grupos electrógenos", "Otros"];
+const nCasos = (rs, n) => rs.filter(r => r.nivel === n).length;
+function resumenCasos(rs) {
+  const niveles = ["Alta", "Media", "Baja"].filter(n => nCasos(rs, n)).map(n => `${NIVEL(n)} ${nCasos(rs, n)}`).join(" ");
+  const suma = m => rs.filter(r => r.mon === m).reduce((a, r) => a + (montoCaso(r) || 0), 0);
+  const montos = [["USD", suma("USD")], ["PEN", suma("PEN")]].filter(x => x[1]).map(([m, v]) => `${mon(m)} ${f0(v)}`).join(" · ");
+  return `<span class="der"><span class="etq">${rs.length} ${rs.length === 1 ? "caso" : "casos"}</span>${niveles}${montos ? `<span class="sub-g">${montos}</span>` : ""}</span>`;
+}
+const ordenCasos = (a, b) => nCasos(b.rs, "Alta") - nCasos(a.rs, "Alta") || b.rs.length - a.rs.length || nCasos(b.rs, "Media") - nCasos(a.rs, "Media");
+const claveMaq = r => r.maqs[0] || ((r.series || [])[0] ? "serie:" + r.series[0].serie : "");
+const claveTras = r => (r.tras || [])[0] ?? (r.tras_prob || [])[0] ?? "";
+const cabTraslado = (k, rs) => {
+  if (k === "") return `<b class="g">Sin traslado</b><span class="sub-g">ni autorizado ni probable</span>` + resumenCasos(rs);
+  const t = D.traslados[+k], conf = rs.some(r => (r.tras || []).includes(+k));
+  return `<b class="g">Traslado ${esc(t.exp.split("-").slice(-2).join("-"))}</b><span class="sub-g">${fecha(t.f)} · ${esc(t.merc.toLowerCase())}${t.maqs.length ? " · " + esc(t.maqs.map(x => x.replace("#", " serie ")).join(", ")) : ""}</span>` +
+    `<span class="etq ${conf ? "ok" : "pend"}">${conf ? "autorizado para la máquina" : "probable"}</span>` + resumenCasos(rs);
+};
+const cabDam = (k, extra) => {
+  const d = D.dams[k] || {}, c = d.ctl;
+  return `<b class="g">DAM ${esc(k)}</b><span class="sub-g">${fecha(d.f)} · ${esc(destT(d.dest))} · ${esc(convT(d.conv))}</span>` +
+    `<span class="etq ${ctlClase(c)}">${esc(ctlEstado(c))}</span>` +
+    (c && c.trib && c.trib.total ? `<span class="sub-g">tributos ${c.mon === "PEN" ? "S/" : c.mon === "USD" ? "USD" : ""} ${f0(c.trib.total)}</span>` : "") +
+    (c && c.ncn_total ? `<span class="sub-g">NCN S/ ${f0(c.ncn_total)}</span>` : "") +
+    (c && (c.tras || []).length ? `<span class="etq ok">${c.tras.length} ${c.tras.length === 1 ? "traslado" : "traslados"}</span>` : "") + (extra || "");
+};
+const GRUPOS_CASOS = [
+  { id: "comprador", t: "Comprador", clave: r => r.ruc, orden: ordenCasos, texto: k => { const c = D.clientes[k] || {}; return `${c.nombre || ""} (${k})`; },
+    cabecera: (k, rs) => { const c = D.clientes[k] || {}; const mk = [c.rev ? "rev" : "", c.nuevo ? "nuevo" : "", c.no_habido ? "nohab" : ""].filter(Boolean);
+      return `<b class="g">${esc(c.nombre || k)}</b><span class="sub-g">RUC ${esc(k)}</span>${zonaH(c.zona)}<span class="sub-g">${esc(c.lugar || "")}</span>${mk.length ? marcasH(mk) : ""}` + resumenCasos(rs); } },
+  { id: "maquina", t: "Máquina (serie)", clave: claveMaq, orden: ordenCasos,
+    texto: k => k.startsWith("serie:") ? "Serie " + k.slice(6) : k ? (IDX.maq.get(k) || {}).pin || k : "Sin serie (falta el XML)",
+    cabecera: (k, rs) => {
+      if (!k) return `<b class="g">Sin serie de máquina</b><span class="sub-g">falta el XML de la factura</span>` + resumenCasos(rs);
+      if (k.startsWith("serie:")) return `<b class="g">Serie ${esc(k.slice(6))}</b><span class="sub-g">del XML; no está en las DAM del periodo</span>` + resumenCasos(rs);
+      const m = IDX.maq.get(k) || {};
+      return `<b class="g">${esc(m.cat)} ${esc(m.marca || "")} ${esc(m.modelo || "")}</b><span class="sub-g">${esc(m.pin || "")} · DAM ${esc(m.dam)} serie ${m.s}</span>` +
+        `<span class="etq ${ctlClase((D.dams[m.dam] || {}).ctl)}">${esc(ctlEstado((D.dams[m.dam] || {}).ctl))}</span>` + resumenCasos(rs); } },
+  { id: "dam", t: "DAM", clave: r => r.dams[0] || "", orden: ordenCasos, texto: k => k || "Sin DAM enlazada",
+    cabecera: (k, rs) => k ? cabDam(k, resumenCasos(rs)) : `<b class="g">Sin DAM enlazada</b><span class="sub-g">falta el XML o la serie es anterior al periodo</span>` + resumenCasos(rs) },
+  { id: "mercancia", t: "Tipo de mercancía", clave: r => r.merc || "Otros", orden: (a, b) => MERC.indexOf(a.k) - MERC.indexOf(b.k),
+    cabecera: (k, rs) => `<b class="g">${esc(k)}</b><span class="sub-g">${esc([...new Set(rs.map(r => r.cat))].join(", "))}</span>` + resumenCasos(rs) },
+  { id: "tipo", t: "Tipo de máquina", clave: r => r.cat, orden: ordenCasos, cabecera: (k, rs) => `<b class="g">${esc(k)}</b><span class="sub-g">${esc(rs[0].merc || "")}</span>` + resumenCasos(rs) },
+  { id: "departamento", t: "Departamento del comprador", clave: r => (D.clientes[r.ruc] || {}).dep || "Sin dato", orden: ordenCasos,
+    cabecera: (k, rs) => `<b class="g">${esc(k)}</b><span class="sub-g">${esc([...new Set(rs.map(r => (D.clientes[r.ruc] || {}).zona).filter(Boolean))].map(zonaT).join(", "))}</span>` +
+      `<span class="sub-g">${new Set(rs.map(r => r.ruc)).size} ${new Set(rs.map(r => r.ruc)).size === 1 ? "comprador" : "compradores"}</span>` + resumenCasos(rs) },
+  { id: "traslado", t: "Traslado", clave: claveTras, orden: (a, b) => (D.traslados[+a.k] || {}).f > (D.traslados[+b.k] || {}).f ? 1 : -1,
+    texto: k => k === "" ? "Sin traslado" : D.traslados[+k].exp, cabecera: cabTraslado },
+  { id: "estado", t: "Estado", clave: r => r.estado, orden: ordenCasos, cabecera: (k, rs) => `<b class="g">${esc(k)}</b>` + resumenCasos(rs) },
+];
+
 function fichaCaso(c) {
   const v = IDX.venta.get(c.cpe) || {}, cl = D.clientes[c.ruc];
   const f = el("div", { class: "ficha" });
@@ -925,7 +1042,8 @@ function vistaAlertas(sec) {
   t.append(leyendaMarcas(["igv", "ztc", "zte", "ext", "pub", "pn", "rev", "anul", "xml", "traza", "usada", "pend", "dnc", "ncn", "tras", "trasp", "exp"]));
   t.append(el("p", { class: "nota" }, "En comprobantes con IGV el monto es el valor de venta más el 18 % calculado, sin redondear; pase el cursor sobre la etiqueta IGV para ver el valor de venta."));
   const textoMot = k => (D.meta.texto || {})[k] || k;
-  tablaAlertas = tabla(t, { ph: "Buscar factura, comprador, RUC, serie…", porPag: 25, archivo: "casos.csv", filas: D.casos, detalle: fichaCaso,
+  t.append(el("p", { class: "nota" }, "Use «Agrupar por» para ver los casos por comprador, máquina, DAM, tipo de mercancía, departamento o traslado; cada grupo se abre con un clic. La elección se recuerda en este navegador."));
+  tablaAlertas = tabla(t, { id: "casos", grupos: GRUPOS_CASOS, ph: "Buscar factura, comprador, RUC, serie…", porPag: 25, archivo: "casos.csv", filas: D.casos, detalle: fichaCaso,
     extraBusqueda: r => (r.series || []).map(s => s.serie + " " + s.motor).join(" ") + " " + r.maqs.join(" ") + " " + r.dams.join(" "),
     cols: [{ k: "nivel", t: "Nivel", h: r => NIVEL(r.nivel), v: r => ORDEN_N[r.nivel], csv: r => r.nivel },
       { t: "Indicadores", v: r => marcasT(r.mk).join("; "), h: r => marcasH(r.mk) },
@@ -977,7 +1095,20 @@ function vistaMaquinas(sec) {
   const t = tarjeta(); sec.append(t);
   t.append(leyendaMarcas(["usada", "dep", "exp", "tras", "pend", "dnc", "ncn", "venta"]));
   const estado = m => ctlEstado((D.dams[m.dam] || {}).ctl);
-  tablaMaquinas = tabla(t, { ph: "Buscar PIN, motor, DAM, modelo…", porPag: 25, archivo: "maquinas.csv", filas: D.maquinas, detalle: fichaMaquina,
+  const resumenMaq = rs => `<span class="der"><span class="etq">${rs.length} ${rs.length === 1 ? "máquina" : "máquinas"}</span><span class="sub-g">CIF USD ${f0(rs.reduce((a, r) => a + (r.cif || 0), 0))}</span>` +
+    (rs.some(r => r.ventas.length) ? `<span class="sub-g">${rs.filter(r => r.ventas.length).length} con venta enlazada</span>` : "") + `</span>`;
+  const prioDam = k => { const c = (D.dams[k] || {}).ctl; return !c ? 3 : c.reg === "Pendiente de regularización" ? 0 : c.res === "No conforme" ? 1 : 2; };
+  const GRUPOS_MAQ = [
+    { id: "dam", t: "DAM", clave: r => r.dam, orden: (a, b) => prioDam(a.k) - prioDam(b.k) || ((D.dams[b.k] || {}).f || "").localeCompare((D.dams[a.k] || {}).f || ""),
+      cabecera: (k, rs) => cabDam(k, resumenMaq(rs)) },
+    { id: "mercancia", t: "Tipo de mercancía", clave: r => r.merc || "Otros", orden: (a, b) => MERC.indexOf(a.k) - MERC.indexOf(b.k),
+      cabecera: (k, rs) => `<b class="g">${esc(k)}</b>` + resumenMaq(rs) },
+    { id: "tipo", t: "Tipo de máquina", clave: r => r.cat, cabecera: (k, rs) => `<b class="g">${esc(k)}</b><span class="sub-g">${esc(rs[0].merc || "")}</span>` + resumenMaq(rs) },
+    { id: "destino", t: "Destino", clave: r => r.dest, texto: k => destT(k), cabecera: (k, rs) => `<b class="g">${esc(destT(k))}</b>` + resumenMaq(rs) },
+    { id: "control", t: "Control de la DAM", clave: estado, cabecera: (k, rs) => `<b class="g">${esc(k)}</b><span class="sub-g">${new Set(rs.map(r => r.dam)).size} DAM</span>` + resumenMaq(rs) },
+  ];
+  t.append(el("p", { class: "nota" }, "Agrupe por DAM para ver el control de la IA una sola vez por declaración (tributos, NCN, regularización y traslados) con todas sus máquinas debajo."));
+  tablaMaquinas = tabla(t, { id: "maquinas", grupos: GRUPOS_MAQ, ph: "Buscar PIN, motor, DAM, modelo…", porPag: 25, archivo: "maquinas.csv", filas: D.maquinas, detalle: fichaMaquina,
     cols: [{ t: "Indicadores", v: r => marcasT(r.mk).join("; "), h: r => marcasH(r.mk) },
       { t: "Máquina", v: r => `${r.cat} ${r.marca || ""} ${r.modelo || ""}`.trim(), largo: 1 },
       { k: "pin", t: "PIN / serie", c: 1 }, { k: "anio", t: "Año", c: 1 },
@@ -1010,7 +1141,15 @@ function vistaClientes(sec) {
     c.rev ? "rev" : "", c.nuevo ? "nuevo" : "", c.no_habido ? "nohab" : "", c.n_igv ? "igv" : ""].filter(Boolean);
   const filas = Object.values(D.clientes).map(c => ({ ...c, mk: mk(c) }));
   t.append(leyendaMarcas(["ztc", "zte", "ext", "pub", "pn", "rev", "nuevo", "nohab", "igv"]));
-  tablaClientes = tabla(t, { ph: "Buscar comprador, RUC, actividad…", porPag: 25, archivo: "compradores.csv", filas, detalle: fichaCliente,
+  const resumenCli = rs => `<span class="der"><span class="etq">${rs.length} ${rs.length === 1 ? "comprador" : "compradores"}</span><span class="sub-g">${f0(rs.reduce((a, r) => a + r.n, 0))} ventas</span>` +
+    (rs.some(r => r.alta) ? `${NIVEL("Alta")} ${rs.reduce((a, r) => a + r.alta, 0)}` : "") + (rs.some(r => r.media) ? ` ${NIVEL("Media")} ${rs.reduce((a, r) => a + r.media, 0)}` : "") + `</span>`;
+  const ordenCli = (a, b) => b.rs.reduce((x, r) => x + r.alta, 0) - a.rs.reduce((x, r) => x + r.alta, 0) || b.rs.length - a.rs.length;
+  const GRUPOS_CLI = [
+    { id: "zona", t: "Zona", clave: r => r.zona, orden: ordenCli, texto: zonaT, cabecera: (k, rs) => `<b class="g">${zonaH(k)}</b>` + resumenCli(rs) },
+    { id: "departamento", t: "Departamento", clave: r => r.dep || "Sin dato", orden: ordenCli, cabecera: (k, rs) => `<b class="g">${esc(k)}</b>` + resumenCli(rs) },
+    { id: "tipo", t: "Tipo de comprador", clave: r => r.tipo, orden: ordenCli, cabecera: (k, rs) => `<b class="g">${esc(k)}</b>` + resumenCli(rs) },
+  ];
+  tablaClientes = tabla(t, { id: "compradores", grupos: GRUPOS_CLI, ph: "Buscar comprador, RUC, actividad…", porPag: 25, archivo: "compradores.csv", filas, detalle: fichaCliente,
     orden: { i: 6, d: -1 },
     cols: [{ t: "Indicadores", v: r => marcasT(r.mk).join("; "), h: r => marcasH(r.mk) },
       { k: "nombre", t: "Comprador", largo: 1 }, { k: "ruc", t: "RUC / doc.", c: 1 },

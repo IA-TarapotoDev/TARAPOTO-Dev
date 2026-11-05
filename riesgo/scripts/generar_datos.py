@@ -63,6 +63,10 @@ CAT_MERC = {         # tipo de mercancía del cuaderno de traslados → tipos de
     "MAQUINARIA AGRICOLA": {"Tractor agrícola", "Implemento agrícola"},
     "MOTORES DIVERSOS": {"Motor diésel", "Motor marino", "Grupo electrógeno"},
 }
+MERCANCIA = {cat: m for m, cats in (("Maquinaria amarilla", ("Excavadora", "Retroexcavadora", "Cargador frontal", "Minicargador", "Motoniveladora",
+                                                             "Rodillo compactador", "Tractor de orugas", "Martillo hidráulico")),
+                                     ("Maquinaria agrícola", ("Tractor agrícola", "Implemento agrícola")),
+                                     ("Motores y grupos electrógenos", ("Motor diésel", "Motor marino", "Grupo electrógeno"))) for cat in cats}
 PUBLICO = re.compile(r"MUNICIPALIDAD|GOBIERNO REGIONAL|MINISTERIO|PROGRAMA |PROYECTO ESPECIAL|"
                      r"GERENCIA (SUB)?REGIONAL|GERENCIA TERRITORIAL|UNIVERSIDAD NACIONAL|EJERCITO|"
                      r"MARINA DE GUERRA|FUERZA AEREA|INSTITUTO NACIONAL|SERVICIO NACIONAL|"
@@ -500,8 +504,9 @@ def main(a):
     dec = m.groupby("dam").agg(f=("f", "first"), ad=("COD_ADUANA", "first"), dest=("dest", "first"), canal=("CANAL", "first"),
                                series=("NUM_SECSERIE", "size"), cif=("MTO_VALORADU", "sum"), nmaq=("maq", "sum"),
                                conv=("conv", lambda s: ", ".join(sorted(set(s))))).reset_index()
-    mq = datos_maquina(m[m.maq]).sort_values(["f", "dam", "NUM_SECSERIE"])
+    mq = datos_maquina(m[m.maq])
     mq["s"] = mq.NUM_SECSERIE.astype(int)
+    mq = mq.sort_values(["f", "dam", "s"])
     mq["key"] = mq.dam + "#" + mq.s.astype(str)
     mq["k8"] = mq.id.map(k8)
     dep_k8 = {}
@@ -690,6 +695,7 @@ def main(a):
         d = domicilio(c.doc, c.tcli)
         dias_insc = (c.primera - pd.Timestamp(d["finsc"])).days if d["finsc"] else None
         cli[c.doc] = {"ruc": c.doc, "nombre": c.nombre, "tipo": c.tcli, **{k: d.get(k, "") for k in ("zona", "lugar", "direccion", "eruc", "condicion", "actividad", "finsc")},
+                      "dep": d.get("departamento", "") or {"Extranjero": "Extranjero"}.get(d["zona"], "Sin dato"),
                       "rev": bool(REVENDE.search(norm(d["actividad"]))), "dias_insc": dias_insc,
                       "nuevo": dias_insc is not None and 0 <= dias_insc <= 180,
                       "no_habido": bool((d["eruc"] and d["eruc"] != "ACTIVO") or (d["condicion"] and d["condicion"] != "HABIDO")),
@@ -806,7 +812,7 @@ def main(a):
             nivel, estado = "Baja", "Coherente: traslado y exportación" if t_prob else "Coherente: exportada" if "exp" in mot else "Seguimiento"
         casos.append({"cpe": v.cpe, "f": fstr(v.f), "ruc": v.doc, "cli": v.nombre, "nivel": nivel, "estado": estado, "mot": mot,
                       "motivo": " · ".join(TEXTO[k] for k in mot), "mon": v.moneda, "vv": r2(v.vv), "igv": r2(v.igv), "tot": r2(v.total),
-                      "desc": v.desc, "cat": v["cat"], "maqs": maqs, "dams": dests, "series": seriales.get(v.cpe, []),
+                      "desc": v.desc, "cat": v["cat"], "merc": MERCANCIA.get(v["cat"], "Otros"), "maqs": maqs, "dams": dests, "series": seriales.get(v.cpe, []),
                       "cadena": ch, "anticipos": anticipos.get(v.cpe, []), "tras": t_conf, "tras_prob": t_prob, "exp": ex["dam"] if ex else "", "entrega": ent, "xml": xml})
 
     # ---------- Indicadores de cada máquina y de cada caso ----------
@@ -823,7 +829,7 @@ def main(a):
                               ("dnc", bool(c and c["res"] == "No conforme")), ("ncn", bool(c and c["ncn"])),
                               ("venta", s.key in maq_venta)) if ok]
         maquinas.append({"k": s.key, "dam": s.dam, "s": int(s.s), "f": fstr(s.f), "dest": s.dest, "canal": s.CANAL, "conv": s.conv,
-                         "cat": s["cat"], "marca": s.marca, "modelo": s.modelo, "anio": s.anio, "pin": s.id, "motor": s.motor,
+                         "cat": s["cat"], "merc": MERCANCIA.get(s["cat"], "Otros"), "marca": s.marca, "modelo": s.modelo, "anio": s.anio, "pin": s.id, "motor": s.motor,
                          "usada": bool(s.usada), "horas": s.horas, "cant": r2(s.CNT_COMER), "cif": r2(s.MTO_VALORADU), "hs": s.NUM_PARTNANDI,
                          "dep": dep_k8.get(s.k8), "exp": {"dam": ex["dam"], "f": ex["f"], "ad": ex["ad"]} if ex else None,
                          "tras": t_, "ventas": maq_venta.get(s.key, []), "mk": mk})

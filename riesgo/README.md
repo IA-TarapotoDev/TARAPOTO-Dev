@@ -15,9 +15,11 @@ La unidad de seguimiento es la **máquina** (DAM y serie). Cada venta de maquina
 | Pestaña | Qué muestra |
 |---|---|
 | Resumen | Casos por nivel, máquinas importadas, ventas por zona del comprador, control de la IA, **patrones**, comprobantes por descargar y **calidad de los datos** (confiable, con límites, descartado) |
-| Alertas | Lista de casos con íconos, filtros y CSV. Cada fila se abre en una ficha con «Ver factura» (cuando hay XML) y los datos para buscar el comprobante en el portal del emisor. Arriba, la lista de comprobantes por descargar |
-| Máquinas | Traslados de maquinaria del periodo con su venta probable, y el registro de máquinas importadas con el control de su DAM |
-| Clientes | Compradores de maquinaria: domicilio fiscal, actividad, máquinas compradas y casos |
+| Alertas | Lista de casos con íconos, filtros y CSV, que se puede **agrupar** por comprador, máquina (serie), DAM, tipo de mercancía, tipo de máquina, departamento del comprador, traslado o estado. Cada fila se abre en una ficha con «Ver factura» (cuando hay XML) y los datos para buscar el comprobante en el portal del emisor. Arriba, la lista de comprobantes por descargar |
+| Máquinas | Traslados de maquinaria del periodo con su venta probable, y el registro de máquinas importadas. Agrupado por DAM, la cabecera de cada grupo muestra el control de la IA una sola vez (regularización, tributos, NCN y traslados) |
+| Clientes | Compradores de maquinaria: domicilio fiscal, actividad, máquinas compradas y casos; se agrupan por zona, departamento o tipo de comprador |
+
+La agrupación elegida en cada pestaña se recuerda en el navegador de quien la usa.
 
 ### Control de la DAM (cuaderno de la IA)
 
