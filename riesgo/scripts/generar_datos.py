@@ -34,6 +34,7 @@ import sys
 import unicodedata
 import zipfile
 from datetime import date
+from collections import Counter
 from itertools import combinations
 
 import pandas as pd
@@ -315,6 +316,9 @@ def leer_facturas_xml(rutas):
                                              "mot": t("cac:DiscrepancyResponse/cbc:ResponseCode"),
                                              "mot_t": t("cac:DiscrepancyResponse/cbc:Description")},
         }
+        extra = {x.get("name"): (x.text or "").strip() for x in raiz.iter() if x.tag.split("}")[-1] == "Text" and x.get("name")}
+        docs[cpe]["cliente"]["lugar_fac"] = extra.get("DisProDepCliente", "")
+        docs[cpe]["emisor"]["sede"] = extra.get("DatosOfic", "")
     items = pd.DataFrame(filas, columns=["cpe", "f", "mon", "texto", "serie", "motor", "modelo", "marca", "anio", "horas", "afect", "valor"])
     return items, docs, errores, repetidos
 
@@ -723,6 +727,20 @@ def main(a):
             if c.get("ubicacion_entrega"):
                 entrega[c.cpe] = {"lugar": c.ubicacion_entrega, "dir": c.get("direccion_entrega", ""), "zona": ub.zona if ub is not None else "Sin dato",
                                   "fuente": c.get("fuente", ""), "nota": c.get("nota", "")}
+    buscar_u = ubicador(a.ubigeos)
+    lugar_fac = {}
+    for cpe, d_ in facturas.items():
+        p_ = [x.strip() for x in d_["cliente"].get("lugar_fac", "").split("-")]
+        if len(p_) >= 3 and all(p_[-2:]) and p_[0]:
+            dist = "-".join(p_[:-2])
+            ub = buscar_u(p_[-1], p_[-2], dist)
+            lugar_fac[cpe] = {"lugar": f"{dist}, {p_[-2]}, {p_[-1]}", "zona": ub.zona if ub is not None else "Sin dato"}
+    sedes = {}
+    for d_ in facturas.values():
+        if d_["emisor"].get("sede"):
+            sedes.setdefault(d_["id"].split("-")[0], Counter())[d_["emisor"]["sede"]] += 1
+    sede_de = {k: v.most_common(1)[0][0] for k, v in sedes.items()}
+    lugar_sede = lambda x: (", ".join(y.strip().title() for y in x.split(" - ")[-2:]) if " - " in x else x).replace(" De ", " de ")
     venta_maq, maq_venta = {}, {}
     for cpe, lista in seriales.items():
         for s in lista:
@@ -790,16 +808,19 @@ def main(a):
              "entrega": "Entregada fuera de la ZTE (según la factura)", "nodom": "Vendida a no domiciliado sin DAM de exportación",
              "exp": "Vendida a no domiciliado, con DAM de exportación", "nuevo": "Comprador con RUC reciente",
              "no_habido": "Comprador no habido o con RUC no activo", "anul_tras": "Anulación o reemisión el día de un traslado de maquinaria",
+             "dom_ztc": "Al comprar figuraba en la ZTE; hoy está domiciliado fuera",
              "ncn_post": "Tributos devueltos con NCN después de la venta", "rf_post": "Reconocimiento físico conforme después de la venta"}
     casos = []
     for _, v in vend.sort_values("f").iterrows():
         c_ = cli.get(v.doc, {})
-        z = c_.get("zona", "Sin dato")
+        z_hoy = c_.get("zona", "Sin dato")
+        lug = lugar_fac.get(v.cpe)
+        z = lug["zona"] if lug and lug["zona"] in ("ZTE", "ZTC") else z_hoy
         ch = cadena_de(v.cpe)
         ent = entrega.get(v.cpe)
         ex = exp_venta.get(v.cpe)
         mot = [k for k, ok in (
-            ("ztc", z == "ZTC"), ("igv", v.igv > 0), ("cambio", any(x["cambio"] == "con→sin" for x in ch)),
+            ("ztc", z == "ZTC"), ("dom_ztc", z == "ZTE" and z_hoy == "ZTC"), ("igv", v.igv > 0), ("cambio", any(x["cambio"] == "con→sin" for x in ch)),
             ("entrega", bool(ent and ent["zona"] == "ZTC")), ("nodom", v.tdoc == "0" and not ex), ("exp", v.tdoc == "0" and bool(ex)),
             ("nuevo", bool(c_.get("nuevo")) and (v.f - pd.Timestamp(c_["finsc"])).days <= 180),
             ("no_habido", bool(c_.get("no_habido"))), ("anul_tras", any(x["tras"] for x in ch))) if ok]
@@ -848,12 +869,15 @@ def main(a):
         elif salida:
             nivel, estado = "Alta", ("Serie fuera de las DAM del periodo" if v.cpe in seriales else
                                      "El XML no indica la serie de la máquina" if v.cpe in facturas else "Por confirmar: falta el XML")
-        elif {"nuevo", "no_habido", "anul_tras"} & set(mot):
-            nivel, estado = "Media", "Revisar al comprador" if not ch else "Revisar la cadena de comprobantes"
+        elif {"nuevo", "no_habido", "anul_tras", "dom_ztc"} & set(mot):
+            nivel, estado = "Media", ("Domicilio actual fuera de la ZTE: ubicar la máquina" if "dom_ztc" in mot else
+                                      "Revisar al comprador" if not ch else "Revisar la cadena de comprobantes")
         else:
             nivel, estado = "Baja", "Coherente: traslado y exportación" if t_prob else "Coherente: exportada" if "exp" in mot else "Seguimiento"
         casos.append({"cpe": v.cpe, "f": fstr(v.f), "ruc": v.doc, "cli": v.nombre, "nivel": nivel, "estado": estado, "mot": mot,
                       "motivo": " · ".join(TEXTO[k] for k in mot), "mon": v.moneda, "vv": r2(v.vv), "igv": r2(v.igv), "tot": r2(v.total),
+                      "zona": z, "zona_hoy": z_hoy, "lugar_fac": lug["lugar"] if lug else "", "zona_fac": lug["zona"] if lug else "",
+                      "sede": lugar_sede((facturas.get(v.cpe) or {}).get("emisor", {}).get("sede") or sede_de.get(v.serie, "")),
                       "desc": v.desc, "cat": v["cat"], "merc": MERCANCIA.get(v["cat"], "Otros"), "maqs": maqs, "dams": dests, "series": seriales.get(v.cpe, []),
                       "cadena": ch, "anticipos": anticipos.get(v.cpe, []), "tras": t_conf, "transito": t_trans, "post": post if nivel == "Alta" else [], "tras_prob": t_prob, "exp": ex["dam"] if ex else "", "entrega": ent, "xml": xml})
 
@@ -880,7 +904,8 @@ def main(a):
         mm = [maq_por_k[k] for k in c["maqs"]]
         cc = [ctl_cache.get(x["dam"]) for x in mm]
         c["mk"] = [k for k, ok in (
-            ("igv", (c["igv"] or 0) > 0), ("ztc", cl_.get("zona") == "ZTC"), ("zte", cl_.get("zona") == "ZTE"), ("ext", cl_.get("zona") == "Extranjero"),
+            ("igv", (c["igv"] or 0) > 0), ("ztc", c["zona"] == "ZTC"), ("zte", c["zona"] == "ZTE"), ("ext", c["zona"] == "Extranjero"),
+            ("mudo", "dom_ztc" in c["mot"]),
             ("pub", cl_.get("tipo") == "Entidad pública"), ("pn", cl_.get("tipo") == "Persona natural"), ("rev", bool(cl_.get("rev"))),
             ("anul", bool(c["cadena"])), ("xml", c["xml"]), ("traza", bool(mm)), ("usada", any(x["usada"] for x in mm)),
             ("pend", any(x and x["reg"] == "Pendiente de regularización" for x in cc)), ("dnc", any(x and x["res"] == "No conforme" for x in cc)),
@@ -896,6 +921,9 @@ def main(a):
             acc.append(f"Buscar la DAM por la serie {s0.get('serie') or 's/d'} y el motor {s0.get('motor') or 's/d'}: no está entre las DAM del importador "
                        f"del periodo (importada antes o comprada en el país)."
                        + (f" Compárela con la DAM {', '.join(t0['dams'])} del traslado {t0['exp']}." if t0 else ""))
+        if "dom_ztc" in c["mot"]:
+            acc.append(f"Al comprar figuraba en {c['lugar_fac']} (según la factura) y hoy su domicilio fiscal está en {cl_.get('lugar') or 'la ZTC'}: "
+                       "ubicar la máquina (visita, guías de remisión o información de terceros).")
         if c["estado"].startswith("Importada sin beneficio"):
             acc.append(f"La máquina se importó sin beneficio (DAM {', '.join(x['dam'] for x in mm)}): no hay tributos aduaneros por regularizar. "
                        "La venta sin IGV a un comprador de fuera de la ZTE es materia de tributos internos.")
@@ -973,10 +1001,12 @@ def main(a):
                                         + ". Revise cómo se verificó cada máquina y evalúe dejar sin efecto la conclusión, la liberación de la garantía o la NCN.",
                     "filtro": {"mk": "post"}})
     zt = vend[vend.doc.map(lambda d: zona_doc.get(d, "")) == "ZTC"]
+    n_mudo = sum(1 for c in casos if "dom_ztc" in c["mot"])
     if len(zt):
         top = zt.groupby("doc").size().sort_values(ascending=False)
         pat.append({"id": "ztc", "nivel": "Alta", "t": "Ventas de maquinaria a compradores de fuera de la ZTE",
-                    "txt": f"{len(zt)} ventas de maquinaria a {zt.doc.nunique()} compradores con domicilio fiscal en la ZTC; {int((zt.igv == 0).sum())} sin IGV "
+                    "txt": f"{len(zt)} ventas de maquinaria a {zt.doc.nunique()} compradores con domicilio fiscal actual en la ZTC"
+                           + (f" ({n_mudo} figuraban en la ZTE en su factura)" if n_mudo else "") + f"; {int((zt.igv == 0).sum())} sin IGV "
                            f"(venta exonerada a quien no está en la zona) y {int((zt.igv > 0).sum())} con IGV. Concentración: "
                            + "; ".join(f"{cli[d]['nombre']} ({n})" for d, n in top.head(4).items()) + ".",
                     "filtro": {"mot": "ztc"}})
@@ -1016,6 +1046,18 @@ def main(a):
                            + (f"; {len(sin_igv)} se vendieron sin IGV a compradores de fuera de la ZTE ("
                               + ", ".join(sorted({c['cli'] for c in sin_igv})) + "): revisar el IGV de esas ventas (tributos internos)." if sin_igv else "."),
                     "filtro": {"estado": sin_igv[0]["estado"] if sin_igv else con_igv[0]["estado"]}})
+    mudos = [c for c in casos if "dom_ztc" in c["mot"]]
+    if mudos:
+        por_cli = {}
+        for c in mudos:
+            por_cli.setdefault(c["ruc"], []).append(c)
+        pat.append({"id": "mudos", "nivel": "Media", "t": "Compradores que figuraban en la ZTE al comprar y hoy están fuera",
+                    "items": [f"{cs[0]['cli'][:40].strip()}: {pl(len(cs), 'venta', 'ventas')} ({', '.join(c['cpe'][3:] for c in cs)}) con domicilio en "
+                              f"{', '.join(sorted({c['lugar_fac'] for c in cs}))} según la factura; hoy en {cli.get(k, {}).get('lugar', 'la ZTC')}"
+                              + (f"; RUC inscrito el {fecha_txt(cli[k]['finsc'])}" if cli.get(k, {}).get("finsc", "") >= cs[0]["f"][:4] else "")
+                              for k, cs in por_cli.items()],
+                    "txt": "El domicilio del padrón es el de hoy; el de la factura, el del momento de la venta. Si el comprador se mudó, conviene ubicar la máquina.",
+                    "filtro": {"mk": "mudo"}})
     exps = [c for c in casos if "exp" in c["mot"]]
     if exps or any("nodom" in c["mot"] for c in casos):
         pat.append({"id": "exp", "nivel": "Info", "t": "Ventas al exterior: flujo coherente",
@@ -1088,6 +1130,8 @@ def main(a):
 
     # ---------- Calidad de los datos ----------
     ftxt = lambda x: fecha_txt(fstr(x))
+    n_dif = sum(1 for k, l in lugar_fac.items() if l["zona"] in ("ZTE", "ZTC") and cli.get((facturas[k]["cliente"]["doc"]), {}).get("zona") in ("ZTE", "ZTC")
+                and l["zona"] != cli[facturas[k]["cliente"]["doc"]]["zona"])
     con_dom = sum(1 for c in cli.values() if c["zona"] in ("ZTE", "ZTC"))
     n_menor = int(sum(1 for _, v in vend.iterrows() if v.vv < MENOR.get(v.moneda, 0)))
     pn_sd = sum(c["n"] for c in cli.values() if c["zona"] == "Sin dato" and c["tipo"] == "Persona natural")
@@ -1115,7 +1159,8 @@ def main(a):
             {"t": "DAM de importación", "d": f"{dec.dam.nunique():,} DAM y {len(m):,} series del régimen 10 ({ftxt(m.f.min())} a {ftxt(m.f.max())}); "
                                              f"{len(maquinas):,} series de maquinaria. Depósito ({dep70.dam.nunique()} DAM) y exportación ({exp40.dam.nunique()} DAM) solo para la historia de cada máquina."},
             {"t": "Comprobantes emitidos", "d": f"{len(e):,} CPE y {len(dl):,} ítems de detalle ({ftxt(e.f.min())} a {ftxt(e.f.max())}); {len(vm):,} de la serie de maquinaria."},
-        ] + ([{"t": "XML de los comprobantes", "d": f"{len(facturas)} comprobantes leídos (UBL 2.1): {pl(sum(d['tipo'] == '01' for d in facturas.values()), 'factura', 'facturas')}"
+        ] + ([{"t": "Sede emisora", "d": "Según los XML, cada serie corresponde a una sede: " + "; ".join(f"{k} {lugar_sede(v)}" for k, v in sorted(sede_de.items())) + "."}]
+             if sede_de else []) + ([{"t": "XML de los comprobantes", "d": f"{len(facturas)} comprobantes leídos (UBL 2.1): {pl(sum(d['tipo'] == '01' for d in facturas.values()), 'factura', 'facturas')}"
                                                        f" y {pl(sum(d['tipo'] == '07' for d in facturas.values()), 'nota de crédito', 'notas de crédito')}"
                                                        + (f"; {len(xml_rep)} archivos repetidos se leyeron una sola vez" if xml_rep else "")
                                                        + f". {len(venta_maq)} ventas enlazadas con su DAM por la serie."}] if facturas else [])
@@ -1124,7 +1169,8 @@ def main(a):
           + ([{"t": "Domicilio fiscal y actividad", "d": f"Padrón reducido del RUC{' al ' + fecha_txt(str(dom.fecha_padron.iloc[0])) if dom is not None and 'fecha_padron' in dom and len(dom) else ''} "
                                                           f"y consulta múltiple de RUC: {con_dom} de {len(cli)} compradores de maquinaria ubicados en la ZTE o la ZTC."}] if dom is not None else []),
         "limites": [
-            {"t": "Domicilio a la fecha del padrón", "d": "Es el vigente hoy: puede diferir del que tenía el comprador al comprar y del lugar donde opera la máquina."},
+            {"t": "Domicilio a la fecha del padrón", "d": "Es el vigente hoy: puede diferir del que tenía el comprador al comprar y del lugar donde opera la máquina. "
+                                                            f"Cuando hay XML se usa el distrito impreso en la factura: en {n_dif} de {len(lugar_fac)} facturas está en otra zona que el domicilio actual."},
             {"t": "Personas naturales sin domicilio", "d": f"La consulta pública no muestra su domicilio: {pn_sd} ventas de maquinaria a personas naturales quedan sin zona."},
             {"t": "Venta y máquina sin XML", "d": "Sin el XML solo se puede proponer un traslado probable por tipo de máquina y fecha; el enlace firme es por número de serie."},
         ] + ([{"t": "Factura que anula cada nota de crédito", "d": f"{len(nc_inf)} de {len(ncs_anula)} notas de crédito de anulación enlazadas con su factura"
@@ -1140,8 +1186,7 @@ def main(a):
           + ([{"t": "Registros de traslado a revisar", "d": ". ".join(obs_tras) + "."}] if obs_tras else [])
           + ([{"t": "XML que no se pudieron leer", "d": f"{len(xml_err)}: {', '.join(xml_err[:10])}{' y otros' if len(xml_err) > 10 else ''}. Vuelva a descargarlos."}] if xml_err else []),
         "descartado": [
-            {"t": "Establecimiento emisor inferido por la serie", "d": "Los XML muestran que una misma serie se emite desde varios establecimientos"
-                + (f" ({'; '.join(k + ': ' + ', '.join(v) for k, v in multi_est.items())})" if multi_est else "") + ". Se retiró la alerta de venta a otra circunscripción."},
+            {"t": "Sede inferida por el domicilio de los clientes", "d": "Se reemplazó por la sede que figura en los XML; se retiró la alerta de venta a otra circunscripción."},
             {"t": "Valoración y clasificación arancelaria", "d": "Valores unitarios atípicos y números de parte en varias subpartidas: no apuntan a la salida de la zona y daban muchos falsos positivos."},
             {"t": "Repuestos y servicios", "d": f"Con IGV ({int(((e.tipo == '01') & (e.estado == '0') & (e.igv > 0) & e.linea.isin(['Repuestos', 'Servicio técnico'])).sum()):,} facturas) o a no domiciliados: montos bajos y operación normal."},
             {"t": "Volumen de compras", "d": "Un cliente con 3 o más máquinas no es un indicio por sí solo; el número de máquinas queda como dato en Clientes."},
