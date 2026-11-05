@@ -734,7 +734,8 @@ def main(a):
         if len(p_) >= 3 and all(p_[-2:]) and p_[0]:
             dist = "-".join(p_[:-2])
             ub = buscar_u(p_[-1], p_[-2], dist)
-            lugar_fac[cpe] = {"lugar": f"{dist}, {p_[-2]}, {p_[-1]}", "zona": ub.zona if ub is not None else "Sin dato"}
+            lugar_fac[cpe] = {"lugar": f"{dist}, {p_[-2]}, {p_[-1]}" if ub is not None else ", ".join(x.strip(" .") for x in p_ if x.strip(" .")),
+                              "zona": ub.zona if ub is not None else "Sin dato"}
     sedes = {}
     for d_ in facturas.values():
         if d_["emisor"].get("sede"):
@@ -873,7 +874,8 @@ def main(a):
             nivel, estado = "Media", ("Domicilio actual fuera de la ZTE: ubicar la máquina" if "dom_ztc" in mot else
                                       "Revisar al comprador" if not ch else "Revisar la cadena de comprobantes")
         else:
-            nivel, estado = "Baja", "Coherente: traslado y exportación" if t_prob else "Coherente: exportada" if "exp" in mot else "Seguimiento"
+            nivel, estado = "Baja", ("Coherente: traslado y exportación, confirmados por serie" if t_conf and "exp" in mot else
+                                     "Coherente: traslado y exportación" if t_prob else "Coherente: exportada" if "exp" in mot else "Seguimiento")
         casos.append({"cpe": v.cpe, "f": fstr(v.f), "ruc": v.doc, "cli": v.nombre, "nivel": nivel, "estado": estado, "mot": mot,
                       "motivo": " · ".join(TEXTO[k] for k in mot), "mon": v.moneda, "vv": r2(v.vv), "igv": r2(v.igv), "tot": r2(v.total),
                       "zona": z, "zona_hoy": z_hoy, "lugar_fac": lug["lugar"] if lug else "", "zona_fac": lug["zona"] if lug else "",
@@ -1062,7 +1064,9 @@ def main(a):
     if exps or any("nodom" in c["mot"] for c in casos):
         pat.append({"id": "exp", "nivel": "Info", "t": "Ventas al exterior: flujo coherente",
                     "txt": f"{len(exps)} ventas de maquinaria a no domiciliados tienen DAM de exportación en los 90 días siguientes"
-                           + (f"; {sum(1 for c in exps if c['tras_prob'])} además con traslado a la ZTC autorizado días antes" if exps else "")
+                           + (f"; {sum(1 for c in exps if c['tras_prob'] or c['tras'])} además con traslado a la ZTC autorizado días antes"
+                              + (f" ({sum(1 for c in exps if c['tras'])} confirmados por la serie de la factura)" if any(c['tras'] for c in exps) else "")
+                              if exps else "")
                            + (f". Sin exportación: {sum('nodom' in c['mot'] for c in casos)}." if any('nodom' in c['mot'] for c in casos) else ". Ninguna venta a no domiciliados quedó sin exportación."),
                     "filtro": {"mot": "exp"}})
     coinc = [c for c in cadenas if c["tras"]]
