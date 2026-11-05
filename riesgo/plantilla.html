@@ -865,14 +865,14 @@ const MARCAS = {
   exp: { t: "Con DAM de exportación", ic: "salida", c: "var(--ok)" },
   dok: { t: "Diligencia en destino conforme (control IA)", ic: "lupa", c: "var(--ok)" },
   dnc: { t: "Diligencia en destino no conforme (control IA)", ic: "lupax", c: "var(--critico)" },
-  ncn: { t: "Garantía devuelta con NCN (control IA)", ic: "devol", c: "var(--serio)" },
+  ncn: { t: "Tributos devueltos con NCN (control IA)", ic: "devol", c: "var(--serio)" },
   tras: { t: "Con traslado ZTE→ZTC autorizado (control IA)", ic: "camion", c: "var(--ok)" },
   dpend: { t: "Diligencia en destino pendiente con plazo vencido (control IA)", ic: "reloj", c: "var(--critico)" },
 };
 const marcasH = mk => `<span class="mks">${(mk || []).map(k => MARCAS[k] ? `<span class="mk" title="${esc(MARCAS[k].t)}" aria-label="${esc(MARCAS[k].t)}" style="color:${MARCAS[k].c}">${ic(MARCAS[k].ic)}</span>` : "").join("")}</span>`;
 const ctlMk = c => !c ? [] : [(c.dilig || "").toUpperCase().startsWith("NO CONFORME") ? "dnc" : (c.dilig || "").toUpperCase().startsWith("CONFORME") ? "dok" : "", c.venc ? "dpend" : "", c.ncn ? "ncn" : "", c.tras ? "tras" : ""].filter(Boolean);
 const ctlTxt = c => !c ? "Sin registro en el control de la IA" : [c.tipo, c.dilig ? "diligencia " + c.dilig.toLowerCase() + (c.plazo ? " (" + c.plazo.toLowerCase() + ")" : "") : "",
-  c.venc ? `diligencia pendiente: plazo vencido el ${fecha(c.lim)}` : "", c.estado && !/CONCLUIDA/i.test(c.estado) ? "estado: " + c.estado.toLowerCase() : "", c.ncn ? `garantía devuelta con NCN (${c.ncn_ri})` : "sin NCN", c.tras ? `traslado autorizado (${c.tras_ri})` : "sin traslado ZTE→ZTC autorizado"].filter(Boolean).join(" · ");
+  c.venc ? `diligencia pendiente: plazo vencido el ${fecha(c.lim)}` : "", c.estado && !/CONCLUIDA/i.test(c.estado) ? "estado: " + c.estado.toLowerCase() : "", c.ncn ? `tributos devueltos con NCN (${c.ncn_ri})` : "sin NCN", c.tras ? `traslado autorizado (${c.tras_ri})` : "sin traslado ZTE→ZTC autorizado"].filter(Boolean).join(" · ");
 const montoAlerta = r => r.monto == null ? null : r.igv ? Math.round(r.monto * 118) / 100 : r.monto;
 function conActividad() { return D.ventas.clientes.some(c => c.act); }
 function contarAlertas(tipo) { return D.alertas.filter(a => a.tipo === tipo).length; }
@@ -961,7 +961,8 @@ function vistaResumen(sec) {
       li.lastChild.append(" ", el("a", { href: "#alertas", onclick: e => { e.preventDefault(); irIndicador("rev"); } }, "Ver alertas →")); ul.append(li); } }
   if (D.control) { const C = D.control, tm = (C.traslados || []).filter(t => /MAQUINARIA/.test(t.merc)), u = tm.reduce((a, t) => a + (t.cant || 0), 0);
     item("Alta", `<b>Solo ${f0(tm.length)} traslados ZTE→ZTC de maquinaria (${f0(u)} unidades) figuran autorizados en el control de la IA</b> desde ${mesLargo(D.meta.desde)}, frente a ${f0(D.dom ? D.dom.maq.ZTC : 0)} máquinas vendidas a clientes domiciliados fuera de la ZTE. `
-      + `Además, ${f0(C.no_conf)} DAM tuvieron diligencia en destino no conforme y ${f0(C.ncn)} ya recibieron la devolución de su garantía con NCN.`, "Máquina vendida fuera de la ZTE sin traslado autorizado"); }
+      + `Además, ${f0(C.no_conf)} DAM tuvieron diligencia en destino no conforme; en ${f0(C.ncn)} DAM canceladas se devolvieron S/ ${fc(C.ncn_total)} en tributos con NCN`
+      + (C.trib_usd ? `, y las DAM con garantía 160 garantizan USD ${fc(C.trib_usd)} en tributos.` : "."), "Máquina vendida fuera de la ZTE sin traslado autorizado"); }
   if (D.control && D.control.pend) item(D.control.pend_maq ? "Alta" : "Media", `<b>${f0(D.control.pend)} DAM tienen la diligencia en destino pendiente y el plazo de reconocimiento vencido</b>`
     + (D.control.pend_maq ? `, entre ellas ${f0(D.control.pend_maq)} máquinas` : "") + `. Mientras no se verifique la llegada a destino, no hay constancia de que la mercancía esté en la zona del beneficio.`, "Diligencia en destino pendiente con plazo vencido");
   if (D.control && ((D.control.art2 || []).length || D.control.complejidad)) {
@@ -1218,9 +1219,9 @@ function fichasTrazabilidad(sec) {
       ? `<b>DAM ${esc(m.dam)} · serie ${m.serie}</b><div class="d">${fecha(m.f)} · canal ${CANAL[m.canal] || m.canal} · ${esc(convT(m.conv))}<br>Destino ${esc(destT(m.dest))} · CIF USD ${f0(m.cif)} · año ${esc(m.anio || "s/d")}`
         + (m.dep_dam ? `<br>Antes en depósito: DAM ${esc(m.dep_dam)} del ${fecha(m.dep_f)}` : "")
         + (m.ctl ? `<br><b style="display:inline">Control IA:</b> ${esc(m.ctl.en ? ctlTxt(m.ctl) : "sin registro (otra intendencia de destino)")}` : "")
-        + (m.ctl && m.ctl.en && (m.ctl.igv || m.ctl.ipm) ? (() => { const usd = m.cif && m.ctl.igv && Math.abs(m.ctl.igv / m.cif - 0.16) < 0.005;
-          return `<br>Tributos en juego según el cuaderno: ${usd ? "USD " : ""}IGV ${f0(m.ctl.igv)} · IPM ${f0(m.ctl.ipm)}${m.ctl.adv ? " · ad valorem " + f0(m.ctl.adv) : ""}`
-            + (usd ? ` (total USD ${f0((m.ctl.igv || 0) + (m.ctl.ipm || 0) + (m.ctl.adv || 0))}; el IGV es el 16 % del CIF)` : " (moneda no indicada)"); })() : "")
+        + (m.ctl && m.ctl.en && (m.ctl.igv || m.ctl.ipm) ? (() => { const sim = m.ctl.mon === "PEN" ? "S/ " : m.ctl.mon === "USD" ? "USD " : "", tot = (m.ctl.igv || 0) + (m.ctl.ipm || 0) + (m.ctl.adv || 0);
+          const qué = m.ctl.mon === "PEN" ? "Tributos pagados (devueltos con NCN si la DAM la tiene)" : m.ctl.mon === "USD" ? "Tributos garantizados (garantía 160)" : "Tributos según el cuaderno";
+          return `<br>${qué}: ${sim}${f0(tot)} (IGV ${f0(m.ctl.igv)} · IPM ${f0(m.ctl.ipm)}${m.ctl.adv ? " · ad valorem " + f0(m.ctl.adv) : ""})${sim ? "" : " · moneda no indicada"}`; })() : "")
         + (m.ctl && (m.ctl.ris || []).length ? `<br>RI: ${esc(m.ctl.ris.join("; "))}` : "") + `</div>`
       : `<b>DAM no encontrada en el periodo</b><div class="d">La serie no está en las DAM de ${mesLargo(D.meta.desde)} a ${mesLargo(D.meta.hasta)}: probablemente se importó antes. Buscar la DAM por serie y motor en el sistema aduanero.</div>`) }));
     if (c.baja) cad.append(el("div", { class: "paso alerta", html: `<div class="n">${ic("ventas")}2 · Factura dada de baja</div><b>${esc(c.baja.cpe)} · ${fecha(c.baja.f)}</b><div class="d">Emitida <b style="display:inline">con IGV ${v ? mon(v.mon) : ""} ${f0(c.baja.igv)}</b> y dada de baja.</div>` }));

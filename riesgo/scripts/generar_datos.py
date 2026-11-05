@@ -703,6 +703,8 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, cons
                              "venc": vencida(ctl.get(k, {}).get("control", {})), "incid": ctl.get(k, {}).get("control", {}).get("incid", ""),
                              "igv": ctl.get(k, {}).get("control", {}).get("igv"), "ipm": ctl.get(k, {}).get("control", {}).get("ipm"),
                              "adv": ctl.get(k, {}).get("control", {}).get("adv"),
+                             # Moneda confirmada: DAM canceladas en soles (tributos pagados y devueltos con NCN); con garantía 160 en dólares
+                             "mon": {"CANCELADA": "PEN", "GARANTIA 160": "USD"}.get(norm(ctl.get(k, {}).get("control", {}).get("tipo", "")), ""),
                              "ris": [x["ri"] + (" (" + x["pdf"] + ")" if x["pdf"] else "") for x in ctl.get(k, {}).get("ris", [])]} if r_ctl else None
 
     # Trazabilidad por número de serie (casos documentados con la factura del emisor)
@@ -762,7 +764,7 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, cons
                 alerta("Alta", "Máquina vendida fuera de la ZTE sin traslado autorizado", c["cpe"], v_["f"], v_["cli"], v_["ruc"],
                        f"Serie {c['serie']} · DAM {m_['dam']} ({k_['tipo'] or 's/d'}; diligencia en destino {k_['dilig'] or 's/d'}"
                        f"{', ' + k_['plazo'].lower() if k_['plazo'] else ''}) · sin expediente de traslado ZTE→ZTC en el control de la IA"
-                       + (f" · garantía devuelta con NCN ({k_['ncn_ri']})" if k_["ncn"] else ""), v_["vv"], v_["mon"])
+                       + (f" · tributos devueltos con NCN ({k_['ncn_ri']})" if k_["ncn"] else ""), v_["vv"], v_["mon"])
         maq_dam = dict(zip(dec.dam, dec.maq))
         for k, x in ctl.items():
             c_ = x.get("control", {})
@@ -875,6 +877,10 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, cons
             "pend": int(sum(1 for k in ctl if k in set(m.dam) and vencida(ctl[k].get("control", {})))),
             "pend_maq": int(sum(maq for k, maq in zip(dec.dam, dec.maq) if k in ctl and vencida(ctl[k].get("control", {})))),
             "art2": meta_ctl.get("art2", []), "complejidad": meta_ctl.get("complejidad"),
+            "trib_pen": r2(sum((c.get("igv") or 0) + (c.get("ipm") or 0) + (c.get("adv") or 0) for k, x in ctl.items() if k in set(m.dam)
+                               for c in [x.get("control", {})] if norm(c.get("tipo", "")) == "CANCELADA")),
+            "trib_usd": r2(sum((c.get("igv") or 0) + (c.get("ipm") or 0) + (c.get("adv") or 0) for k, x in ctl.items() if k in set(m.dam)
+                               for c in [x.get("control", {})] if norm(c.get("tipo", "")) == "GARANTIA 160")),
         },
         "dom": None if dom is None else {
             "fecha": (dom.fecha_padron.iloc[0] if len(dom) and "fecha_padron" in dom else ""),
