@@ -675,6 +675,8 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, cons
     info_cpe = e.set_index("cpe")[["igv", "linea", "tcli", "doc"]].to_dict("index")
     zona_doc = dict(zip(cl.doc, cl.zona)) if "zona" in cl else {}
     tcli_doc = dict(zip(cl.doc, cl.tipo))
+    act_doc = dict(zip(cl.doc, cl.actividad)) if "actividad" in cl else {}
+    revende = lambda doc: bool(re.search(r"VTA.*MAQUINARIA|VENTA.*MAQUINARIA", norm(act_doc.get(doc, ""))))
     trazados = {c["cpe"] for c in casos if c.get("dam")}
     for a in alertas:
         i = info_cpe.get(a["ref"])
@@ -689,6 +691,8 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, cons
         z = zona_doc.get(doc, "")
         mk.append({"ZTE": "zte", "ZTC": "ztc", "Extranjero": "ext"}.get(z, ""))
         mk.append({"Entidad pública": "pub", "Persona natural": "pn"}.get(tcli_doc.get(doc, ""), ""))
+        if revende(doc):
+            mk.append("rev")
         if a["ref"] in xml_cpes:
             mk.append("xml")
         if a["ref"] in trazados:
@@ -773,7 +777,7 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, cons
                         "cat": s["cat"], "mon": s.moneda, "vv": r2(s.vv), "igv": r2(s.igv), "tot": r2(s.total),
                         "est": s.estado, "mot": s.tipo_ref if s.tipo == "07" else "", "usado": bool(s.usado),
                         "zona": s.zona, "lugar": s.lugar, "dep": s.departamento, "cond": s.condicion, "eruc": s.eruc, "act": s.actividad,
-                        "est": s.est, "circ": s.circunscripcion}
+                        "estab": s.est, "circ": s.circunscripcion}
                        for _, s in vm.sort_values("f").iterrows()],
         },
         "ventas": {

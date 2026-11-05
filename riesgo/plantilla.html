@@ -577,6 +577,7 @@ const ICONOS = {
   doc: '<path d="M14 3H6.5A1.5 1.5 0 0 0 5 4.5v15A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V8z"/><path d="M14 3v5h5"/><path d="M9 14.5l2 2 4-4"/>',
   enlace: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
   salida: '<path d="M12 15V3.5M7.5 8l4.5-4.5L16.5 8"/><path d="M5 14v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5"/>',
+  reventa: '<path d="M4 8.5h14.5l-3.5-3.5"/><path d="M20 15.5H5.5L9 19"/>',
 };
 const ic = k => `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">${ICONOS[k] || ""}</svg>`;
 
@@ -828,6 +829,7 @@ function activar() {
   window.scrollTo({ top: 0 });
 }
 function irAlertas(tipo) { location.hash = "alertas"; if (tablaAlertas) tablaAlertas.filtrar("tipo", tipo); }
+function irIndicador(k) { location.hash = "alertas"; if (tablaAlertas) { tablaAlertas.filtrar("tipo", ""); tablaAlertas.filtrar("mk", MARCAS[k].t); } }
 
 const copiable = t => `<button class="copiar" type="button" data-c="${esc(t)}" title="Copiar">${esc(t)}</button>`;
 document.addEventListener("click", e => {
@@ -852,6 +854,7 @@ const MARCAS = {
   imp: { t: "Importación (DAM)", ic: "importaciones", c: "var(--suave)" },
   pub: { t: "Entidad pública", ic: "edificio", c: "var(--suave)" },
   pn: { t: "Persona natural", ic: "persona", c: "var(--suave)" },
+  rev: { t: "Comprador que revende maquinaria (actividad CIIU)", ic: "reventa", c: "var(--texto)" },
   xml: { t: "Factura revisada (XML del emisor)", ic: "doc", c: "var(--ok)" },
   traza: { t: "Máquina enlazada con su DAM por número de serie", ic: "enlace", c: "var(--ok)" },
   exp: { t: "Con DAM de exportación", ic: "salida", c: "var(--ok)" },
@@ -940,6 +943,9 @@ function vistaResumen(sec) {
       "Maquinaria vendida a no domiciliado"); }
   { const tipo = "Máquina vendida a cliente de otra circunscripción amazónica", n = contarAlertas(tipo);
     if (n) item("Media", `<b>${f0(n)} máquinas se vendieron a clientes de la ZTE domiciliados en otra circunscripción</b> que la del establecimiento emisor (inferido por la serie). Son traslados dentro de la Amazonía que conviene contrastar con la aduana de destino de cada DAM.`, tipo); }
+  { const rv = D.maq.ventas.filter(v => v.cpe.startsWith("01") && v.est === "0" && /VTA.*MAQUINARIA/.test(v.act || ""));
+    if (rv.length) { const li = el("li", {}, el("div", { html: NIVEL("Media") }), el("div", { class: "txt", html: `<b>${f0(rv.length)} máquinas se vendieron a ${f0(new Set(rv.map(v => v.ruc)).size)} compradores cuya actividad principal es la venta de maquinaria</b> (${f0(rv.filter(v => v.zona === "ZTC").length)} fuera de la ZTE, ${f0(rv.filter(v => !(v.igv > 0)).length)} sin IGV): posible reventa fuera de la zona del beneficio.` }));
+      li.lastChild.append(" ", el("a", { href: "#alertas", onclick: e => { e.preventDefault(); irIndicador("rev"); } }, "Ver alertas →")); ul.append(li); } }
   { const sinNac = (D.maq.deposito || []).filter(r => !r.nac_dam).length;
     if (sinNac) item("Baja", `<b>${f0(sinNac)} máquinas siguen en depósito aduanero</b> sin DAM de nacionalización en los datos. Verificar su situación antes del vencimiento del plazo de depósito.`, null); }
   item("Media", `<b>${f0(contarAlertas("Venta de maquinaria anulada o devuelta"))} notas de crédito anulan o devuelven ventas de maquinaria</b> y ${f0(contarAlertas("Factura de maquinaria dada de baja"))} facturas de maquinaria se dieron de baja. Rastrear el destino final de cada unidad: si se volvió a facturar y a quién.`, "Venta de maquinaria anulada o devuelta");
@@ -1123,7 +1129,7 @@ function vistaMaquinaria(sec) {
     return o;
   };
   tabla(t5, { ph: "Buscar cliente, RUC, CPE, descripción…", cols: [{ k: "cpe", t: "CPE", c: 1 }, { k: "f", t: "Fecha", f: fecha, c: 1 }, { k: "cli", t: "Cliente", largo: 1 }, { k: "ruc", t: "RUC / doc.", c: 1 },
-    { k: "tcli", t: "Tipo de cliente" }, { v: r => titulo(r.est), t: "Establecimiento (inferido)", c: 1 },
+    { k: "tcli", t: "Tipo de cliente" }, { v: r => titulo(r.estab), t: "Establecimiento (inferido)", c: 1 },
     ...(D.dom ? [{ k: "zona", t: "Zona", h: r => zonaH(r.zona), v: r => zonaT(r.zona) }, { k: "lugar", t: "Domicilio fiscal", largo: 1 }] : []),
     ...(conActividad() ? [{ k: "act", t: "Actividad económica", largo: 1 }] : []),
     { k: "desc", t: "Descripción", largo: 1 }, { k: "cat", t: "Tipo" }, { k: "mon", t: "Moneda", f: mon },
@@ -1133,7 +1139,7 @@ function vistaMaquinaria(sec) {
     { v: r => obs(r).join(", ") + (r.mot ? ` (motivo ${r.mot}: ${D.meta.motivos[r.mot] || ""})` : ""), t: "Observaciones",
       h: r => obs(r).map(t => `<span class="etq${["Con IGV", "No domiciliado", "Dado de baja", "Fuera de la ZTE", "No habido", "Otra circunscripción"].includes(t) ? " fuerte" : ""}">${t}</span>`).join("") + (r.mot ? `<span class="etq">${esc(D.meta.motivos[r.mot] || r.mot)}</span>` : "") }],
     filas: Q.ventas, filtros: [{ t: "Observación", campo: "obs", valor: obs }, ...(D.dom ? [{ t: "Zona", campo: "zona", valor: r => zonaT(r.zona) }] : []),
-      { t: "Establecimiento", campo: "est", valor: r => titulo(r.est) }, { t: "Tipo de cliente", campo: "tcli", valor: r => r.tcli }, { t: "Tipo", campo: "cat", valor: r => r.cat }],
+      { t: "Establecimiento", campo: "est", valor: r => titulo(r.estab) }, { t: "Tipo de cliente", campo: "tcli", valor: r => r.tcli }, { t: "Tipo", campo: "cat", valor: r => r.cat }],
     archivo: "ventas_maquinaria.csv" });
   seccionesRegimenes(sec);
 }
