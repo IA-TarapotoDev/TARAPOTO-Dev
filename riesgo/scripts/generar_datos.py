@@ -238,7 +238,7 @@ def leer_facturas_xml(rutas):
     - errores: archivos que no se pudieron leer."""
     import xml.etree.ElementTree as ET
     tipos = {"Invoice": "01", "CreditNote": "07", "DebitNote": "08"}
-    filas, docs, errores = [], {}, []
+    filas, docs, errores, repetidos = [], {}, [], []
     for nombre, contenido in fuentes_xml(rutas):
         try:
             raiz = ET.fromstring(contenido)
@@ -261,6 +261,7 @@ def leer_facturas_xml(rutas):
         tipo = tipos[tag]
         cpe = f"{tipo}-{t('cbc:ID')}"
         if cpe in docs:
+            repetidos.append(cpe)
             continue
         sup = raiz.find("cac:AccountingSupplierParty/cac:Party", NS)
         reg = sup.find("cac:PartyLegalEntity/cac:RegistrationAddress", NS) if sup is not None else None
@@ -315,7 +316,7 @@ def leer_facturas_xml(rutas):
                                              "mot_t": t("cac:DiscrepancyResponse/cbc:Description")},
         }
     items = pd.DataFrame(filas, columns=["cpe", "f", "mon", "texto", "serie", "motor", "modelo", "marca", "anio", "horas", "afect", "valor"])
-    return items, docs, errores
+    return items, docs, errores, repetidos
 
 
 # ---------------------------------------------------------------- cuaderno de control de la intendencia
@@ -370,7 +371,8 @@ def leer_control_ia(ruta, ruc):
                     "fin": txt(r.get("Forma de Conclusion")), "ri": txt(r.get("Numero de la RI / RD")), "ri_f": txt(r.get("Fecha de RI / RD")),
                     "ciudad": txt(r.get("Ciudad_Mercancia") or r.get("Ciudad de la Mercancia")), "merc": txt(r.get("Tipo_Mercancia")),
                     "estado": txt(r.get("ESTADO ACTUAL")) or ("Ingresada, sin consolidar" if nombre == "Ingreso de DAM" else ""),
-                    "igv": num(r.get("Regulariza_IGV")), "ipm": num(r.get("Regulariza_IPM")), "adv": num(r.get("Regulariza_ADValorem"))}
+                    "igv": num(r.get("Regulariza_IGV")), "ipm": num(r.get("Regulariza_IPM")), "adv": num(r.get("Regulariza_ADValorem")),
+                    "f_rf": txt(r.get("Fecha_Recon_Fisico"))[:10], "f_dil": txt(r.get("Fecha_Dilig_Dest"))[:10]}
     h1 = hoja("Hoja1")
     for _, r in h1.iterrows() if len(h1) else []:
         for k in set(claves_dam(r.get("DAM")) + claves_dam(r.get("Detalle Asunto"))):
@@ -587,6 +589,7 @@ def main(a):
                 "reg": "Sin registro de diligencia" if not c else "Pendiente de regularización" if pend else "Concluida",
                 "res": "" if pend or not c else "No conforme" if dg.startswith("NO CONFORME") else "Conforme" if dg.startswith("CONFORME") else "",
                 "fin": "" if pend else c.get("fin", ""), "ri": "" if pend else c.get("ri", ""), "ri_f": "" if pend else c.get("ri_f", ""),
+                "f_rf": "" if pend else c.get("f_rf", ""), "f_dil": "" if pend else c.get("f_dil", ""),
                 "ncn": [{"ri": n["ri"], "ri_f": n["ri_f"], "f": n["f"][:10], "total": r2(n["total"]), "ncn": n["amaz"] or n["peco"]} for n in ncn],
                 "ncn_total": r2(sum(n["total"] or 0 for n in ncn)),
                 "ris": [{"ri": r["ri"], "pdf": r["pdf"]} for r in x.get("ris", [])], "tras": tras_dam.get(k, [])}
@@ -601,7 +604,7 @@ def main(a):
     facs = vm[vm.tipo == "01"]
     vig = facs[facs.estado == "0"]
     ncs = vm[(vm.tipo == "07") & (vm.estado == "0")]
-    fx, facturas, xml_err = leer_facturas_xml(a.facturas_xml)
+    fx, facturas, xml_err, xml_rep = leer_facturas_xml(a.facturas_xml)
     por_cpe = vm.set_index("cpe")
 
     # Nota de crédito → factura que modifica: exacta con el XML de la NC; si no, por cliente, moneda y monto
@@ -743,9 +746,15 @@ def main(a):
     # Cada traslado se asigna a tantas ventas como máquinas traslada; cada venta, a un solo traslado.
     # Prioridad: venta exportada (no domiciliado con DAM de exportación), luego la más cercana en días.
     prob_venta, candidatos = {}, []
+    for t in tr:
+        t["venta"] = sorted({c for k in t["maqs"] for c in maq_venta.get(k, [])})   # venta de su máquina por número de serie
+    resueltos = {t["i"] for t in tras_salida if t["venta"]}
     for t in tras_salida:
+        if t["i"] in resueltos:
+            continue
         tf = pd.Timestamp(t["f"])
-        for _, x in vend[vend["cat"].isin(cat_t[t["i"]]) & ((vend.f - tf).dt.days.abs() <= 30)].iterrows():
+        libres = vend[~vend.cpe.isin(list(venta_maq))]
+        for _, x in libres[libres["cat"].isin(cat_t[t["i"]]) & ((libres.f - tf).dt.days.abs() <= 30)].iterrows():
             z = zona_doc.get(x.doc, "")
             if z in ("ZTC", "Extranjero") or x.igv > 0:
                 dias = int((x.f - tf).days)
@@ -765,13 +774,23 @@ def main(a):
         salida_c = zona_doc.get(o.doc, "") in ("ZTC", "Extranjero") or (c["orig_igv"] or 0) > 0 or (c["reem_igv"] or 0) > 0
         fechas = [pd.Timestamp(x) for x in (c["nc_f"], c["reem_f"]) if x] or [pd.Timestamp(c["orig_f"])]
         c["tras"] = [t["i"] for t in tras_salida if prob_venta.get(c["reem"]) == t["i"] or prob_venta.get(c["orig"]) == t["i"]
-                     or (o["cat"] in cat_t[t["i"]] and salida_c and any(abs((pd.Timestamp(t["f"]) - x).days) <= 7 for x in fechas))]
+                     or {c["orig"], c["reem"]} & set(t["venta"])
+                     or (t["i"] not in resueltos and c["reem"] not in venta_maq and o["cat"] in cat_t[t["i"]] and salida_c
+                         and any(abs((pd.Timestamp(t["f"]) - x).days) <= 7 for x in fechas))]
+        s_o = {x["serie"] for x in seriales.get(c["orig"], [])}
+        s_r = {x["serie"] for x in seriales.get(c["reem"], [])}
+        c["misma_serie"] = ", ".join(sorted(s_o & s_r)) if s_o and s_r else ""
+        c["otra_serie"] = bool(s_o and s_r and not s_o & s_r)
+
+    ctl_cache = {k: control_dam(k) for k in set(mq.dam) | set(ctl) if k in dams_periodo}
 
     # ---------- Casos: una venta de maquinaria con indicios ----------
+    conv_key = dict(zip(mq.key, mq.conv))
     TEXTO = {"ztc": "Comprador domiciliado fuera de la ZTE", "igv": "Vendida con IGV", "cambio": "Reemitida sin IGV tras anular la factura con IGV",
              "entrega": "Entregada fuera de la ZTE (según la factura)", "nodom": "Vendida a no domiciliado sin DAM de exportación",
              "exp": "Vendida a no domiciliado, con DAM de exportación", "nuevo": "Comprador con RUC reciente",
-             "no_habido": "Comprador no habido o con RUC no activo", "anul_tras": "Anulación o reemisión el día de un traslado de maquinaria"}
+             "no_habido": "Comprador no habido o con RUC no activo", "anul_tras": "Anulación o reemisión el día de un traslado de maquinaria",
+             "ncn_post": "Tributos devueltos con NCN después de la venta", "rf_post": "Reconocimiento físico conforme después de la venta"}
     casos = []
     for _, v in vend.sort_values("f").iterrows():
         c_ = cli.get(v.doc, {})
@@ -788,24 +807,47 @@ def main(a):
             continue
         maqs = venta_maq.get(v.cpe, [])
         t_conf = sorted({i for k in maqs for i in tras_maq.get(k, []) if tr[i]["salida"]})
+        t_trans = sorted({i for k in maqs for i in tras_maq.get(k, []) if not tr[i]["salida"]})
+        sin_benef = bool(maqs) and all(conv_key[k] == "Sin beneficio" for k in maqs)
         t_prob = [] if maqs or v.cpe not in prob_venta else [prob_venta[v.cpe]]
         dests = sorted({k.split("#")[0] for k in maqs})
         dest_m = sorted({mq.loc[mq.key == k, "dest"].iloc[0] for k in maqs})
         salida = bool({"ztc", "igv", "cambio", "entrega", "nodom"} & set(mot))
         menor = v.vv < MENOR.get(v.moneda, 0) and not {"cambio", "nodom"} & set(mot)
+        post = []
+        if salida and not sin_benef:
+            for k in maqs:
+                cd = ctl_cache.get(k.split("#")[0])
+                if not cd or cd["reg"] != "Concluida":
+                    continue
+                dias = lambda f: (pd.Timestamp(f) - v.f).days
+                if cd["f_rf"] and dias(cd["f_rf"]) > 0:
+                    post.append({"t": "rf", "f": cd["f_rf"], "dias": dias(cd["f_rf"]), "res": cd["res"]})
+                if cd["f_dil"] and dias(cd["f_dil"]) > 0:
+                    post.append({"t": "dil", "f": cd["f_dil"], "dias": dias(cd["f_dil"]), "res": cd["res"]})
+                for n in cd["ncn"]:
+                    if n["f"] and dias(n["f"]) > 0:
+                        post.append({"t": "ncn", "f": n["f"], "dias": dias(n["f"]), "total": n["total"], "ncn": n["ncn"]})
+        mot += [k for k, ok in (("ncn_post", any(p["t"] == "ncn" for p in post)), ("rf_post", any(p["t"] == "rf" for p in post))) if ok]
         if menor:
             continue
         xml = v.cpe in facturas
-        if salida and t_conf:
+        if salida and sin_benef:
+            nivel, estado = (("Baja", "Coherente: importada sin beneficio y vendida con IGV") if v.igv > 0 else
+                             ("Media", "Importada sin beneficio: revisar el IGV de la venta") if z == "ZTC" else ("Baja", "Importada sin beneficio"))
+        elif salida and t_conf:
             nivel, estado = "Baja", "Regularizada: traslado autorizado"
         elif salida and maqs and all(d == "271" for d in dest_m):
-            nivel, estado = "Alta", "Confirmada: sin traslado autorizado"
+            nivel, estado = "Alta", ("Confirmada: tributos devueltos después de la venta" if "ncn_post" in mot else
+                                     "Confirmada: reconocimiento físico después de la venta" if "rf_post" in mot else
+                                     "Confirmada: solo tiene un traslado de tránsito" if t_trans else "Confirmada: sin traslado autorizado")
         elif salida and maqs:
             nivel, estado = "Alta", f"DAM con destino {', '.join(DESTINOS.get(d, d) for d in dest_m)}: verificar con esa intendencia"
         elif salida and t_prob:
             nivel, estado = "Media", "Traslado probable: confirmar la serie"
         elif salida:
-            nivel, estado = "Alta", "Serie fuera de las DAM del periodo" if v.cpe in seriales else "Por confirmar: falta el XML"
+            nivel, estado = "Alta", ("Serie fuera de las DAM del periodo" if v.cpe in seriales else
+                                     "El XML no indica la serie de la máquina" if v.cpe in facturas else "Por confirmar: falta el XML")
         elif {"nuevo", "no_habido", "anul_tras"} & set(mot):
             nivel, estado = "Media", "Revisar al comprador" if not ch else "Revisar la cadena de comprobantes"
         else:
@@ -813,10 +855,9 @@ def main(a):
         casos.append({"cpe": v.cpe, "f": fstr(v.f), "ruc": v.doc, "cli": v.nombre, "nivel": nivel, "estado": estado, "mot": mot,
                       "motivo": " · ".join(TEXTO[k] for k in mot), "mon": v.moneda, "vv": r2(v.vv), "igv": r2(v.igv), "tot": r2(v.total),
                       "desc": v.desc, "cat": v["cat"], "merc": MERCANCIA.get(v["cat"], "Otros"), "maqs": maqs, "dams": dests, "series": seriales.get(v.cpe, []),
-                      "cadena": ch, "anticipos": anticipos.get(v.cpe, []), "tras": t_conf, "tras_prob": t_prob, "exp": ex["dam"] if ex else "", "entrega": ent, "xml": xml})
+                      "cadena": ch, "anticipos": anticipos.get(v.cpe, []), "tras": t_conf, "transito": t_trans, "post": post if nivel == "Alta" else [], "tras_prob": t_prob, "exp": ex["dam"] if ex else "", "entrega": ent, "xml": xml})
 
     # ---------- Indicadores de cada máquina y de cada caso ----------
-    ctl_cache = {k: control_dam(k) for k in set(mq.dam) | set(ctl) if k in dams_periodo}
     maquinas = []
     for _, s in mq.iterrows():
         c = ctl_cache.get(s.dam)
@@ -843,15 +884,33 @@ def main(a):
             ("pub", cl_.get("tipo") == "Entidad pública"), ("pn", cl_.get("tipo") == "Persona natural"), ("rev", bool(cl_.get("rev"))),
             ("anul", bool(c["cadena"])), ("xml", c["xml"]), ("traza", bool(mm)), ("usada", any(x["usada"] for x in mm)),
             ("pend", any(x and x["reg"] == "Pendiente de regularización" for x in cc)), ("dnc", any(x and x["res"] == "No conforme" for x in cc)),
-            ("ncn", any(x and x["ncn"] for x in cc)), ("tras", bool(c["tras"])), ("trasp", bool(c["tras_prob"])), ("exp", bool(c["exp"]))) if ok]
+            ("ncn", any(x and x["ncn"] for x in cc)), ("post", any(p["t"] in ("rf", "ncn") for p in c["post"])), ("tras", bool(c["tras"])), ("trasp", bool(c["tras_prob"])), ("exp", bool(c["exp"]))) if ok]
         acc = []
         if not c["xml"] and not c["series"]:
             acc.append("Descargar el XML de la factura del portal del emisor para obtener la serie de la máquina y del motor.")
+        elif not c["series"]:
+            acc.append("El XML no trae la serie de la máquina: pedirla al emisor (guía de remisión, acta de entrega o ficha técnica).")
         elif not mm:
-            s0 = (c["series"] or [{}])[0]
-            acc.append(f"Buscar la DAM por la serie {s0.get('serie') or 's/d'} y el motor {s0.get('motor') or 's/d'}: no está entre las DAM del periodo.")
+            s0 = c["series"][0]
+            t0 = tr[c["tras_prob"][0]] if c["tras_prob"] else None
+            acc.append(f"Buscar la DAM por la serie {s0.get('serie') or 's/d'} y el motor {s0.get('motor') or 's/d'}: no está entre las DAM del importador "
+                       f"del periodo (importada antes o comprada en el país)."
+                       + (f" Compárela con la DAM {', '.join(t0['dams'])} del traslado {t0['exp']}." if t0 else ""))
+        if c["estado"].startswith("Importada sin beneficio"):
+            acc.append(f"La máquina se importó sin beneficio (DAM {', '.join(x['dam'] for x in mm)}): no hay tributos aduaneros por regularizar. "
+                       "La venta sin IGV a un comprador de fuera de la ZTE es materia de tributos internos.")
+        for p in c["post"]:
+            if p["t"] == "ncn":
+                acc.insert(0, f"Evaluar dejar sin efecto la NCN {p['ncn']} por S/ {p['total']:,.0f}: se emitió {p['dias']} días después de vender la máquina "
+                              "a un comprador de fuera de la ZTE.")
+            elif p["t"] == "rf":
+                acc.insert(0, f"Revisar el acta del reconocimiento físico del {p['f'][8:10]}/{p['f'][5:7]}/{p['f'][:4]}: la máquina ya se había vendido "
+                              f"a un comprador de fuera de la ZTE {p['dias']} días antes.")
+        for i in c.get("transito", []):
+            acc.append(f"La máquina tiene el traslado {tr[i]['exp']} de tránsito (ZTE a ZTE pasando por la ZTC), pero se vendió a un comprador "
+                       "de fuera de la ZTE: verificar su destino final.")
         for x, k in zip(mm, cc):
-            if c["nivel"] == "Alta" and x["dest"] == "271":
+            if c["nivel"] == "Alta" and x["dest"] == "271" and not c.get("transito"):
                 acc.append(f"Requerir el sustento de la salida de la ZTE de la máquina {x['pin'] or x['k']} (DAM {x['dam']} serie {x['s']}): no tiene traslado "
                            f"autorizado. Tributos estimados de la serie: USD {x['cif'] * TASA_IMP:,.0f} (18 % del CIF).")
             elif c["nivel"] == "Alta":
@@ -867,7 +926,9 @@ def main(a):
             acc.append("Verificar la existencia y la actividad del comprador (RUC reciente o no habido).")
         c["acc"] = acc
     orden = {"Alta": 0, "Media": 1, "Baja": 2}
-    prio_estado = lambda s: 0 if s.startswith("Confirmada") else 1 if s.startswith("Serie") or s.startswith("Enlazada") else 2
+    prio_estado = lambda s: (0 if s.startswith("Confirmada: tributos") else 1 if s.startswith("Confirmada: reconocimiento") else
+                             2 if s.startswith("Confirmada") else 3 if s.startswith("DAM con destino") else 4 if s.startswith("Serie")
+                             else 5 if s.startswith("El XML") else 6)
     casos.sort(key=lambda c: (orden[c["nivel"]], prio_estado(c["estado"]), -(c["tot"] or 0) * (3.4 if c["mon"] == "USD" else 1)))
 
     # ---------- Clientes compradores de maquinaria ----------
@@ -891,6 +952,26 @@ def main(a):
     modelo_key = dict(zip(mq.key, mq.modelo))
     maq_modelo = lambda k: modelo_key.get(k, "")
     pat = []
+    con_post = [c for c in casos if c["post"]]
+    if con_post:
+        it = []
+        for c in con_post:
+            ncn = [p for p in c["post"] if p["t"] == "ncn"]
+            rf = [p for p in c["post"] if p["t"] == "rf"]
+            lugar = cli.get(c["ruc"], {}).get("lugar", "")
+            base = f"{c['cpe'][3:]}: vendida el {fecha_txt(c['f'])} a {c['cli'][:40].strip()}{' (' + lugar + ')' if lugar else ''}"
+            if ncn:
+                it.append(base + "; NCN " + ", ".join(f"{p['ncn']} por S/ {p['total']:,.0f} el {fecha_txt(p['f'])} ({p['dias']} días después)" for p in ncn))
+            if rf:
+                it.append(base + "; reconocimiento físico " + (rf[0]["res"].lower() or "") + f" el {fecha_txt(rf[0]['f'])} ({pl(rf[0]['dias'], 'día', 'días')} después)")
+        n_dil = sum(1 for c in casos if c["estado"].startswith("Confirmada") and c["post"])
+        n_conf = sum(1 for c in casos if c["estado"].startswith("Confirmada"))
+        total_ncn = sum(p["total"] or 0 for c in con_post for p in c["post"] if p["t"] == "ncn")
+        pat.append({"id": "post", "nivel": "Alta", "t": "Beneficio concluido después de vender la máquina fuera de la ZTE",
+                    "items": it, "txt": f"En {n_dil} de {n_conf} ventas confirmadas por número de serie, la diligencia en destino se concluyó o la NCN se emitió después de la venta"
+                                        + (f"; se devolvieron S/ {total_ncn:,.0f} con NCN emitidas después de vender" if total_ncn else "")
+                                        + ". Revise cómo se verificó cada máquina y evalúe dejar sin efecto la conclusión, la liberación de la garantía o la NCN.",
+                    "filtro": {"mk": "post"}})
     zt = vend[vend.doc.map(lambda d: zona_doc.get(d, "")) == "ZTC"]
     if len(zt):
         top = zt.groupby("doc").size().sort_values(ascending=False)
@@ -899,26 +980,42 @@ def main(a):
                            f"(venta exonerada a quien no está en la zona) y {int((zt.igv > 0).sum())} con IGV. Concentración: "
                            + "; ".join(f"{cli[d]['nombre']} ({n})" for d, n in top.head(4).items()) + ".",
                     "filtro": {"mot": "ztc"}})
-    alta_sal = [c for c in casos if {"ztc", "igv", "cambio", "entrega", "nodom"} & set(c["mot"])]
+    alta_sal = [c for c in casos if {"ztc", "igv", "cambio", "entrega", "nodom"} & set(c["mot"]) and "sin beneficio" not in c["estado"]]
+    n_sb = sum(1 for c in casos if "sin beneficio" in c["estado"])
     n_ts = len(tras_salida)
     if alta_sal:
         pat.append({"id": "tras", "nivel": "Alta", "t": "Pocos traslados para tantas ventas con indicios de salida",
-                    "txt": f"{len(alta_sal)} ventas de maquinaria con indicios de salida de la ZTE frente a {n_ts} traslados de maquinaria a la ZTC autorizados "
+                    "txt": f"{len(alta_sal)} ventas de maquinaria con indicios de salida de la ZTE"
+                           + (f" (sin contar {n_sb} de máquinas importadas sin beneficio)" if n_sb else "")
+                           + f" frente a {n_ts} traslados de maquinaria a la ZTC autorizados "
                            f"en el periodo ({sum(len(t['maqs']) or int(t['cant'] or 0) for t in tras_salida)} máquinas). "
-                           f"{sum(c['nivel'] == 'Alta' for c in casos)} casos siguen sin un traslado que los respalde.",
+                           f"{sum(c['nivel'] == 'Alta' for c in casos)} casos de nivel alto siguen sin un traslado que los respalde.",
                     "filtro": {"nivel": "Alta"}})
     if tras_salida:
         def maq_tras(t):
             return ", ".join(cat_key[k].lower() + " " + maq_modelo(k) for k in t["maqs"]) or \
                 pl(int(t["cant"] or 1), "máquina", "máquinas") + " de " + t["merc"].lower()
 
-        def venta_tras(p):
-            return f"{p['cpe'][3:]} {cli.get(por_cpe.loc[p['cpe']].doc, {}).get('nombre', '')[:28].strip()} ({p['dias']:+d} d)"
-        pat.append({"id": "probables", "nivel": "Info", "t": "Cada traslado de maquinaria y su venta probable",
-                    "items": [f"{t['exp'].split('-')[-1]} del {fecha_txt(t['f'])} ({maq_tras(t)}) → " + (", ".join(venta_tras(p) for p in t["prob"]) or "sin venta probable")
-                              for t in tras_salida],
-                    "txt": "Propuesta por tipo de máquina y fecha (días de la venta respecto del traslado): el XML de cada venta la confirma o la descarta.",
-                    "filtro": {"mk": "trasp"}})
+        def venta_tras(t):
+            if t["venta"]:
+                return ", ".join(f"{x[3:]} {cli.get(por_cpe.loc[x].doc, {}).get('nombre', '')[:28].strip()} (por serie)" for x in t["venta"])
+            return ", ".join(f"{p['cpe'][3:]} {cli.get(por_cpe.loc[p['cpe']].doc, {}).get('nombre', '')[:28].strip()} (probable, {p['dias']:+d} d)"
+                             for p in t["prob"]) or "sin venta enlazada"
+        pat.append({"id": "probables", "nivel": "Info", "t": "Cada traslado de maquinaria y su venta",
+                    "items": [f"{t['exp'].split('-')[-1]} del {fecha_txt(t['f'])} ({maq_tras(t)}) → {venta_tras(t)}" for t in tras_salida],
+                    "txt": "«Por serie»: la factura (XML) lleva la serie de la máquina del traslado. «Probable»: propuesta por tipo de máquina y fecha "
+                           "(días de la venta respecto del traslado), por confirmar con el XML.",
+                    "filtro": {"mk": "tras"}})
+    sb = [c for c in casos if c["estado"].startswith(("Coherente: importada sin beneficio", "Importada sin beneficio"))]
+    if sb:
+        con_igv = [c for c in sb if (c["igv"] or 0) > 0]
+        sin_igv = [c for c in sb if not (c["igv"] or 0) > 0]
+        pat.append({"id": "sin_benef", "nivel": "Info", "t": "Máquinas importadas sin beneficio de la Amazonía",
+                    "txt": f"{pl(len(sb), 'venta enlazada por serie corresponde', 'ventas enlazadas por serie corresponden')} a máquinas importadas sin destino amazónico "
+                           f"(tributos pagados al importar): no hay riesgo aduanero de salida. {len(con_igv)} se vendieron con IGV (coherente)"
+                           + (f"; {len(sin_igv)} se vendieron sin IGV a compradores de fuera de la ZTE ("
+                              + ", ".join(sorted({c['cli'] for c in sin_igv})) + "): revisar el IGV de esas ventas (tributos internos)." if sin_igv else "."),
+                    "filtro": {"estado": sin_igv[0]["estado"] if sin_igv else con_igv[0]["estado"]}})
     exps = [c for c in casos if "exp" in c["mot"]]
     if exps or any("nodom" in c["mot"] for c in casos):
         pat.append({"id": "exp", "nivel": "Info", "t": "Ventas al exterior: flujo coherente",
@@ -944,24 +1041,37 @@ def main(a):
     nc_re = sum(1 for c in nc_a if c["reem"])
     nc_otro = sum(1 for c in nc_a if not c["reem"] and c["otro"])
     med_b = pd.Series([c["dias"] for c in bj if c["dias"] is not None])
+    con_sin_txt = "; ".join(c["orig"][3:] + " → " + c["reem"][3:] + (", misma máquina " + c["misma_serie"] + " según los XML" if c["misma_serie"] else "")
+                            for c in con_sin)
     pat.append({"id": "hipotesis", "nivel": "Info", "t": "Anulaciones de facturas de maquinaria: ¿ligadas al traslado?",
                 "items": [f"{pl(len(bj), 'factura dada de baja', 'facturas dadas de baja')}: {sum(1 for c in bj if c['reem'])} reemitidas al mismo cliente por el mismo valor "
                           f"(mediana: {pl(int(med_b.median()) if len(med_b) else 0, 'día', 'días')}).",
                           f"{pl(len(nc_a), 'anulada con nota de crédito', 'anuladas con nota de crédito')}: {nc_re} reemitidas al mismo cliente, {nc_otro} vendidas a otro "
                           f"cliente por el mismo tipo y valor y {len(nc_a) - nc_re - nc_otro} sin reemisión (anticipos que se consolidan en otra factura o ventas canceladas).",
-                          f"Pasaron de con IGV a sin IGV: {len(con_sin)}{' (' + ', '.join(c['orig'][3:] + ' → ' + c['reem'][3:] for c in con_sin) + ')' if con_sin else ''}.",
+                          f"Pasaron de con IGV a sin IGV: {len(con_sin)}{' (' + con_sin_txt + ')' if con_sin else ''}.",
                           f"Coinciden con un traslado de maquinaria: {len(coinc)}{' (' + ', '.join((c['reem'] or c['orig'])[3:] for c in coinc) + ')' if coinc else ''}."],
                 "txt": f"La mayoría son correcciones del comprobante: la hipótesis no se sostiene en general, pero merece revisión en "
                        f"{pl(len(set(c['reem'] or c['orig'] for c in con_sin + coinc)), 'caso puntual', 'casos puntuales')}.",
                 "filtro": {"mk": "anul"}})
     if seriales:
-        conf = [c["cpe"][3:] for c in casos if c["estado"].startswith("Confirmada")]
-        fuera = [x[3:] for x in seriales if x not in venta_maq]
+        con_serie = [c for c in casos if c["series"] or c["maqs"]]
+        CATEG = (("Confirmada", "Confirmadas sin traslado de salida (DAM con destino Tarapoto)"),
+                 ("DAM con destino", "De DAM con destino a otra intendencia amazónica"),
+                 ("Serie fuera", "Con una serie que no está en las DAM del importador del periodo"),
+                 ("Traslado probable", "Con traslado probable por confirmar"),
+                 ("Regularizada", "Regularizadas con traslado autorizado"),
+                 ("Coherente: importada sin beneficio", "Importadas sin beneficio y vendidas con IGV (coherente)"),
+                 ("Importada sin beneficio", "Importadas sin beneficio y vendidas sin IGV fuera de la ZTE"))
+        cuenta = {}
+        for c in con_serie:
+            et = next((t for k, t in CATEG if c["estado"].startswith(k)), c["estado"])
+            cuenta.setdefault(et, []).append(c["cpe"][3:])
+        conf = [c for c in casos if c["estado"].startswith("Confirmada")]
         pat.append({"id": "serie", "nivel": "Alta" if conf else "Info", "t": "Trazabilidad por número de serie",
-                    "txt": f"{pl(len(seriales), 'venta tiene', 'ventas tienen')} número de serie (XML o caso documentado): {len(venta_maq)} enlazadas con su DAM. "
-                           f"Confirmadas sin traslado autorizado: {len(conf)}{' (' + ', '.join(conf) + ')' if conf else ''}. "
-                           f"Con una serie que no está en las DAM del periodo (importadas antes): {len(fuera)}{' (' + ', '.join(fuera) + ')' if fuera else ''}.",
-                    "filtro": {"mk": "xml"}})
+                    "items": [f"{k}: {len(cuenta[k])} ({', '.join(cuenta[k][:9])}{'…' if len(cuenta[k]) > 9 else ''})"
+                              for k in [t for _, t in CATEG] + [x for x in cuenta if x not in [t for _, t in CATEG]] if k in cuenta],
+                    "txt": f"{pl(len(facturas), 'XML leído', 'XML leídos')}; {len(venta_maq)} ventas enlazadas con su DAM por la serie de la máquina o del motor.",
+                    "filtro": {"mk": "traza"}})
     pend_d = [k for k, c in ctl_cache.items() if c and c["reg"] == "Pendiente de regularización" and k in set(mq.dam)]
     if pend_d:
         mp = [x for x in maquinas if x["dam"] in set(pend_d)]
@@ -1005,7 +1115,10 @@ def main(a):
             {"t": "DAM de importación", "d": f"{dec.dam.nunique():,} DAM y {len(m):,} series del régimen 10 ({ftxt(m.f.min())} a {ftxt(m.f.max())}); "
                                              f"{len(maquinas):,} series de maquinaria. Depósito ({dep70.dam.nunique()} DAM) y exportación ({exp40.dam.nunique()} DAM) solo para la historia de cada máquina."},
             {"t": "Comprobantes emitidos", "d": f"{len(e):,} CPE y {len(dl):,} ítems de detalle ({ftxt(e.f.min())} a {ftxt(e.f.max())}); {len(vm):,} de la serie de maquinaria."},
-        ] + ([{"t": "XML de facturas", "d": f"{len(facturas)} comprobantes leídos (UBL 2.1): serie de la máquina y del motor, afectación del IGV, establecimiento y orden de compra."}] if facturas else [])
+        ] + ([{"t": "XML de los comprobantes", "d": f"{len(facturas)} comprobantes leídos (UBL 2.1): {pl(sum(d['tipo'] == '01' for d in facturas.values()), 'factura', 'facturas')}"
+                                                       f" y {pl(sum(d['tipo'] == '07' for d in facturas.values()), 'nota de crédito', 'notas de crédito')}"
+                                                       + (f"; {len(xml_rep)} archivos repetidos se leyeron una sola vez" if xml_rep else "")
+                                                       + f". {len(venta_maq)} ventas enlazadas con su DAM por la serie."}] if facturas else [])
           + ([{"t": "Cuaderno de control de la IA", "d": f"{sum(1 for k in ctl if k in dams_periodo)} DAM del periodo, {sum(len([n for n in x.get('ncn', []) if not n['anulada']]) for k, x in ctl.items() if k in dams_periodo)} NCN, "
                                                           f"{len(tr)} expedientes de traslado y RI con su PDF."}] if ctl else [])
           + ([{"t": "Domicilio fiscal y actividad", "d": f"Padrón reducido del RUC{' al ' + fecha_txt(str(dom.fecha_padron.iloc[0])) if dom is not None and 'fecha_padron' in dom and len(dom) else ''} "
@@ -1053,6 +1166,9 @@ def main(a):
     for c in coinc + con_sin:
         for x in (c["orig"], c["nc"], c["reem"]):
             pendiente(x, 3, "Cadena de anulación ligada a un traslado o a un cambio de IGV")
+    for c in casos:
+        if c["tras_prob"] and c["nivel"] == "Baja":
+            pendiente(c["cpe"], 3, "Opcional: confirmar por serie el traslado de una exportación")
 
     # ---------- Salida ----------
     dams = {}

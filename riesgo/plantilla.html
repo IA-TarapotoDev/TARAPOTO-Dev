@@ -208,6 +208,7 @@
   .bloque dl { margin: 0; display: grid; grid-template-columns: minmax(90px, max-content) 1fr; gap: 4px 12px; }
   .bloque dt { color: var(--suave); }
   .bloque dd { margin: 0; overflow-wrap: anywhere; }
+  .bloque dd .etq, .bloque li .etq { white-space: normal; }
   .bloque p { margin: 6px 0 0; color: var(--suave); }
   .bloque ol, .bloque ul { margin: 4px 0 0; padding-left: 18px; display: grid; gap: 4px; }
   .bloque.alerta { box-shadow: inset 3px 0 0 var(--critico), var(--sombra); }
@@ -657,6 +658,7 @@ const MARCAS = {
   trasp: { t: "Traslado probable por tipo de máquina y fecha (confirmar con el XML)", ic: "camion", c: "var(--aviso)" },
   exp: { t: "Con DAM de exportación", ic: "salida", c: "var(--ok)" },
   venta: { t: "Venta enlazada por número de serie", ic: "ventas", c: "var(--texto)" },
+  post: { t: "Beneficio concluido después de la venta (reconocimiento físico o NCN)", ic: "calendario", c: "var(--critico)" },
 };
 const marcasH = mk => `<span class="mks">${(mk || []).map(k => MARCAS[k] ? `<span class="mk" title="${esc(MARCAS[k].t)}" role="img" aria-label="${esc(MARCAS[k].t)}" style="color:${MARCAS[k].c}">${ic(MARCAS[k].ic)}</span>` : "").join("")}</span>`;
 const marcasT = mk => (mk || []).map(k => MARCAS[k] ? MARCAS[k].t : k);
@@ -688,6 +690,7 @@ function bloqueControl(dam, k) {
     ["Modalidad", esc(c.tipo || "–") + (c.mon ? ` <span class="etq">${c.mon === "PEN" ? "en soles" : "en dólares"}</span>` : "")],
     [qué, c.trib && c.trib.total ? `${sim} ${f0(c.trib.total)} <span class="etq">IGV ${f0(c.trib.igv)} · IPM ${f0(c.trib.ipm)}${c.trib.adv ? " · ad valorem " + f0(c.trib.adv) : ""}</span> <span class="etq">de toda la DAM</span>` : ""],
     ["Regularización", `<span class="etq ${ctlClase(c)}">${esc(ctlEstado(c))}</span>` + (c.ri ? ` RI ${esc(c.ri)}${c.ri_f ? " del " + fecha(c.ri_f) : ""}` : "") + (c.fin ? ` · ${esc(c.fin.toLowerCase())}` : "")],
+    ["Reconocimiento físico", c.f_rf ? fecha(c.f_rf) : ""], ["Diligencia concluida", c.f_dil ? fecha(c.f_dil) : ""],
     ["NCN", (c.ncn || []).length ? c.ncn.map(n => `${esc(n.ncn || "NCN")} · S/ ${f0(n.total)}${n.ri ? " · RI " + esc(n.ri) : ""}${n.f ? " · " + fecha(n.f) : ""}`).join("<br>") : ""],
     ["RI de la DAM", (c.ris || []).length ? c.ris.map(r => esc(r.ri) + (r.pdf ? ` <span class="etq">${esc(r.pdf)}</span>` : "")).join("<br>") : ""],
     ["Traslados de la DAM", tr.length ? tr.map(t => `${esc(t.exp)} · ${fecha(t.f)} · ${esc(t.tipo)}` + (s != null && t.maqs.includes(k) ? ` <span class="etq ok">incluye esta serie</span>` : t.maqs.length ? ` <span class="etq">series ${esc(t.maqs.map(x => x.split("#")[1]).join(", "))}</span>` : "")).join("<br>") : "Ninguno"],
@@ -731,6 +734,7 @@ function bloqueCadena(c) {
     return `<div class="paso-c">${esc(folio(p.orig))} · ${fecha(p.orig_f)} · ${(p.orig_igv || 0) > 0 ? "<b>con IGV</b>" : "sin IGV"} <span class="fl">→</span> ${via} <span class="fl">→</span> ` +
       (p.reem ? `${esc(folio(p.reem))} · ${fecha(p.reem_f)} · ${(p.reem_igv || 0) > 0 ? "<b>con IGV</b>" : "sin IGV"}` : "sin reemisión") +
       (p.cambio === "con→sin" ? ` <span class="etq alerta">pasó de con IGV a sin IGV</span>` : "") +
+      (p.misma_serie ? ` <span class="etq ok">misma máquina (serie ${esc(p.misma_serie)})</span>` : p.otra_serie ? ` <span class="etq alerta">otra máquina</span>` : "") +
       ((p.tras || []).length ? ` <span class="etq pend">cerca del traslado ${p.tras.map(i => esc(D.traslados[i].exp.split("-").pop())).join(", ")}</span>` : "") + `</div>` +
       (p.enlace ? `<p>Factura de la NC identificada por ${esc(p.enlace)}.</p>` : "");
   });
@@ -870,7 +874,8 @@ function vistaResumen(sec) {
   const f1 = el("div", { class: "g12" }); sec.append(f1);
   f1.append(
     plan({ clase: "oscuro", icono: "alertas", titulo: "Casos", chip: "Prioridad", valor: `${f0(K.casos.Alta)} · ${f0(K.casos.Media)} · ${f0(K.casos.Baja)}`, sub: "nivel alto · medio · bajo",
-      punto: "var(--lat-act)", puntos: [`<b>${f0(K.alta_sin_xml)}</b> de nivel alto esperan su XML`, conf ? `<b>${f0(conf)}</b> confirmados sin traslado autorizado` : "",
+      punto: "var(--lat-act)", puntos: [conf ? `<b>${f0(conf)}</b> confirmados por número de serie sin traslado de salida` : "",
+        K.alta_sin_xml ? `<b>${f0(K.alta_sin_xml)}</b> de nivel alto esperan su XML` : "Todos los de nivel alto tienen su XML",
         prob ? `<b>${f0(prob)}</b> con traslado probable por confirmar` : ""], boton: "Ver alertas", destino: "alertas" }),
     plan({ icono: "maquinas", titulo: "Máquinas importadas", chip: `${f0(K.maq_dams)} DAM`, valor: f0(K.maq_series), sub: "series de maquinaria del régimen 10",
       punto: "var(--lima)", puntos: [d271 ? `Destino Tarapoto: <b>${f0(d271.series)}</b> (${f0(d271.ctl)} DAM en el control de la IA)` : "",
@@ -982,6 +987,37 @@ const GRUPOS_CASOS = [
   { id: "estado", t: "Estado", clave: r => r.estado, orden: ordenCasos, cabecera: (k, rs) => `<b class="g">${esc(k)}</b>` + resumenCasos(rs) },
 ];
 
+/* Cronología: importación, control de la IA, traslados, comprobantes y venta, con los días respecto de la venta */
+function cronologia(c) {
+  const ev = [], venta = c.f;
+  for (const k of c.maqs) {
+    const m = IDX.maq.get(k); if (!m) continue;
+    const ctl = (D.dams[m.dam] || {}).ctl;
+    if (m.dep) ev.push([m.dep.f, `Ingreso a depósito (DAM ${m.dep.dam})`]);
+    ev.push([m.f, `Importación (DAM ${m.dam} serie ${m.s})`]);
+    if (ctl) {
+      if (ctl.f_rf) ev.push([ctl.f_rf, `Reconocimiento físico${ctl.res ? " " + ctl.res.toLowerCase() : ""}`, "control"]);
+      if (ctl.f_dil) ev.push([ctl.f_dil, "Diligencia en destino concluida", "control"]);
+      if (ctl.ri && ctl.ri_f) ev.push([ctl.ri_f, `RI ${ctl.ri}`, "control"]);
+      for (const n of ctl.ncn || []) if (n.f) ev.push([n.f, `NCN ${n.ncn || ""} por S/ ${f0(n.total)} (tributos devueltos)`, "control"]);
+    }
+    for (const i of m.tras || []) { const t = D.traslados[i]; if (t) ev.push([t.f, `Traslado ${t.exp} (${t.tipo})`]); }
+  }
+  for (const p of c.cadena || []) {
+    ev.push([p.orig_f, `Factura ${folio(p.orig)} ${(p.orig_igv || 0) > 0 ? "con IGV" : "sin IGV"}`]);
+    if (p.nc) ev.push([p.nc_f, `Nota de crédito ${folio(p.nc)}`]);
+  }
+  ev.push([venta, `Venta: factura ${folio(c.cpe)} a ${c.cli}`, "venta"]);
+  if (ev.length < 3) return null;
+  ev.sort((a, b) => a[0].localeCompare(b[0]));
+  const dias = f => Math.round((new Date(f) - new Date(venta)) / 864e5);
+  const filas = ev.map(([f, t, tipo]) => {
+    const d = dias(f), tarde = tipo === "control" && d > 0 && c.nivel === "Alta";
+    return `<li>${fecha(f)} · ${tipo === "venta" ? "<b>" + esc(t) + "</b>" : esc(t)}` + (tipo === "venta" ? "" : ` <span class="etq ${tarde ? "alerta" : ""}">${d === 0 ? "el día de la venta" : Math.abs(d) + (Math.abs(d) === 1 ? " día " : " días ") + (d > 0 ? "después" : "antes")}</span>`) + `</li>`;
+  });
+  return bloque("Cronología", "calendario", [], { html: `<ul>${filas.join("")}</ul>`, clase: (c.post || []).some(p => p.t !== "dil") ? "alerta" : "" });
+}
+
 function fichaCaso(c) {
   const v = IDX.venta.get(c.cpe) || {}, cl = D.clientes[c.ruc];
   const f = el("div", { class: "ficha" });
@@ -1008,6 +1044,7 @@ function fichaCaso(c) {
       { clase: "pend", html: s ? `<p>La serie no está en las DAM de ${esc(mesLargo(D.meta.desde))} a ${esc(mesLargo(D.meta.hasta))}: la máquina se importó antes. Búsquela en el sistema aduanero por la serie y el motor.</p>`
         : `<p>Sin el XML no se conoce la serie de la máquina. Descárguelo del portal (datos arriba) y súbalo: la máquina se enlazará con su DAM y su control.</p>` }));
   }
+  const cr = cronologia(c); if (cr) b.append(cr);
   for (const i of c.tras || []) b.append(bloqueTraslado(i, true, v));
   for (const i of c.tras_prob || []) b.append(bloqueTraslado(i, false, v));
   if (c.exp) b.append(bloque("Exportación", "salida", [["DAM", copiable(c.exp)], ["Detalle", esc((D.exportaciones.find(x => x.dam === c.exp) || {}).desc || "")]], { clase: "ok" }));
@@ -1018,9 +1055,9 @@ function fichaCaso(c) {
 function vistaAlertas(sec) {
   const K = D.kpi;
   sec.append(el("h2", {}, "Alertas"),
-    el("p", { class: "nota" }, "Cada caso es una venta de maquinaria con indicios de salida de la zona del beneficio. Alto: compra fuera de la ZTE, venta con IGV o reemisión sin IGV, sin traslado que la respalde. Medio: traslado probable por confirmar, comprador reciente o no habido, o anulación cerca de un traslado. Bajo: flujo coherente (exportación o traslado autorizado). Abra un caso para ver la máquina, su DAM, el control de la IA y la cadena de comprobantes."));
+    el("p", { class: "nota" }, "Cada caso es una venta de maquinaria con indicios de salida de la zona del beneficio. Alto: comprador fuera de la ZTE, venta con IGV o reemisión sin IGV, sin un traslado que la respalde. Medio: traslado probable por confirmar, comprador reciente o no habido, o máquina importada sin beneficio y vendida sin IGV fuera de la ZTE (tributos internos). Bajo: coherente (exportada, con traslado autorizado o importada sin beneficio y vendida con IGV). Abra un caso para ver la máquina, su DAM, el control de la IA y la cadena de comprobantes."));
   const ks = el("div", { class: "kpis" });
-  const sub = { Alta: `${f0(K.alta_sin_xml)} esperan su XML`, Media: `${f0(D.casos.filter(c => c.estado.startsWith("Traslado probable")).length)} con traslado probable`, Baja: "flujo coherente o regularizado" };
+  const sub = { Alta: K.alta_sin_xml ? `${f0(K.alta_sin_xml)} esperan su XML` : `${f0(D.casos.filter(c => c.estado.startsWith("Confirmada")).length)} confirmados por número de serie`, Media: `${f0(D.casos.filter(c => c.estado.startsWith("Traslado probable")).length)} con traslado probable`, Baja: "coherentes o regularizados" };
   for (const n of ["Alta", "Media", "Baja"]) ks.append(kpi(NIVEL(n), f0(K.casos[n]), sub[n]));
   sec.append(ks);
 
@@ -1039,7 +1076,7 @@ function vistaAlertas(sec) {
   }
 
   const t = tarjeta(); sec.append(t);
-  t.append(leyendaMarcas(["igv", "ztc", "zte", "ext", "pub", "pn", "rev", "anul", "xml", "traza", "usada", "pend", "dnc", "ncn", "tras", "trasp", "exp"]));
+  t.append(leyendaMarcas(["post", "igv", "ztc", "zte", "ext", "pub", "pn", "rev", "anul", "xml", "traza", "usada", "pend", "dnc", "ncn", "tras", "trasp", "exp"]));
   t.append(el("p", { class: "nota" }, "En comprobantes con IGV el monto es el valor de venta más el 18 % calculado, sin redondear; pase el cursor sobre la etiqueta IGV para ver el valor de venta."));
   const textoMot = k => (D.meta.texto || {})[k] || k;
   t.append(el("p", { class: "nota" }, "Use «Agrupar por» para ver los casos por comprador, máquina, DAM, tipo de mercancía, departamento o traslado; cada grupo se abre con un clic. La elección se recuerda en este navegador."));
