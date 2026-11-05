@@ -216,21 +216,59 @@ def leer_control_ia(ruta, ruc):
         if n not in wb.sheetnames:
             return pd.DataFrame()
         rows = list(wb[n].iter_rows(values_only=True))
-        h = next(i for i, r in enumerate(rows[:15]) if sum(isinstance(c, str) for c in r) >= 5)
+        h = next((i for i, r in enumerate(rows[:15]) if sum(isinstance(c, str) for c in r) >= 5), None)
+        if h is None:
+            return pd.DataFrame()
         cols = [str(c).strip() if c is not None else f"c{j}" for j, c in enumerate(rows[h])]
         return pd.DataFrame([r for r in rows[h + 1:] if any(c is not None for c in r)], columns=cols)
     claves = lambda x: [f"{a}-{b}-{c}-{int(d):06d}" for a, b, c, d in re.findall(r"(\d{3})-(\d{4})-(\d{2})[- ](\d{1,7})", str(x))]
     txt = lambda v: "" if v is None or (not isinstance(v, str) and pd.isna(v)) else (v.strftime("%Y-%m-%d") if hasattr(v, "strftime") else str(v).strip())
     num = lambda v: float(v) if isinstance(v, (int, float)) and v == v else None
     ctl = {}
-    ct = hoja("ConsolidadoT")
-    if len(ct):
+    # ConsolidadoT primero; luego las hojas de cada especialista y la de ingreso, solo para DAM que aún no estén consolidadas
+    fuentes = ["ConsolidadoT"] + [n for n in wb.sheetnames if n not in ("ConsolidadoT", "Ingreso de DAM")] + ["Ingreso de DAM"]
+    for nombre in fuentes:
+        ct = hoja(nombre)
+        if not len(ct) or "Num_DAM" not in ct or "RUC_Importador" not in ct or "NroSolic_Reg" not in ct:
+            continue
         for _, r in ct[ct.RUC_Importador.astype(str).str.contains(ruc)].iterrows():
             for k in claves(r.Num_DAM):
+                if "control" in ctl.get(k, {}):
+                    continue
                 ctl.setdefault(k, {})["control"] = {"tipo": txt(r.get("Tipo_DAM")), "dilig": txt(r.get("Resultado de la Diligencia_Aduana Destino")),
                     "plazo": txt(r.get("Estado_Dilig_Dest")), "fin": txt(r.get("Forma de Conclusion")), "ri": txt(r.get("Numero de la RI / RD")),
-                    "ri_f": txt(r.get("Fecha de RI / RD")), "ciudad": txt(r.get("Ciudad_Mercancia")), "merc": txt(r.get("Tipo_Mercancia")),
-                    "incid": txt(r.get("Incidencia_Recon_Fisico")), "estado": txt(r.get("ESTADO ACTUAL"))}
+                    "ri_f": txt(r.get("Fecha de RI / RD")), "ciudad": txt(r.get("Ciudad_Mercancia") or r.get("Ciudad de la Mercancia")),
+                    "merc": txt(r.get("Tipo_Mercancia")), "incid": txt(r.get("Incidencia_Recon_Fisico")),
+                    "estado": txt(r.get("ESTADO ACTUAL")) or ("Ingresada, sin consolidar" if nombre == "Ingreso de DAM" else ""),
+                    "lim": txt(r.get("Fecha_Lim_Rec_Fisico")), "hoja": nombre,
+                    "igv": num(r.get("Regulariza_IGV")), "ipm": num(r.get("Regulariza_IPM")), "adv": num(r.get("Regulariza_ADValorem"))}
+    h1 = hoja("Hoja1")
+    if len(h1):
+        for _, r in h1.iterrows():
+            for k in set(claves(r.get("DAM")) + claves(r.get("Detalle Asunto"))):
+                if k in ctl:
+                    ctl[k].setdefault("ris", []).append({"ri": txt(r.get("Nro Documento definitivo")), "asunto": txt(r.get("Detalle Asunto")),
+                                                         "pdf": txt(r.get("CONTIENE AUTORIZA"))})
+    meta = {"art2": [], "complejidad": None}
+    a2 = hoja("ConsolidadoA2")
+    if len(a2):
+        vistos = set()
+        for _, r in a2[a2.RUC_Importador.astype(str).str.contains(ruc)].iterrows():
+            inf = txt(r.get("Nro_Informe_Art.2"))
+            if inf in vistos:
+                continue
+            vistos.add(inf)
+            meta["art2"].append({"periodo": txt(r.get("Periodo_Verificacion")), "informe": inf, "f": txt(r.get("Fecha_Inform_Art2")),
+                                 "resultado": txt(r.get("RESULTADO")), "aduana": txt(r.get("Aduana_Jurisdiccion")), "dam": txt(r.get("Num_DAM"))})
+    if "Complejidad" in wb.sheetnames:
+        filas_c = list(wb["Complejidad"].iter_rows(values_only=True))
+        media = next((r[1] for r in filas_c if r and r[0] and "Media global" in str(r[0])), None)
+        for r in filas_c:
+            vals = [c for c in r if c is not None]
+            for j, c in enumerate(vals[:-2]):
+                if str(c).strip() == ruc and isinstance(vals[j + 1], (int, float)):
+                    meta["complejidad"] = {"valor": round(float(vals[j + 1]), 3), "n": int(vals[j + 2]) if isinstance(vals[j + 2], (int, float)) else None,
+                                           "media": round(float(media), 3) if isinstance(media, (int, float)) else None}
     nc = hoja("NCN")
     if len(nc):
         for _, r in nc[nc.RUC_Importador.astype(str).str.contains(ruc)].iterrows():
@@ -248,7 +286,7 @@ def leer_control_ia(ruta, ruc):
             traslados.append(t)
             for k in claves(r.Num_DAM):
                 ctl.setdefault(k, {}).setdefault("tras", []).append(t)
-    return ctl, traslados
+    return ctl, traslados, meta
 
 
 def leer_consulta_ruc(rutas):
@@ -650,14 +688,22 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, cons
                s.nombre_b, s.doc, f"{s.cpe_b} del {s.f_b:%d/%m/%Y} con IGV {s.moneda} {s.igv_b:,.2f}, dada de baja; reemitida como {s.cpe_r} "
                f"del {s.f_r:%d/%m/%Y} sin IGV · línea {s.linea_b}", s.vv_r, s.moneda)
     reemitidas = dict(zip(reem.cpe_r, zip(reem.cpe_b, reem.f_b.dt.strftime("%Y-%m-%d"), reem.igv_b)))
-    ctl, traslados = leer_control_ia(r_ctl, m.NUM_DOCIDENT.iloc[0]) if r_ctl else ({}, [])
+    ctl, traslados, meta_ctl = leer_control_ia(r_ctl, m.NUM_DOCIDENT.iloc[0]) if r_ctl else ({}, [], {})
+    PEND = ("REGISTRAR DILIGENCIA", "REGISTRAR RF", "EMITIR INFORME", "EMITIR RESOLUCION", "CON NOTIFICACION", "EMITIR NCN", "INGRESADA, SIN CONSOLIDAR")
+    pendiente = lambda c: norm(c.get("estado", "")) in PEND
+    vencida = lambda c: bool(c.get("lim")) and pendiente(c) and pd.Timestamp(c["lim"]) < mt.f.max().normalize()
     resumen_ctl = lambda k: {"tipo": ctl.get(k, {}).get("control", {}).get("tipo", ""), "dilig": ctl.get(k, {}).get("control", {}).get("dilig", ""),
                              "plazo": ctl.get(k, {}).get("control", {}).get("plazo", ""), "ri": ctl.get(k, {}).get("control", {}).get("ri", ""),
                              "ncn": len([n for n in ctl.get(k, {}).get("ncn", []) if not n["anulada"]]),
                              "ncn_total": sum(n["total"] or 0 for n in ctl.get(k, {}).get("ncn", []) if not n["anulada"]),
                              "ncn_ri": ", ".join(n["ri"] for n in ctl.get(k, {}).get("ncn", []) if not n["anulada"]),
                              "tras": len(ctl.get(k, {}).get("tras", [])), "tras_ri": ", ".join(t["ri"] for t in ctl.get(k, {}).get("tras", [])),
-                             "en": k in ctl} if r_ctl else None
+                             "en": k in ctl, "estado": ctl.get(k, {}).get("control", {}).get("estado", ""),
+                             "lim": ctl.get(k, {}).get("control", {}).get("lim", ""), "pend": pendiente(ctl.get(k, {}).get("control", {})),
+                             "venc": vencida(ctl.get(k, {}).get("control", {})), "incid": ctl.get(k, {}).get("control", {}).get("incid", ""),
+                             "igv": ctl.get(k, {}).get("control", {}).get("igv"), "ipm": ctl.get(k, {}).get("control", {}).get("ipm"),
+                             "adv": ctl.get(k, {}).get("control", {}).get("adv"),
+                             "ris": [x["ri"] + (" (" + x["pdf"] + ")" if x["pdf"] else "") for x in ctl.get(k, {}).get("ris", [])]} if r_ctl else None
 
     # Trazabilidad por número de serie (casos documentados con la factura del emisor)
     casos = []
@@ -717,8 +763,14 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, cons
                        f"Serie {c['serie']} · DAM {m_['dam']} ({k_['tipo'] or 's/d'}; diligencia en destino {k_['dilig'] or 's/d'}"
                        f"{', ' + k_['plazo'].lower() if k_['plazo'] else ''}) · sin expediente de traslado ZTE→ZTC en el control de la IA"
                        + (f" · garantía devuelta con NCN ({k_['ncn_ri']})" if k_["ncn"] else ""), v_["vv"], v_["mon"])
+        maq_dam = dict(zip(dec.dam, dec.maq))
         for k, x in ctl.items():
             c_ = x.get("control", {})
+            if k in maq_dam and vencida(c_):
+                dias = (mt.f.max().normalize() - pd.Timestamp(c_["lim"])).days
+                alerta("Alta" if maq_dam[k] > 0 else "Media", "Diligencia en destino pendiente con plazo vencido", k, c_["lim"], c_.get("merc", ""), "",
+                       (f"{int(maq_dam[k])} máquinas · " if maq_dam[k] > 0 else "")
+                       + f"{c_.get('tipo', '')} · plazo de reconocimiento vencido el {pd.Timestamp(c_['lim']):%d/%m/%Y} ({dias} días) · estado: {c_.get('estado', '')}", None, "")
             if c_.get("dilig", "").upper().startswith("NO CONFORME") and k in set(m.dam):
                 alerta("Media", "Diligencia en destino no conforme", k, c_.get("ri_f", ""), c_.get("merc", ""), "",
                        f"{c_.get('tipo', '')} · {c_.get('ciudad', '')} · {c_.get('plazo', '').lower()} · {c_.get('fin', '')}"
@@ -780,6 +832,7 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, cons
             mk.append("dnc" if dg.startswith("NO CONFORME") else "dok" if dg.startswith("CONFORME") else "")
             mk.append("ncn" if any(not n["anulada"] for n in x.get("ncn", [])) else "")
             mk.append("tras" if x.get("tras") else "")
+            mk.append("dpend" if vencida(x.get("control", {})) else "")
         a["mk"] = [x for x in mk if x]
         a["igv"] = bool(i is not None and i["igv"] > 0)
 
@@ -819,6 +872,9 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, cons
             "ncn_total": r2(sum(n["total"] or 0 for k in ctl if k in set(m.dam) for n in ctl[k].get("ncn", []) if not n["anulada"])),
             "no_conf": int(sum(1 for k in ctl if k in set(m.dam) and ctl[k].get("control", {}).get("dilig", "").upper().startswith("NO CONFORME"))),
             "traslados": [t for t in traslados if t["f"] >= meses[0]],
+            "pend": int(sum(1 for k in ctl if k in set(m.dam) and vencida(ctl[k].get("control", {})))),
+            "pend_maq": int(sum(maq for k, maq in zip(dec.dam, dec.maq) if k in ctl and vencida(ctl[k].get("control", {})))),
+            "art2": meta_ctl.get("art2", []), "complejidad": meta_ctl.get("complejidad"),
         },
         "dom": None if dom is None else {
             "fecha": (dom.fecha_padron.iloc[0] if len(dom) and "fecha_padron" in dom else ""),

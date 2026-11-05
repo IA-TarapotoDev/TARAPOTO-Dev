@@ -579,6 +579,7 @@ const ICONOS = {
   salida: '<path d="M12 15V3.5M7.5 8l4.5-4.5L16.5 8"/><path d="M5 14v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5"/>',
   reventa: '<path d="M4 8.5h14.5l-3.5-3.5"/><path d="M20 15.5H5.5L9 19"/>',
   lupa: '<circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5.5 5.5"/>',
+  reloj: '<path d="M6.5 3h11M6.5 21h11"/><path d="M7.5 3c0 4.5 4.5 5.5 4.5 9s-4.5 4.5-4.5 9M16.5 3c0 4.5-4.5 5.5-4.5 9s4.5 4.5 4.5 9"/>',
   lupax: '<circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5.5 5.5M8.3 8.3l4.4 4.4M12.7 8.3l-4.4 4.4"/>',
   devol: '<path d="M9 14L4.5 9.5 9 5"/><path d="M4.5 9.5H15a5 5 0 0 1 0 10h-3"/>',
   camion: '<path d="M2.5 6.5h11v9h-11z"/><path d="M13.5 9.5h4l3 3.2v2.8h-7z"/><path d="M16 4l3 2.5-3 2.5"/>',
@@ -866,10 +867,12 @@ const MARCAS = {
   dnc: { t: "Diligencia en destino no conforme (control IA)", ic: "lupax", c: "var(--critico)" },
   ncn: { t: "Garantía devuelta con NCN (control IA)", ic: "devol", c: "var(--serio)" },
   tras: { t: "Con traslado ZTE→ZTC autorizado (control IA)", ic: "camion", c: "var(--ok)" },
+  dpend: { t: "Diligencia en destino pendiente con plazo vencido (control IA)", ic: "reloj", c: "var(--critico)" },
 };
 const marcasH = mk => `<span class="mks">${(mk || []).map(k => MARCAS[k] ? `<span class="mk" title="${esc(MARCAS[k].t)}" aria-label="${esc(MARCAS[k].t)}" style="color:${MARCAS[k].c}">${ic(MARCAS[k].ic)}</span>` : "").join("")}</span>`;
-const ctlMk = c => !c ? [] : [(c.dilig || "").toUpperCase().startsWith("NO CONFORME") ? "dnc" : (c.dilig || "").toUpperCase().startsWith("CONFORME") ? "dok" : "", c.ncn ? "ncn" : "", c.tras ? "tras" : ""].filter(Boolean);
-const ctlTxt = c => !c ? "Sin registro en el control de la IA" : [c.tipo, c.dilig ? "diligencia " + c.dilig.toLowerCase() + (c.plazo ? " (" + c.plazo.toLowerCase() + ")" : "") : "", c.ncn ? `garantía devuelta con NCN (${c.ncn_ri})` : "sin NCN", c.tras ? `traslado autorizado (${c.tras_ri})` : "sin traslado ZTE→ZTC autorizado"].filter(Boolean).join(" · ");
+const ctlMk = c => !c ? [] : [(c.dilig || "").toUpperCase().startsWith("NO CONFORME") ? "dnc" : (c.dilig || "").toUpperCase().startsWith("CONFORME") ? "dok" : "", c.venc ? "dpend" : "", c.ncn ? "ncn" : "", c.tras ? "tras" : ""].filter(Boolean);
+const ctlTxt = c => !c ? "Sin registro en el control de la IA" : [c.tipo, c.dilig ? "diligencia " + c.dilig.toLowerCase() + (c.plazo ? " (" + c.plazo.toLowerCase() + ")" : "") : "",
+  c.venc ? `diligencia pendiente: plazo vencido el ${fecha(c.lim)}` : "", c.estado && !/CONCLUIDA/i.test(c.estado) ? "estado: " + c.estado.toLowerCase() : "", c.ncn ? `garantía devuelta con NCN (${c.ncn_ri})` : "sin NCN", c.tras ? `traslado autorizado (${c.tras_ri})` : "sin traslado ZTE→ZTC autorizado"].filter(Boolean).join(" · ");
 const montoAlerta = r => r.monto == null ? null : r.igv ? Math.round(r.monto * 118) / 100 : r.monto;
 function conActividad() { return D.ventas.clientes.some(c => c.act); }
 function contarAlertas(tipo) { return D.alertas.filter(a => a.tipo === tipo).length; }
@@ -959,6 +962,12 @@ function vistaResumen(sec) {
   if (D.control) { const C = D.control, tm = (C.traslados || []).filter(t => /MAQUINARIA/.test(t.merc)), u = tm.reduce((a, t) => a + (t.cant || 0), 0);
     item("Alta", `<b>Solo ${f0(tm.length)} traslados ZTE→ZTC de maquinaria (${f0(u)} unidades) figuran autorizados en el control de la IA</b> desde ${mesLargo(D.meta.desde)}, frente a ${f0(D.dom ? D.dom.maq.ZTC : 0)} máquinas vendidas a clientes domiciliados fuera de la ZTE. `
       + `Además, ${f0(C.no_conf)} DAM tuvieron diligencia en destino no conforme y ${f0(C.ncn)} ya recibieron la devolución de su garantía con NCN.`, "Máquina vendida fuera de la ZTE sin traslado autorizado"); }
+  if (D.control && D.control.pend) item(D.control.pend_maq ? "Alta" : "Media", `<b>${f0(D.control.pend)} DAM tienen la diligencia en destino pendiente y el plazo de reconocimiento vencido</b>`
+    + (D.control.pend_maq ? `, entre ellas ${f0(D.control.pend_maq)} máquinas` : "") + `. Mientras no se verifique la llegada a destino, no hay constancia de que la mercancía esté en la zona del beneficio.`, "Diligencia en destino pendiente con plazo vencido");
+  if (D.control && ((D.control.art2 || []).length || D.control.complejidad)) {
+    const a2 = (D.control.art2 || []).map(a => `${a.periodo}: ${a.resultado.toLowerCase()} (informe ${a.informe})`).join("; "), cx = D.control.complejidad;
+    item("Baja", `Contexto del control de la IA: verificación del artículo 2 ${a2 || "sin registro"}`
+      + (cx ? `; índice de complejidad de sus DAM ${NF2.format(cx.valor)} frente a ${NF2.format(cx.media)} del promedio general (${f0(cx.n)} DAM).` : "."), null); }
   { const sinNac = (D.maq.deposito || []).filter(r => !r.nac_dam).length;
     if (sinNac) item("Baja", `<b>${f0(sinNac)} máquinas siguen en depósito aduanero</b> sin DAM de nacionalización en los datos. Verificar su situación antes del vencimiento del plazo de depósito.`, null); }
   item("Media", `<b>${f0(contarAlertas("Venta de maquinaria anulada o devuelta"))} notas de crédito anulan o devuelven ventas de maquinaria</b> y ${f0(contarAlertas("Factura de maquinaria dada de baja"))} facturas de maquinaria se dieron de baja. Rastrear el destino final de cada unidad: si se volvió a facturar y a quién.`, "Venta de maquinaria anulada o devuelta");
@@ -1208,7 +1217,11 @@ function fichasTrazabilidad(sec) {
     cad.append(el("div", { class: "paso" + (m ? "" : " pend"), html: `<div class="n">${ic("importaciones")}1 · Importación</div>` + (m
       ? `<b>DAM ${esc(m.dam)} · serie ${m.serie}</b><div class="d">${fecha(m.f)} · canal ${CANAL[m.canal] || m.canal} · ${esc(convT(m.conv))}<br>Destino ${esc(destT(m.dest))} · CIF USD ${f0(m.cif)} · año ${esc(m.anio || "s/d")}`
         + (m.dep_dam ? `<br>Antes en depósito: DAM ${esc(m.dep_dam)} del ${fecha(m.dep_f)}` : "")
-        + (m.ctl ? `<br><b style="display:inline">Control IA:</b> ${esc(m.ctl.en ? ctlTxt(m.ctl) : "sin registro (otra intendencia de destino)")}` : "") + `</div>`
+        + (m.ctl ? `<br><b style="display:inline">Control IA:</b> ${esc(m.ctl.en ? ctlTxt(m.ctl) : "sin registro (otra intendencia de destino)")}` : "")
+        + (m.ctl && m.ctl.en && (m.ctl.igv || m.ctl.ipm) ? (() => { const usd = m.cif && m.ctl.igv && Math.abs(m.ctl.igv / m.cif - 0.16) < 0.005;
+          return `<br>Tributos en juego según el cuaderno: ${usd ? "USD " : ""}IGV ${f0(m.ctl.igv)} · IPM ${f0(m.ctl.ipm)}${m.ctl.adv ? " · ad valorem " + f0(m.ctl.adv) : ""}`
+            + (usd ? ` (total USD ${f0((m.ctl.igv || 0) + (m.ctl.ipm || 0) + (m.ctl.adv || 0))}; el IGV es el 16 % del CIF)` : " (moneda no indicada)"); })() : "")
+        + (m.ctl && (m.ctl.ris || []).length ? `<br>RI: ${esc(m.ctl.ris.join("; "))}` : "") + `</div>`
       : `<b>DAM no encontrada en el periodo</b><div class="d">La serie no está en las DAM de ${mesLargo(D.meta.desde)} a ${mesLargo(D.meta.hasta)}: probablemente se importó antes. Buscar la DAM por serie y motor en el sistema aduanero.</div>`) }));
     if (c.baja) cad.append(el("div", { class: "paso alerta", html: `<div class="n">${ic("ventas")}2 · Factura dada de baja</div><b>${esc(c.baja.cpe)} · ${fecha(c.baja.f)}</b><div class="d">Emitida <b style="display:inline">con IGV ${v ? mon(v.mon) : ""} ${f0(c.baja.igv)}</b> y dada de baja.</div>` }));
     if (v) cad.append(el("div", { class: "paso" + (v.igv > 0 ? "" : c.baja ? " alerta" : ""), html: `<div class="n">${ic("ventas")}${c.baja ? 3 : 2} · Venta</div><b>${esc(c.cpe)} · ${fecha(v.f)}</b><div class="d">${esc(v.cli)} (RUC ${esc(v.ruc)})<br>${mon(v.mon)} ${f0(v.vv)} · ${v.igv > 0 ? "con IGV " + f0(v.igv) : "sin IGV (operación exonerada)"}` +
