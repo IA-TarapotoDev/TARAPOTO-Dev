@@ -578,6 +578,10 @@ const ICONOS = {
   enlace: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
   salida: '<path d="M12 15V3.5M7.5 8l4.5-4.5L16.5 8"/><path d="M5 14v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5"/>',
   reventa: '<path d="M4 8.5h14.5l-3.5-3.5"/><path d="M20 15.5H5.5L9 19"/>',
+  lupa: '<circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5.5 5.5"/>',
+  lupax: '<circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5.5 5.5M8.3 8.3l4.4 4.4M12.7 8.3l-4.4 4.4"/>',
+  devol: '<path d="M9 14L4.5 9.5 9 5"/><path d="M4.5 9.5H15a5 5 0 0 1 0 10h-3"/>',
+  camion: '<path d="M2.5 6.5h11v9h-11z"/><path d="M13.5 9.5h4l3 3.2v2.8h-7z"/><path d="M16 4l3 2.5-3 2.5"/>',
 };
 const ic = k => `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">${ICONOS[k] || ""}</svg>`;
 
@@ -858,8 +862,14 @@ const MARCAS = {
   xml: { t: "Factura revisada (XML del emisor)", ic: "doc", c: "var(--ok)" },
   traza: { t: "Máquina enlazada con su DAM por número de serie", ic: "enlace", c: "var(--ok)" },
   exp: { t: "Con DAM de exportación", ic: "salida", c: "var(--ok)" },
+  dok: { t: "Diligencia en destino conforme (control IA)", ic: "lupa", c: "var(--ok)" },
+  dnc: { t: "Diligencia en destino no conforme (control IA)", ic: "lupax", c: "var(--critico)" },
+  ncn: { t: "Garantía devuelta con NCN (control IA)", ic: "devol", c: "var(--serio)" },
+  tras: { t: "Con traslado ZTE→ZTC autorizado (control IA)", ic: "camion", c: "var(--ok)" },
 };
 const marcasH = mk => `<span class="mks">${(mk || []).map(k => MARCAS[k] ? `<span class="mk" title="${esc(MARCAS[k].t)}" aria-label="${esc(MARCAS[k].t)}" style="color:${MARCAS[k].c}">${ic(MARCAS[k].ic)}</span>` : "").join("")}</span>`;
+const ctlMk = c => !c ? [] : [(c.dilig || "").toUpperCase().startsWith("NO CONFORME") ? "dnc" : (c.dilig || "").toUpperCase().startsWith("CONFORME") ? "dok" : "", c.ncn ? "ncn" : "", c.tras ? "tras" : ""].filter(Boolean);
+const ctlTxt = c => !c ? "Sin registro en el control de la IA" : [c.tipo, c.dilig ? "diligencia " + c.dilig.toLowerCase() + (c.plazo ? " (" + c.plazo.toLowerCase() + ")" : "") : "", c.ncn ? `garantía devuelta con NCN (${c.ncn_ri})` : "sin NCN", c.tras ? `traslado autorizado (${c.tras_ri})` : "sin traslado ZTE→ZTC autorizado"].filter(Boolean).join(" · ");
 const montoAlerta = r => r.monto == null ? null : r.igv ? Math.round(r.monto * 118) / 100 : r.monto;
 function conActividad() { return D.ventas.clientes.some(c => c.act); }
 function contarAlertas(tipo) { return D.alertas.filter(a => a.tipo === tipo).length; }
@@ -946,6 +956,9 @@ function vistaResumen(sec) {
   { const rv = D.maq.ventas.filter(v => v.cpe.startsWith("01") && v.est === "0" && /VTA.*MAQUINARIA/.test(v.act || ""));
     if (rv.length) { const li = el("li", {}, el("div", { html: NIVEL("Media") }), el("div", { class: "txt", html: `<b>${f0(rv.length)} máquinas se vendieron a ${f0(new Set(rv.map(v => v.ruc)).size)} compradores cuya actividad principal es la venta de maquinaria</b> (${f0(rv.filter(v => v.zona === "ZTC").length)} fuera de la ZTE, ${f0(rv.filter(v => !(v.igv > 0)).length)} sin IGV): posible reventa fuera de la zona del beneficio.` }));
       li.lastChild.append(" ", el("a", { href: "#alertas", onclick: e => { e.preventDefault(); irIndicador("rev"); } }, "Ver alertas →")); ul.append(li); } }
+  if (D.control) { const C = D.control, tm = (C.traslados || []).filter(t => /MAQUINARIA/.test(t.merc)), u = tm.reduce((a, t) => a + (t.cant || 0), 0);
+    item("Alta", `<b>Solo ${f0(tm.length)} traslados ZTE→ZTC de maquinaria (${f0(u)} unidades) figuran autorizados en el control de la IA</b> desde ${mesLargo(D.meta.desde)}, frente a ${f0(D.dom ? D.dom.maq.ZTC : 0)} máquinas vendidas a clientes domiciliados fuera de la ZTE. `
+      + `Además, ${f0(C.no_conf)} DAM tuvieron diligencia en destino no conforme y ${f0(C.ncn)} ya recibieron la devolución de su garantía con NCN.`, "Máquina vendida fuera de la ZTE sin traslado autorizado"); }
   { const sinNac = (D.maq.deposito || []).filter(r => !r.nac_dam).length;
     if (sinNac) item("Baja", `<b>${f0(sinNac)} máquinas siguen en depósito aduanero</b> sin DAM de nacionalización en los datos. Verificar su situación antes del vencimiento del plazo de depósito.`, null); }
   item("Media", `<b>${f0(contarAlertas("Venta de maquinaria anulada o devuelta"))} notas de crédito anulan o devuelven ventas de maquinaria</b> y ${f0(contarAlertas("Factura de maquinaria dada de baja"))} facturas de maquinaria se dieron de baja. Rastrear el destino final de cada unidad: si se volvió a facturar y a quién.`, "Venta de maquinaria anulada o devuelta");
@@ -1043,10 +1056,10 @@ function vistaImportaciones(sec) {
   sec.append(el("h2", {}, "Todas las DAM"), el("p", { class: "nota" }, "Una fila por DAM. Ordene por cualquier columna; el flete en % del FOB permite ubicar fletes atípicos por aduana."));
   const td = tarjeta(); sec.append(td);
   tabla(td, { ph: "Buscar DAM, fecha, tratamiento…", cols: [{ k: "dam", t: "DAM", c: 1 }, { k: "f", t: "Fecha", f: fecha, c: 1 }, { k: "ad", t: "Aduana", c: 1 }, { k: "canal", t: "Canal", h: r => canalH(r.canal) },
-    { k: "dest", t: "Destino", f: destT, c: 1 },
+    { k: "dest", t: "Destino", f: destT, c: 1 }, { t: "Control IA", v: r => ctlTxt(r.ctl), h: r => marcasH(ctlMk(r.ctl)) },
     { k: "series", t: "Series", n: 1, f: f0 }, { k: "maq", t: "Máquinas", n: 1, f: f0 }, { k: "fob", t: "FOB USD", n: 1, f: f0 }, { k: "flete", t: "Flete USD", n: 1, f: f0 },
     { k: "flete_pct", t: "Flete % FOB", n: 1, f: v => pc(v) }, { k: "seguro", t: "Seguro USD", n: 1, f: f0 }, { k: "cif", t: "CIF USD", n: 1, f: f0 }, { k: "conv", t: "Tratamiento", f: v => v.split(", ").map(convT).join(", ") }],
-    filas: I.dams, filtros: [{ t: "Destino", campo: "dest", valor: r => destT(r.dest) }, { t: "Canal", campo: "canal", valor: r => CANAL[r.canal] }, { t: "Aduana", campo: "ad", valor: r => r.ad }], archivo: "dam.csv" });
+    filas: I.dams, filtros: [{ t: "Destino", campo: "dest", valor: r => destT(r.dest) }, { t: "Control IA", campo: "ctl", valor: r => ctlMk(r.ctl).map(k => MARCAS[k].t) }, { t: "Canal", campo: "canal", valor: r => CANAL[r.canal] }, { t: "Aduana", campo: "ad", valor: r => r.ad }], archivo: "dam.csv" });
 }
 
 function vistaMaquinaria(sec) {
@@ -1105,7 +1118,7 @@ function vistaMaquinaria(sec) {
     { k: "cat", t: "Tipo", c: 1 }, { k: "marca", t: "Marca", c: 1 }, { k: "modelo", t: "Modelo", c: 1 }, { k: "anio", t: "Año", c: 1 }, { k: "id", t: "PIN / serie", c: 1 }, { k: "motor", t: "Motor", c: 1 },
     { v: r => r.usada ? "Usada" : "Nueva", t: "Estado", h: r => r.usada ? `<span class="etq fuerte">Usada${r.horas ? " · " + esc(r.horas) + " h" : ""}</span>` : "Nueva" },
     { k: "fob", t: "FOB USD", n: 1, f: f0 }, { k: "cif", t: "CIF USD", n: 1, f: f0 }, { k: "conv", t: "Tratamiento", f: convT, c: 1 },
-    { k: "dest", t: "Destino", f: destT, c: 1 }, { v: r => r.dep_dam ? `${r.dep_dam} ${r.dep_f}` : "", t: "Depósito previo", h: r => r.dep_dam ? `${esc(r.dep_dam)}<br>${fecha(r.dep_f)}` : "–", c: 1 }],
+    { k: "dest", t: "Destino", f: destT, c: 1 }, { t: "Control IA", v: r => ctlTxt(r.ctl), h: r => marcasH(ctlMk(r.ctl)) }, { v: r => r.dep_dam ? `${r.dep_dam} ${r.dep_f}` : "", t: "Depósito previo", h: r => r.dep_dam ? `${esc(r.dep_dam)}<br>${fecha(r.dep_f)}` : "–", c: 1 }],
     filas: Q.imp, filtros: [{ t: "Destino", campo: "dest", valor: r => destT(r.dest) }, { t: "Tipo", campo: "cat", valor: r => r.cat }, { t: "Canal", campo: "canal", valor: r => CANAL[r.canal] }, { t: "Estado", campo: "usada", valor: r => r.usada ? "Usada" : "Nueva" }],
     archivo: "maquinaria_importada.csv" });
 
@@ -1194,7 +1207,8 @@ function fichasTrazabilidad(sec) {
     const cad = el("div", { class: "cadena" });
     cad.append(el("div", { class: "paso" + (m ? "" : " pend"), html: `<div class="n">${ic("importaciones")}1 · Importación</div>` + (m
       ? `<b>DAM ${esc(m.dam)} · serie ${m.serie}</b><div class="d">${fecha(m.f)} · canal ${CANAL[m.canal] || m.canal} · ${esc(convT(m.conv))}<br>Destino ${esc(destT(m.dest))} · CIF USD ${f0(m.cif)} · año ${esc(m.anio || "s/d")}`
-        + (m.dep_dam ? `<br>Antes en depósito: DAM ${esc(m.dep_dam)} del ${fecha(m.dep_f)}` : "") + `</div>`
+        + (m.dep_dam ? `<br>Antes en depósito: DAM ${esc(m.dep_dam)} del ${fecha(m.dep_f)}` : "")
+        + (m.ctl ? `<br><b style="display:inline">Control IA:</b> ${esc(m.ctl.en ? ctlTxt(m.ctl) : "sin registro (otra intendencia de destino)")}` : "") + `</div>`
       : `<b>DAM no encontrada en el periodo</b><div class="d">La serie no está en las DAM de ${mesLargo(D.meta.desde)} a ${mesLargo(D.meta.hasta)}: probablemente se importó antes. Buscar la DAM por serie y motor en el sistema aduanero.</div>`) }));
     if (c.baja) cad.append(el("div", { class: "paso alerta", html: `<div class="n">${ic("ventas")}2 · Factura dada de baja</div><b>${esc(c.baja.cpe)} · ${fecha(c.baja.f)}</b><div class="d">Emitida <b style="display:inline">con IGV ${v ? mon(v.mon) : ""} ${f0(c.baja.igv)}</b> y dada de baja.</div>` }));
     if (v) cad.append(el("div", { class: "paso" + (v.igv > 0 ? "" : c.baja ? " alerta" : ""), html: `<div class="n">${ic("ventas")}${c.baja ? 3 : 2} · Venta</div><b>${esc(c.cpe)} · ${fecha(v.f)}</b><div class="d">${esc(v.cli)} (RUC ${esc(v.ruc)})<br>${mon(v.mon)} ${f0(v.vv)} · ${v.igv > 0 ? "con IGV " + f0(v.igv) : "sin IGV (operación exonerada)"}` +

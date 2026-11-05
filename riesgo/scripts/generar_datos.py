@@ -205,6 +205,52 @@ def leer_facturas_xml(rutas):
     return pd.DataFrame(filas)
 
 
+def leer_control_ia(ruta, ruc):
+    """Cuaderno de control de la intendencia (xlsx/xlsm): control en destino (ConsolidadoT), NCN y traslados.
+    Devuelve {dam: {...}} solo para el RUC indicado."""
+    import openpyxl
+    import warnings
+    warnings.filterwarnings("ignore")
+    wb = openpyxl.load_workbook(ruta, read_only=True, data_only=True)
+    def hoja(n):
+        if n not in wb.sheetnames:
+            return pd.DataFrame()
+        rows = list(wb[n].iter_rows(values_only=True))
+        h = next(i for i, r in enumerate(rows[:15]) if sum(isinstance(c, str) for c in r) >= 5)
+        cols = [str(c).strip() if c is not None else f"c{j}" for j, c in enumerate(rows[h])]
+        return pd.DataFrame([r for r in rows[h + 1:] if any(c is not None for c in r)], columns=cols)
+    claves = lambda x: [f"{a}-{b}-{c}-{int(d):06d}" for a, b, c, d in re.findall(r"(\d{3})-(\d{4})-(\d{2})[- ](\d{1,7})", str(x))]
+    txt = lambda v: "" if v is None or (not isinstance(v, str) and pd.isna(v)) else (v.strftime("%Y-%m-%d") if hasattr(v, "strftime") else str(v).strip())
+    num = lambda v: float(v) if isinstance(v, (int, float)) and v == v else None
+    ctl = {}
+    ct = hoja("ConsolidadoT")
+    if len(ct):
+        for _, r in ct[ct.RUC_Importador.astype(str).str.contains(ruc)].iterrows():
+            for k in claves(r.Num_DAM):
+                ctl.setdefault(k, {})["control"] = {"tipo": txt(r.get("Tipo_DAM")), "dilig": txt(r.get("Resultado de la Diligencia_Aduana Destino")),
+                    "plazo": txt(r.get("Estado_Dilig_Dest")), "fin": txt(r.get("Forma de Conclusion")), "ri": txt(r.get("Numero de la RI / RD")),
+                    "ri_f": txt(r.get("Fecha de RI / RD")), "ciudad": txt(r.get("Ciudad_Mercancia")), "merc": txt(r.get("Tipo_Mercancia")),
+                    "incid": txt(r.get("Incidencia_Recon_Fisico")), "estado": txt(r.get("ESTADO ACTUAL"))}
+    nc = hoja("NCN")
+    if len(nc):
+        for _, r in nc[nc.RUC_Importador.astype(str).str.contains(ruc)].iterrows():
+            for k in claves(r.Num_DAM):
+                ctl.setdefault(k, {}).setdefault("ncn", []).append({"ri": txt(r.get("Num_Res")), "ri_f": txt(r.get("Fecha RI")),
+                    "peco": txt(r.get("N_NCN_PECO")), "amaz": txt(r.get("N_NCN_AMAZONIA")), "f": txt(r.get("F_Emision_NCN")),
+                    "total": num(r.get("TOTAL")), "obs": txt(r.get("OBSERVACIONES")), "anulada": "ANULAD" in txt(r.get("OBSERVACIONES")).upper()})
+    tr = hoja("Traslados")
+    traslados = []
+    if len(tr):
+        for _, r in tr[tr.Doc_Solicitante.astype(str).str.contains(ruc)].iterrows():
+            t = {"exp": txt(r.get("N_Expediente")), "f": txt(r.get("Fecha_Expediente")), "tipo": txt(r.get("Tipo_Traslado")),
+                 "merc": txt(r.get("Tipo_Mercancia")), "cant": num(r.get("Cantidad_Trasladada")), "monto": num(r.get("Monto_Pagado_Garantizado")),
+                 "doc": txt(r.get("N_Documento")), "ri": txt(r.get("Num_Res")), "ri_f": txt(r.get("Fecha_res")), "res": txt(r.get("Resultado"))}
+            traslados.append(t)
+            for k in claves(r.Num_DAM):
+                ctl.setdefault(k, {}).setdefault("tras", []).append(t)
+    return ctl, traslados
+
+
 def leer_consulta_ruc(rutas):
     """Resultados de la consulta múltiple de RUC de SUNAT (ZIP o TXT separados por «|»)."""
     import io
@@ -285,7 +331,7 @@ def mes(s):
     return s.dt.strftime("%Y-%m")
 
 
-def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, consultas=None, r_traz=None, r_xml=None):
+def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, consultas=None, r_traz=None, r_xml=None, r_ctl=None):
     mt = leer_dams(r_dams)
     m = mt[mt.COD_REGIMEN == "10"].copy()        # importación para el consumo: base de todos los totales
     dep70 = mt[mt.COD_REGIMEN == "70"].copy()    # depósito aduanero: fuera de totales, solo para la cadena
@@ -604,6 +650,14 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, cons
                s.nombre_b, s.doc, f"{s.cpe_b} del {s.f_b:%d/%m/%Y} con IGV {s.moneda} {s.igv_b:,.2f}, dada de baja; reemitida como {s.cpe_r} "
                f"del {s.f_r:%d/%m/%Y} sin IGV · línea {s.linea_b}", s.vv_r, s.moneda)
     reemitidas = dict(zip(reem.cpe_r, zip(reem.cpe_b, reem.f_b.dt.strftime("%Y-%m-%d"), reem.igv_b)))
+    ctl, traslados = leer_control_ia(r_ctl, m.NUM_DOCIDENT.iloc[0]) if r_ctl else ({}, [])
+    resumen_ctl = lambda k: {"tipo": ctl.get(k, {}).get("control", {}).get("tipo", ""), "dilig": ctl.get(k, {}).get("control", {}).get("dilig", ""),
+                             "plazo": ctl.get(k, {}).get("control", {}).get("plazo", ""), "ri": ctl.get(k, {}).get("control", {}).get("ri", ""),
+                             "ncn": len([n for n in ctl.get(k, {}).get("ncn", []) if not n["anulada"]]),
+                             "ncn_total": sum(n["total"] or 0 for n in ctl.get(k, {}).get("ncn", []) if not n["anulada"]),
+                             "ncn_ri": ", ".join(n["ri"] for n in ctl.get(k, {}).get("ncn", []) if not n["anulada"]),
+                             "tras": len(ctl.get(k, {}).get("tras", [])), "tras_ri": ", ".join(t["ri"] for t in ctl.get(k, {}).get("tras", [])),
+                             "en": k in ctl} if r_ctl else None
 
     # Trazabilidad por número de serie (casos documentados con la factura del emisor)
     casos = []
@@ -645,12 +699,30 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, cons
                 "baja": None if not b else {"cpe": b[0], "f": b[1], "igv": r2(b[2])},
                 "entrega_circ": ub.circunscripcion if ub is not None and hasattr(ub, "circunscripcion") else "",
                 "dam": None if i is None else {"dam": i.dam, "serie": int(i.NUM_SECSERIE), "f": i.f.strftime("%Y-%m-%d"), "canal": i.CANAL,
-                                               "dest": i.dest, "dest_circ": DEST_CIRC.get(i.dest, ""), "dep_dam": i.dep_dam, "dep_f": i.dep_f,
+                                               "dest": i.dest, "dest_circ": DEST_CIRC.get(i.dest, ""), "dep_dam": i.dep_dam, "dep_f": i.dep_f, "ctl": resumen_ctl(i.dam),
                                                "conv": i.conv, "cif": r2(i.MTO_VALORADU), "anio": i.anio, "modelo": i.modelo,
                                                "dias": int((s.f - i.f).days) if s is not None else None},
                 "cif_ref": r2(mq[(mq.modelo == (i.modelo if i is not None else c.get("modelo", ""))) & ~mq.usada].cif_u.median()) if (i is not None or c.get("modelo", "")) else None,
             })
 
+    if r_ctl:
+        for c in casos:
+            m_, v_ = c.get("dam"), c.get("venta")
+            if not m_ or not v_ or not m_["ctl"] or not m_["ctl"]["en"]:
+                continue
+            fuera = v_["zona"] == "ZTC" or c.get("entrega_zona") == "ZTC"
+            k_ = m_["ctl"]
+            if fuera and not k_["tras"]:
+                alerta("Alta", "Máquina vendida fuera de la ZTE sin traslado autorizado", c["cpe"], v_["f"], v_["cli"], v_["ruc"],
+                       f"Serie {c['serie']} · DAM {m_['dam']} ({k_['tipo'] or 's/d'}; diligencia en destino {k_['dilig'] or 's/d'}"
+                       f"{', ' + k_['plazo'].lower() if k_['plazo'] else ''}) · sin expediente de traslado ZTE→ZTC en el control de la IA"
+                       + (f" · garantía devuelta con NCN ({k_['ncn_ri']})" if k_["ncn"] else ""), v_["vv"], v_["mon"])
+        for k, x in ctl.items():
+            c_ = x.get("control", {})
+            if c_.get("dilig", "").upper().startswith("NO CONFORME") and k in set(m.dam):
+                alerta("Media", "Diligencia en destino no conforme", k, c_.get("ri_f", ""), c_.get("merc", ""), "",
+                       f"{c_.get('tipo', '')} · {c_.get('ciudad', '')} · {c_.get('plazo', '').lower()} · {c_.get('fin', '')}"
+                       + (f" · RI {c_['ri']}" if c_.get("ri") else "") + (f" · estado: {c_['estado']}" if c_.get("estado") else ""), None, "")
     multi = cl[cl.maq >= 3]
     for _, s in multi.iterrows():
         alerta("Media", "Cliente con 3 o más máquinas", s.doc, s.ult, s.nombre, s.doc,
@@ -699,6 +771,15 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, cons
             mk.append("traza")
         if a["tipo"] == "Maquinaria vendida a no domiciliado" and a["nivel"] == "Baja":
             mk.append("exp")
+        dk = re.match(r"^(\d{3}-\d{4}-\d{2}-\d{6})", a["ref"])
+        cc = next((c for c in casos if c["cpe"] == a["ref"] and c.get("dam")), None)
+        dk = dk.group(1) if dk else (cc["dam"]["dam"] if cc else "")
+        if dk and dk in ctl:
+            x = ctl[dk]
+            dg = x.get("control", {}).get("dilig", "").upper()
+            mk.append("dnc" if dg.startswith("NO CONFORME") else "dok" if dg.startswith("CONFORME") else "")
+            mk.append("ncn" if any(not n["anulada"] for n in x.get("ncn", [])) else "")
+            mk.append("tras" if x.get("tras") else "")
         a["mk"] = [x for x in mk if x]
         a["igv"] = bool(i is not None and i["igv"] > 0)
 
@@ -733,6 +814,12 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, cons
             "sm_series": int(len(sm)), "sm_cif": r2(sm.MTO_VALORADU.sum()),
             "clas_n": int(len(clas)), "disp_n": int(len(disp)),
         },
+        "control": None if not r_ctl else {
+            "dams": int(len(set(ctl) & set(m.dam))), "ncn": int(sum(1 for k in ctl if k in set(m.dam) and any(not n["anulada"] for n in ctl[k].get("ncn", [])))),
+            "ncn_total": r2(sum(n["total"] or 0 for k in ctl if k in set(m.dam) for n in ctl[k].get("ncn", []) if not n["anulada"])),
+            "no_conf": int(sum(1 for k in ctl if k in set(m.dam) and ctl[k].get("control", {}).get("dilig", "").upper().startswith("NO CONFORME"))),
+            "traslados": [t for t in traslados if t["f"] >= meses[0]],
+        },
         "dom": None if dom is None else {
             "fecha": (dom.fecha_padron.iloc[0] if len(dom) and "fecha_padron" in dom else ""),
             "rucs": int((cl.tipo != "No domiciliado").sum()), "encontrados": int(cl.zona.isin(["ZTE", "ZTC"]).sum()),
@@ -758,7 +845,8 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, cons
                          for k, v in part.head(40).iterrows()],
             "dams": [{"dam": s.dam, "f": s.fecha.strftime("%Y-%m-%d"), "ad": s.aduana, "dest": s.destino, "canal": s.canal,
                       "series": int(s.series), "fob": r2(s.fob), "flete": r2(s.flete), "seguro": r2(s.seguro), "cif": r2(s.cif),
-                      "flete_pct": r2(s.flete_pct), "maq": int(s.maq), "conv": s.conv} for _, s in dec.iterrows()],
+                      "flete_pct": r2(s.flete_pct), "maq": int(s.maq), "conv": s.conv,
+                      "ctl": resumen_ctl(s.dam) if r_ctl and s.dam in ctl else None} for _, s in dec.iterrows()],
             "sm_marca": [{"marca": k, "series": int(v.series), "dams": int(v.dams), "cif": r2(v.cif)} for k, v in sm_marca.iterrows()],
             "disp": [{"item": k, "n": int(v.n), "dams": int(v.dams), "med": r2(v.med), "mn": r2(v.mn), "mx": r2(v.mx), "ratio": r2(v.ratio)}
                      for k, v in disp.iterrows()],
@@ -771,6 +859,7 @@ def main(r_dams, r_cpe, r_det, salida, r_dom=None, r_ubi=None, portal=None, cons
             "imp": [{"dam": s.dam, "serie": int(s.NUM_SECSERIE), "f": s.f.strftime("%Y-%m-%d"), "canal": s.CANAL, "hs": s.NUM_PARTNANDI,
                      "cat": s["cat"], "marca": s.marca, "modelo": s.modelo, "anio": s.anio, "id": s.id, "motor": s.motor,
                      "usada": bool(s.usada), "horas": s.horas, "dest": s.dest, "dep_dam": s.dep_dam, "dep_f": s.dep_f,
+                     "ctl": resumen_ctl(s.dam) if r_ctl and s.dam in ctl else None,
                      "cant": int(s.CNT_COMER), "fob": r2(s.MTO_FOBDOL), "cif": r2(s.MTO_VALORADU), "conv": s.conv}
                     for _, s in mq.sort_values("f").iterrows()],
             "ventas": [{"cpe": s.cpe, "f": s.f.strftime("%Y-%m-%d"), "ruc": s.doc, "cli": s.nombre, "tcli": s.tcli, "desc": s.desc,
@@ -810,5 +899,6 @@ if __name__ == "__main__":
     ap.add_argument("--consulta-ruc", nargs="*", default=[], help="Resultados de la consulta múltiple de RUC de SUNAT (ZIP o TXT)")
     ap.add_argument("--trazabilidad", help="CSV de casos: cpe, serie_maquina, serie_motor, modelo, ubicacion_entrega (DISTRITO, PROVINCIA, DEPARTAMENTO), direccion_entrega, fuente, nota")
     ap.add_argument("--facturas-xml", nargs="*", default=[], help="XML de comprobantes del emisor (archivos, carpetas o ZIP)")
+    ap.add_argument("--control-ia", help="Cuaderno de control de la intendencia (xlsx/xlsm): control en destino, NCN y traslados")
     a = ap.parse_args()
-    main(a.dams, a.cpe, a.detalle, a.salida, a.domicilios, a.ubigeos, a.portal, a.consulta_ruc, a.trazabilidad, a.facturas_xml)
+    main(a.dams, a.cpe, a.detalle, a.salida, a.domicilios, a.ubigeos, a.portal, a.consulta_ruc, a.trazabilidad, a.facturas_xml, a.control_ia)
