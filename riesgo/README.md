@@ -1,6 +1,6 @@
 # Tablero de gestión de riesgo
 
-Página para el Equipo de Gestión de Riesgo de la Intendencia de Aduana de Tarapoto. Cruza las importaciones de un operador (DAM, régimen 10) con sus ventas (CPE emitidos y su detalle). Muestra indicadores, gráficos, tablas con búsqueda y exportación a CSV, y una lista consolidada de alertas.
+Página para el Equipo de Gestión de Riesgo de la Intendencia de Aduana de Tarapoto. Sigue la maquinaria que un importador trae con destino a la Amazonía y su venta: cruza las DAM con los comprobantes emitidos, el domicilio fiscal de los compradores, los XML de las facturas y el cuaderno de control de la intendencia (diligencia en destino, NCN, RI y traslados).
 
 **Página publicada:** https://ia-tarapotodev.github.io/TARAPOTO-Dev/riesgo/ (requiere clave de acceso).
 
@@ -8,21 +8,50 @@ Página para el Equipo de Gestión de Riesgo de la Intendencia de Aduana de Tara
 
 Los datos de origen tienen reserva tributaria (art. 85 del Código Tributario) y **no se versionan en este repositorio**. La página publicada lleva los datos comprimidos y cifrados con AES-256-GCM. La llave se deriva de la clave de acceso con PBKDF2-SHA256 (600 000 iteraciones). Sin la clave, el archivo publicado no revela el contribuyente, sus clientes ni los montos. El descifrado se hace en el navegador y la clave no se envía a ningún servidor. La clave se entrega al equipo por un canal interno; no la publique en el repositorio ni en issues.
 
-## Contenido
+## Cómo está organizado
+
+La unidad de seguimiento es la **máquina** (DAM y serie). Cada venta de maquinaria con indicios de salida de la zona del beneficio es un **caso**; al abrirlo se ve todo lo conectado: la venta, la cadena de comprobantes (bajas, notas de crédito, reemisiones y anticipos), la máquina enlazada por su número de serie, el control de su DAM y las otras máquinas de la misma DAM.
 
 | Pestaña | Qué muestra |
 |---|---|
-| Resumen | Indicadores clave, hallazgos para priorizar (enlazados a las alertas) y notas metodológicas |
-| Importaciones | CIF mensual (maquinaria y otros), canal de control, tratamiento tributario (código liberatorio, TPI), aduana de despacho, principales subpartidas, descripciones sin número de parte, números de parte en varias subpartidas, valores unitarios atípicos y lista de DAM |
-| Maquinaria | Unidades importadas y vendidas por mes, balance por tipo de máquina, precio de venta frente al CIF, registro de máquinas importadas (PIN, serie, motor, año, usada o nueva) y ventas de maquinaria con observaciones |
-| Ventas | Ventas mensuales en USD y S/, por línea de negocio, por tipo de cliente, notas de crédito por motivo, comprobantes dados de baja y lista de clientes para cruzar con el padrón RUC |
-| Alertas | Indicios por nivel (alta, media y baja), con filtros y descarga en CSV |
+| Resumen | Casos por nivel, máquinas importadas, ventas por zona del comprador, control de la IA, **patrones**, comprobantes por descargar y **calidad de los datos** (confiable, con límites, descartado) |
+| Alertas | Lista de casos con íconos, filtros y CSV. Cada fila se abre en una ficha con «Ver factura» (cuando hay XML) y los datos para buscar el comprobante en el portal del emisor. Arriba, la lista de comprobantes por descargar |
+| Máquinas | Traslados de maquinaria del periodo con su venta probable, y el registro de máquinas importadas con el control de su DAM |
+| Clientes | Compradores de maquinaria: domicilio fiscal, actividad, máquinas compradas y casos |
+
+### Control de la DAM (cuaderno de la IA)
+
+Se muestra unificado por DAM y se hereda en cada máquina: modalidad (cancelada, en soles; garantía 160, en dólares), tributos, NCN, RI con su PDF, traslados y regularización. Una diligencia pendiente se muestra solo como **«pendiente de regularización»**: su estado y el plazo del reconocimiento físico suelen ser falta de registro. El cuaderno cubre las DAM con destino Tarapoto (271); las de otro destino aparecen sin control.
+
+## Criterios de los casos
+
+| Nivel | Cuándo |
+|---|---|
+| Alta | Venta de maquinaria con indicio de salida de la ZTE (comprador domiciliado en la ZTC, venta con IGV, reemisión sin IGV de una factura con IGV, entrega fuera de la ZTE o venta a no domiciliado sin DAM de exportación) sin traslado que la respalde. Estados: confirmada sin traslado (la serie del XML lleva a su DAM y la DAM no tiene traslado para esa serie), DAM de otro destino, serie fuera de las DAM del periodo, o por confirmar (falta el XML) |
+| Media | Indicio de salida con **traslado probable** (por tipo de máquina y fecha, por confirmar con el XML); comprador con RUC inscrito 180 días o menos antes de comprar; comprador no habido o con RUC no activo; anulación o reemisión cerca de un traslado de maquinaria |
+| Baja | Flujo coherente: venta a no domiciliado con DAM de exportación, o salida con traslado autorizado para la misma DAM y serie |
+
+Reglas de calidad:
+
+- Se cuentan **ventas** (facturas vigentes): sin las anuladas con nota de crédito ni los **anticipos** que la factura final descuenta (valor + IGV − total).
+- La factura que anula cada nota de crédito sale del XML de la nota; sin él, por cliente, moneda y monto.
+- Las facturas de la serie de maquinaria por menos de USD 10 000 o S/ 34 000 (accesorios, implementos o pagos parciales) no forman casos.
+- Cada traslado se asigna a tantas ventas como máquinas traslada y cada venta a un solo traslado. «ZTE a ZTE pasando por ZTC» es tránsito, no salida.
+- El monto de cada traslado se contrasta con el 18 % (IGV + IPM) del CIF de su serie; los expedientes repetidos o que no cuadran se señalan y se cuentan una sola vez.
+- En comprobantes con IGV, el monto mostrado es el valor de venta más el 18 % calculado.
+
+Se retiraron, por no apuntar a la salida de la zona o por dar falsos positivos: establecimiento emisor inferido por la serie, valores unitarios atípicos, números de parte en varias subpartidas, repuestos y servicios con IGV o a no domiciliados, clientes con 3 o más máquinas, y las estadísticas generales de importación y ventas.
+
+Los casos son indicios para el análisis de riesgo y no constituyen conclusiones. El domicilio fiscal es el vigente en la fecha del padrón: puede diferir del que tenía el cliente al comprar y del lugar donde opera la máquina.
 
 ## Regenerar la página
 
 ```bash
 # 1. Datos → JSON (fuera del repositorio)
-python3 -I riesgo/scripts/generar_datos.py DAMs.csv CPEs_EMITIDOS.txt CPE_DETALLE_EMITIDO.txt /ruta/privada/datos.json
+python3 -I riesgo/scripts/generar_datos.py DAMs.csv CPEs_EMITIDOS.txt CPE_DETALLE_EMITIDO.txt /ruta/privada/datos.json \
+  --domicilios /ruta/privada/domicilios.csv --consulta-ruc lote1.zip lote2.zip \
+  --facturas-xml /ruta/privada/xml --control-ia /ruta/privada/control.xlsm \
+  --trazabilidad /ruta/privada/casos.csv --portal URL_DEL_PORTAL_DEL_EMISOR
 
 # 2. JSON → página cifrada (la clave se lee de un archivo privado, no del repositorio)
 CLAVE_TABLERO_ARCHIVO=/ruta/privada/clave.txt \
@@ -31,53 +60,23 @@ CLAVE_TABLERO_ARCHIVO=/ruta/privada/clave.txt \
 # 3. Publicar: copiar index.html a riesgo/index.html en la rama gh-pages
 ```
 
-### Domicilio fiscal de los clientes (opcional)
+Todas las opciones de `generar_datos.py` son opcionales salvo los tres archivos de origen y la salida.
 
-Con el padrón reducido del RUC (público: https://www2.sunat.gob.pe/padron_reducido_ruc.zip) cada cliente se ubica por el ubigeo de su domicilio fiscal dentro o fuera de la ZTE (art. 3 de la Ley 27037, con las mismas reglas de `mapas/scripts/05_tematicos.py`):
+### Fuentes opcionales
 
-```bash
-# Extrae solo los RUC de los clientes (acepta el ZIP, el TXT o un CSV propio con RUC y UBIGEO)
-python3 -I riesgo/scripts/extraer_domicilios.py padron_reducido_ruc.zip CPEs_EMITIDOS.txt /ruta/privada/domicilios.csv
+- **Domicilio fiscal:** `extraer_domicilios.py` toma del padrón reducido del RUC (público: https://www2.sunat.gob.pe/padron_reducido_ruc.zip) solo los RUC de los clientes. Cada cliente se ubica por el ubigeo de su domicilio en la ZTE o la ZTC (art. 3 de la Ley 27037, con las reglas de `mapas/scripts/05_tematicos.py`). `referencias/ubigeo_zte.csv` se genera con `scripts/zona_ubigeo.py` a partir de [jmcastagnetto/ubigeo-peru-aumentado](https://github.com/jmcastagnetto/ubigeo-peru-aumentado) (licencia MIT).
+  ```bash
+  python3 -I riesgo/scripts/extraer_domicilios.py padron_reducido_ruc.zip CPEs_EMITIDOS.txt /ruta/privada/domicilios.csv
+  ```
+- **Consulta múltiple de RUC** (`--consulta-ruc`, ZIP o TXT, hasta 100 RUC por consulta): actividad económica, fecha de inscripción y, si el padrón no lo trae, el domicilio. La consulta pública no muestra el domicilio de las personas naturales.
+- **XML de las facturas** (`--facturas-xml`, archivos, carpetas o ZIP, también ZIP dentro de ZIP; los 7z y RAR se descomprimen antes): se leen facturas y notas de crédito (UBL 2.1). De cada ítem se extraen la serie de la máquina y del motor, el modelo, el año y la afectación del IGV; la máquina se enlaza con su DAM y el caso se confirma o se descarta. La nota de crédito indica con exactitud la factura que anula. El comprobante completo se puede ver desde la ficha («Ver factura»).
+- **Cuaderno de control de la IA** (`--control-ia`, xlsx o xlsm): hojas ConsolidadoT y de los especialistas, Ingreso de DAM, NCN, Hoja1 (RI y PDF), Traslados (con las series de cada DAM), ConsolidadoA2 y Complejidad.
+- **Casos documentados a mano** (`--trazabilidad`, CSV con `cpe, serie_maquina, serie_motor, modelo, ubicacion_entrega, direccion_entrega, fuente, nota`; `ubicacion_entrega` como «DISTRITO, PROVINCIA, DEPARTAMENTO»): por ejemplo, la representación impresa de una factura con el lugar de entrega.
 
-# Genera el JSON con la zona de cada cliente
-python3 -I riesgo/scripts/generar_datos.py DAMs.csv CPEs_EMITIDOS.txt CPE_DETALLE_EMITIDO.txt /ruta/privada/datos.json \
-  --domicilios /ruta/privada/domicilios.csv
-```
+Ninguno de estos archivos se versiona: todos tienen datos de contribuyentes.
 
-Para la actividad económica (CIIU) y la fecha de inscripción, agregue los resultados de la **consulta múltiple de RUC** de SUNAT (ZIP o TXT, hasta 100 RUC por consulta) con `--consulta-ruc resultado1.zip resultado2.zip …`. La consulta pública no muestra el domicilio de las personas naturales.
+### Formatos de entrada
 
-**Trazabilidad por número de serie:** con `--trazabilidad casos.csv` (columnas `cpe, serie_maquina, serie_motor, modelo, ubicacion_entrega, direccion_entrega, fuente, nota`; `ubicacion_entrega` como «DISTRITO, PROVINCIA, DEPARTAMENTO») cada venta documentada con la factura del emisor se enlaza con su DAM por la serie de la máquina o del motor, y el tablero muestra la cadena importación → venta → destino con acciones sugeridas. El archivo de casos tiene datos de contribuyentes: no se versiona.
-
-**XML de las facturas del emisor:** con `--facturas-xml carpeta_o_zip` se leen los comprobantes en XML (UBL 2.1). De cada ítem se extraen la serie de la máquina y del motor, el modelo, el año, el código de afectación del IGV, el establecimiento emisor, la orden de compra y la dirección del cliente; cada máquina se enlaza automáticamente con su DAM y aparece como ficha en «Trazabilidad por número de serie». Los XML no se versionan.
-
-**Pestaña Alertas:** cada alerta lleva íconos (con IGV, zona del cliente, línea de negocio, tipo de cliente, factura revisada, enlazada con su DAM, con DAM de exportación) y un filtro «Indicador». En comprobantes con IGV, el monto mostrado es el valor de venta más el 18 % calculado.
-
-`referencias/ubigeo_zte.csv` asigna cada distrito INEI a la ZTE o a la ZTC. Se genera con `scripts/zona_ubigeo.py` a partir de la tabla de ubigeos de [jmcastagnetto/ubigeo-peru-aumentado](https://github.com/jmcastagnetto/ubigeo-peru-aumentado) (licencia MIT). Con domicilios, el tablero agrega la zona y el domicilio fiscal en clientes y ventas de maquinaria, un resumen por zona y departamento y dos alertas más.
-
-Formatos de entrada esperados:
-
-- **DAM** (CSV, todas las aduanas de destino y regímenes; los totales usan el régimen 10, el depósito 70 y la exportación 40 se muestran aparte): `COD_ADUANA, ANN_PRESEN, COD_REGIMEN, NUM_DECLARACION, FEC_DECLARACION, COD_ADUDEST, NUM_DOCIDENT, NOM_RAZONSOCIAL, DIR_PARTIC, COD_TIPPARTIC, CANAL, NUM_PARTNANDI, NUM_SECSERIE, CNT_COMER, COD_UNICOMER, MTO_FOBDOL, MTO_FLETEDOL, MTO_SEGDOL, MTO_VALORADU, DES_COMER, DES_FORMAPRESEN, DES_MATECOMP, DES_USOAPLIC, DES_OTROSCARAC, COD_TIPCONVENIO, COD_CONVENIO`
+- **DAM** (CSV, todas las aduanas de destino y regímenes; los casos usan el régimen 10, el depósito 70 y la exportación 40 completan la historia de cada máquina): `COD_ADUANA, ANN_PRESEN, COD_REGIMEN, NUM_DECLARACION, FEC_DECLARACION, COD_ADUDEST, NUM_DOCIDENT, NOM_RAZONSOCIAL, DIR_PARTIC, COD_TIPPARTIC, CANAL, NUM_PARTNANDI, NUM_SECSERIE, CNT_COMER, COD_UNICOMER, MTO_FOBDOL, MTO_FLETEDOL, MTO_SEGDOL, MTO_VALORADU, DES_COMER, DES_FORMAPRESEN, DES_MATECOMP, DES_USOAPLIC, DES_OTROSCARAC, COD_TIPCONVENIO, COD_CONVENIO`
 - **CPE emitidos** (TXT con `|`, Latin-1, fechas MM/DD/AAAA): `ruc emisor | tipo cpe | serie | nro cpe | tipo cpe | tipo doc | doc/receptor | nombre receptor | moneda | valor venta | igv | importe total | fecha cpe | indicador estado`
 - **Detalle de CPE** (TXT con `|`, Latin-1): `num_ruc | cod_cpe | num_serie_cpe | num_cpe | cod_tipo_cpe | cod_docide_recep | num_docide_recep | des_nombre_recep | fec_emision | moneda | ind_estado | ind_rechazo | cod_unidad | des_detalle_item | num_cant_item | mto_total_venta | mto_total_igv | observacion`
-
-## Criterios de las alertas
-
-| Nivel | Alerta | Criterio |
-|---|---|---|
-| Alta | Maquinaria vendida con IGV | Factura vigente de la serie de maquinaria (FP) con IGV mayor que cero |
-| Alta / Baja | Maquinaria vendida a no domiciliado | Factura vigente de maquinaria a un cliente con documento de tipo 0; baja si hay una DAM de exportación (régimen 40) de maquinaria en los 90 días siguientes |
-| Media | Máquina vendida a cliente de otra circunscripción amazónica | Venta de maquinaria a un cliente domiciliado en la ZTE, pero en una circunscripción aduanera distinta de la del establecimiento emisor (inferido por la serie) |
-| Media | Venta de maquinaria anulada o devuelta | Nota de crédito de maquinaria con motivo 01 (anulación) o 06 (devolución total) |
-| Media | Factura de maquinaria dada de baja | Factura de maquinaria en estado 2 |
-| Media | Maquinaria usada importada | Serie de maquinaria con «USED» en la descripción o con un año de fabricación al menos 2 años anterior al de la DAM |
-| Media | Cliente con 3 o más máquinas | Cliente con tres o más facturas vigentes de maquinaria |
-| Media | Mismo número de parte en varias subpartidas | Misma descripción con número de parte declarada en más de una subpartida |
-| Media | Valor unitario atípico | FOB unitario a 50 % o más de la mediana del mismo número de parte (con al menos 3 series en 2 DAM) |
-| Alta | Maquinaria vendida a cliente domiciliado fuera de la ZTE | Factura vigente de maquinaria a un cliente cuyo domicilio fiscal (padrón RUC) está en la ZTC |
-| Alta / Media | Factura con IGV dada de baja y reemitida sin IGV | Factura con IGV dada de baja y, en los 30 días siguientes, otra factura vigente sin IGV al mismo cliente, en la misma moneda y por el mismo valor (alta si es de maquinaria; fuera de maquinaria, solo si el IGV de la factura dada de baja es de 100 o más) |
-| Media | Comprador de maquinaria con RUC reciente | La primera compra de maquinaria ocurre dentro de los 180 días siguientes a la inscripción del RUC |
-| Media | Comprador de maquinaria no habido o con RUC no activo | Cliente con facturas de maquinaria cuyo RUC no está activo o cuyo domicilio figura como no habido |
-| Baja | Ventas a no domiciliado | Repuestos, servicios u otros ingresos facturados a clientes con documento de tipo 0 |
-| Baja | Repuestos o servicios con IGV | Factura vigente de repuestos o servicio técnico con IGV |
-
-Las alertas son indicios para el análisis de riesgo y no constituyen conclusiones. El domicilio fiscal es el vigente en la fecha del padrón: puede diferir del que tenía el cliente al comprar y del lugar donde opera la máquina.
