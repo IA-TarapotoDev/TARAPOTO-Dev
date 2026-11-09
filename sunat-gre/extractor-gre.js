@@ -1,61 +1,70 @@
 /* =====================================================================
- * EXTRACTOR GRE – Guías de Remisión Electrónica (SUNAT, uso autorizado)
- * Versión 1.2.0
+ * EXTRACTOR DE GRE – Guías de Remisión Electrónica (SUNAT, uso autorizado)
+ * Versión 2.0.0
  *
  * Dónde ejecutarlo:
- *   Microsoft Edge > DevTools > Console > contexto
+ *   Microsoft Edge > DevTools (F12) > Console > selector de contexto
  *   "iframeApplication (resultado) – intranet.sunat.peru"
  *
- * Qué hace:
- *   0. (Recomendado) Toma el token, las cabeceras y los filtros de una búsqueda
- *      hecha en la propia pantalla de SUNAT ("Capturar desde SUNAT"), sin copiar
- *      nada a mano, y repite esa búsqueda de forma idéntica (solo cambian los
- *      valores del panel). Si la API rechaza la consulta, hace un diagnóstico
- *      automático comparándola con la búsqueda que sí hizo SUNAT.
- *   1. Consulta el listado paginado de GRE del rango indicado.
- *   2. Elimina duplicados.
- *   3. Consulta el detalle de cada guía, de una en una, con pausas.
- *   4. Exporta CSV (UTF-8 con BOM, separador ;) y JSON completo.
- *   5. Si se detiene (token vencido, cancelación), al volver a iniciar continúa
- *      donde quedó sin repetir las guías ya obtenidas en esta sesión.
+ * Uso (sin conocimientos técnicos):
+ *   1. Pegue este script y pulse Enter: aparece el panel "Extractor de GRE".
+ *   2. Escriba uno o varios RUC y uno o varios periodos.
+ *   3. Pulse "Buscar y descargar Excel". Cuando el panel lo pida, abra
+ *      cualquier guía con "Ver" en la pantalla de SUNAT (así se conecta).
+ *   4. Al terminar se descarga un Excel con las guías, sus bienes y un resumen.
+ *
+ * Qué hace por dentro:
+ *   - Toma la conexión (token) de la propia pantalla de SUNAT: no hay que copiar nada.
+ *   - SUNAT entrega como máximo 100 guías por búsqueda: el extractor divide cada
+ *     periodo en tramos más cortos y aprende el tamaño adecuado para cada RUC.
+ *   - Consulta el detalle de cada guía, de una en una, con pausas.
+ *   - Si la conexión vence, espera a que se abra una guía con "Ver" y continúa
+ *     solo, sin repetir lo ya obtenido.
+ *   - Genera un Excel (.xlsx) con hojas: Resumen, Guías, Bienes, Búsquedas, etc.
+ *     En "Más opciones" también puede descargar CSV y JSON.
  *
  * Seguridad:
- *   - El token solo vive en memoria durante la ejecución y se descarta al final.
- *   - Se revisa localmente su vencimiento (si es JWT); no se muestra ni exporta.
+ *   - El token solo vive en memoria y se descarta al terminar: nunca se muestra,
+ *     se guarda ni se exporta.
  *   - No usa localStorage, sessionStorage, cookies ni servidores externos.
  *   - credentials: "omit" y mode: "cors" (nunca "no-cors").
- *   - Ante HTTP 401/403 el proceso se detiene.
+ *   - La escucha de la pantalla de SUNAT es temporal y deja la página como estaba.
  *
  * Única variable global: window.GREExtractor
  * ===================================================================== */
 (() => {
   'use strict';
 
-  const VERSION = '1.2.0';
+  const VERSION = '2.0.0';
   const API_LISTADO = 'https://api-intranet.sunat.peru/v1/contribuyente/gre/comprobantes';
   const PANEL_ID = 'gre-extractor-host';
 
   /* ---------------------------------------------------------------
-   * 0. Evitar dos ejecuciones simultáneas
+   * 0. Evitar dos ejecuciones simultáneas y retirar una versión anterior
    * ------------------------------------------------------------- */
   const instanciaPrevia = window.GREExtractor;
   if (instanciaPrevia && instanciaPrevia.ejecutando) {
-    console.warn('[GRE] Ya hay una extracción en curso. Use GREExtractor.cancelar() y espere a que termine antes de volver a pegar el script.');
+    console.warn('[GRE] Ya hay una búsqueda en curso. Deténgala con GREExtractor.cancelar() y espere a que termine antes de volver a pegar el script.');
     try { instanciaPrevia.mostrarPanel(); } catch (_) { /* sin panel */ }
     return;
   }
-  if (instanciaPrevia && typeof instanciaPrevia.cerrarPanel === 'function') {
-    try { instanciaPrevia.cerrarPanel(); } catch (_) { /* ignorar */ }
+  if (instanciaPrevia) {
+    try {
+      if (typeof instanciaPrevia.destruir === 'function') instanciaPrevia.destruir();
+      else if (typeof instanciaPrevia.cerrarPanel === 'function') instanciaPrevia.cerrarPanel();
+    } catch (_) { /* ignorar */ }
   }
+  // Referencia propia a fetch, tomada antes de cualquier escucha: así las consultas del
+  // extractor nunca se confunden con las de la pantalla de SUNAT.
+  const fetchPropio = window.fetch;
 
   /* ---------------------------------------------------------------
    * 1. Configuración predeterminada
    * ------------------------------------------------------------- */
   const CONFIG_PREDETERMINADA = Object.freeze({
-    fechaInicio: '',
-    fechaFin: '',
-    rucEmisor: '',
-    rucReceptor: '',
+    rucs: [],
+    rol: 'receptor',            // 'receptor' | 'emisor' | 'ambos'
+    periodos: [],               // [{ desde: 'AAAA-MM-DD', hasta: 'AAAA-MM-DD' }]
     codCpe: '09',
     numSerie: '',
     numCpe: '',
@@ -64,69 +73,78 @@
     rangoHoras: '',
     tipBusqueda: '2',
     perPage: 100,
+    maxDiasBloque: 31,          // días máximos por búsqueda (se reduce solo si SUNAT lo rechaza)
+    objetivoPorBusqueda: 80,    // guías esperadas por búsqueda, para no pasar el límite de 100
     pausaMinMs: 600,
     pausaMaxMs: 900,
     maxReintentos: 2,
-    maxDiasRango: 0,            // 0 = sin límite. Ajuste si SUNAT impone un rango máximo.
-    maxPaginas: 1000,           // Tope de seguridad de páginas del listado.
-    timeoutMs: 45000,           // Tiempo máximo por solicitud.
-    maxErroresConsecutivos: 8   // Detiene el lote si fallan muchas guías seguidas (red caída, sesión perdida).
+    timeoutMs: 45000,
+    maxErroresConsecutivos: 8,
+    esperaConexionMin: 30,      // minutos que espera una conexión nueva antes de detenerse
+    descargarAlTerminar: true
   });
 
   const ESTADOS_REINTENTABLES = new Set([429, 500, 502, 503, 504]);
+  const ROLES = { receptor: 'Receptor', emisor: 'Emisor' };
+  const TEXTO_ROL = { receptor: 'receptor (destinatario)', emisor: 'emisor (remitente)', ambos: 'emisor y receptor' };
+  const MARGEN_VENCIMIENTO_MS = 20000;
 
-  // Explicación que se muestra cuando el navegador no puede leer la respuesta ("Failed to fetch").
+  // Explicación cuando el navegador no puede leer la respuesta ("Failed to fetch").
   const AYUDA_FALLO_CONEXION = [
-    'El navegador no pudo leer la respuesta de la API. Causas más comunes:',
-    '1) Token vencido, incompleto o copiado de otra solicitud.',
-    '2) Filtros que la API rechaza (por ejemplo, el RUC en un campo que no corresponde al "Tipo de búsqueda").',
-    '3) La consola no está en el contexto "iframeApplication (intranet.sunat.peru)".',
-    'Solución recomendada: pulse "Capturar desde SUNAT", haga la búsqueda en la pantalla de SUNAT y vuelva a pulsar Iniciar.',
-    'La causa exacta aparece en el mensaje rojo de la consola y en la pestaña Network (columna Estado).'
+    'El navegador no pudo leer la respuesta de SUNAT. Causas más comunes:',
+    '1) La conexión venció o no es válida.',
+    '2) La consola no está en el contexto "iframeApplication (intranet.sunat.peru)".',
+    'Solución: pulse "Conectar", abra cualquier guía con «Ver» en la pantalla de SUNAT y vuelva a pulsar "Buscar y descargar Excel".'
   ];
 
   /* ---------------------------------------------------------------
-   * 2. Estado interno (no contiene el token)
+   * 2. Estado interno (nunca contiene el token)
    * ------------------------------------------------------------- */
   const estado = {
     ejecutando: false,
     pausado: false,
+    esperandoConexion: false,
     controller: null,
     config: null,
     motivoFin: '',
+    fase: '',                  // 'conexion' | 'busqueda' | 'detalle'
     tiempos: { inicio: 0, inicioDetalle: 0, fin: 0 },
-    listado: null,
+    tokenExp: null,            // solo la hora de vencimiento, para mostrarla
+    tareas: [],                // una por RUC y rol
+    busquedas: [],             // cada búsqueda hecha en SUNAT (para el control)
     unicos: [],
     duplicados: [],
-    resultados: new Map(),   // clave -> registro
-    previos: new Map(),      // clave -> { detalle, consultadoEn } (cargado desde JSON anterior)
-    memoria: new Map(),      // clave -> { detalle, consultadoEn } (obtenidas en una ejecución anterior de esta sesión)
+    origenes: new Map(),       // clave -> Set('RUC (Rol)')
+    resultados: new Map(),     // clave -> registro
+    previos: new Map(),        // clave -> { detalle, consultadoEn } (JSON anterior)
+    memoria: new Map(),        // clave -> { detalle, consultadoEn } (ejecución anterior de esta sesión)
     errores: [],
     controlDetalle: [],
     control: [],
     progreso: null,
-    resumen: null
+    resumen: null,
+    fallosRedSeguidos: 0,
+    huboBusquedaCorrecta: false,
+    mensajesExceso: new Set()  // mensajes de SUNAT que resultaron significar "demasiadas guías"
   };
 
-  function listadoVacio() {
-    return { totalApi: null, perPageApi: null, totalPaginas: 0, registros: 0, paginas: [] };
-  }
   function progresoVacio() {
-    return { total: 0, actual: '', procesadas: 0, ok: 0, error: 0, omitidas: 0, consultadas: 0, pendientesReales: 0 };
+    return {
+      total: 0, actual: '', procesadas: 0, ok: 0, error: 0, omitidas: 0, consultadas: 0, pendientesReales: 0,
+      diasTotales: 0, diasHechos: 0, encontradas: 0, tareaActual: 0, tareasTotal: 0, busquedaActual: ''
+    };
   }
-  estado.listado = listadoVacio();
   estado.progreso = progresoVacio();
 
-  let ui = null; // referencias del panel (si existe)
+  let ui = null;                   // referencias del panel (si existe)
+  let periodosEditados = false;    // si el usuario cambió los periodos del panel
 
-  // Captura desde la aplicación SUNAT. Solo en memoria (nunca global ni persistente).
+  // Conexión tomada de la pantalla de SUNAT. Solo en memoria (nunca global ni persistente).
   let tokenCapturado = null;       // se consume al iniciar y se descarta al terminar
-  let cabecerasCapturadas = null;  // otras cabeceras que envía la aplicación (se descartan junto con el token)
-  let filtrosCapturados = null;    // filtros de la última búsqueda hecha en la pantalla de SUNAT (sin token)
-  // Direcciones (sin token) de la última búsqueda y de la última guía abierta en SUNAT.
-  // La búsqueda se usa como plantilla exacta y ambas sirven para el diagnóstico automático.
-  const urlsCapturadas = { listado: '', detalle: '' };
-  const captura = { activa: false, temporizador: null, restaurar: null };
+  let cabecerasCapturadas = null;  // otras cabeceras que envía la aplicación (se descartan con el token)
+  let filtrosCapturados = null;    // datos de la última búsqueda hecha en SUNAT (sin token)
+  const urlsCapturadas = { listado: '', detalle: '' }; // direcciones sin token (plantilla y diagnóstico)
+  const captura = { activa: false, modo: '', temporizador: null, restaurar: null };
 
   /* ---------------------------------------------------------------
    * 3. Utilidades generales
@@ -134,7 +152,7 @@
   class ErrorValidacion extends Error { constructor(m) { super(m); this.name = 'ErrorValidacion'; } }
   class ErrorAutenticacion extends Error {
     constructor(status, url, mensaje, codigo) {
-      super(mensaje || `HTTP ${status}: acceso no autorizado o sesión/token vencido.`);
+      super(mensaje || `HTTP ${status}: SUNAT no aceptó la conexión.`);
       this.name = 'ErrorAutenticacion'; this.status = status; this.url = url;
       this.codigo = codigo || `DETENIDO_HTTP_${status}`;
     }
@@ -147,6 +165,13 @@
   const esObjetoPlano = (v) => v !== null && typeof v === 'object' && !Array.isArray(v) && !(v instanceof Date);
   const esPrimitivo = (v) => v === null || v === undefined || v instanceof Date ||
     ['string', 'number', 'boolean', 'bigint'].includes(typeof v);
+  const limpio = (v) => (esVacio(v) ? '' : String(v).trim());
+
+  // Caracteres especiales generados en código (evita escapes en el texto del script)
+  const BOM = String.fromCharCode(0xFEFF);
+  const RE_SEPARADORES = new RegExp('[' + String.fromCharCode(0x2028, 0x2029) + ']', 'g');
+  const RE_NO_XML = new RegExp('[' + String.fromCharCode(0xFFFE, 0xFFFF) + ']', 'g');
+  const sinSaltos = (s) => String(s).replace(/\r\n|\r|\n|\t/g, ' ').replace(RE_SEPARADORES, ' ');
 
   /** Convierte cualquier valor a texto sin producir "null"/"undefined". */
   function texto(v) {
@@ -174,9 +199,9 @@
   }
 
   /**
-   * Busca, dentro de uno o varios objetos (solo primer nivel), la primera
-   * propiedad cuyo NOMBRE coincida con alguna expresión regular y cuyo valor
-   * sea primitivo y no vacío. No inventa datos: solo lee lo que existe.
+   * Busca, dentro de uno o varios objetos (solo primer nivel), la primera propiedad
+   * cuyo NOMBRE coincida con alguna expresión y cuyo valor sea primitivo y no vacío.
+   * No inventa datos: solo lee lo que existe.
    */
   function buscarClave(nodos, expresiones) {
     const lista = (Array.isArray(nodos) ? nodos : [nodos]).filter(esObjetoPlano);
@@ -215,15 +240,56 @@
     const d = new Date();
     return `${d.getFullYear()}-${dos(d.getMonth() + 1)}-${dos(d.getDate())}`;
   }
+  function primerDiaMes() {
+    const d = new Date();
+    return `${d.getFullYear()}-${dos(d.getMonth() + 1)}-01`;
+  }
   function duracion(ms) {
     if (!Number.isFinite(ms) || ms < 0) return '--:--:--';
     const s = Math.round(ms / 1000);
     return `${dos(Math.floor(s / 3600))}:${dos(Math.floor((s % 3600) / 60))}:${dos(s % 60)}`;
   }
-
   const horaDe = (ms) => fechaHoraLocal(new Date(ms)).slice(11);
 
-  /** Número de comprobante con 8 dígitos solo para mostrar/CSV. */
+  // Fechas AAAA-MM-DD (se calculan en UTC para evitar saltos por horario)
+  const RE_FECHA = /^\d{4}-\d{2}-\d{2}$/;
+  const DIA_MS = 86400000;
+  function parsearFecha(s) {
+    if (typeof s !== 'string' || !RE_FECHA.test(s)) return null;
+    const [y, m, d] = s.split('-').map(Number);
+    const f = new Date(Date.UTC(y, m - 1, d));
+    if (f.getUTCFullYear() !== y || f.getUTCMonth() !== m - 1 || f.getUTCDate() !== d) return null;
+    return f;
+  }
+  const isoDe = (f) => f.toISOString().slice(0, 10);
+  const sumarDias = (iso, n) => isoDe(new Date(parsearFecha(iso).getTime() + n * DIA_MS));
+  const diasEntre = (a, b) => Math.round((parsearFecha(b) - parsearFecha(a)) / DIA_MS) + 1; // ambos incluidos
+  const dmy = (iso) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}` : '');
+
+  /** Valida un RUC peruano (prefijo y dígito verificador). */
+  function rucValido(ruc) {
+    if (!/^(10|15|16|17|20)\d{9}$/.test(ruc)) return false;
+    const pesos = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2];
+    const suma = pesos.reduce((s, p, i) => s + p * Number(ruc[i]), 0);
+    let dv = 11 - (suma % 11);
+    if (dv === 10) dv = 0;
+    else if (dv === 11) dv = 1;
+    return dv === Number(ruc[10]);
+  }
+
+  /** Extrae los RUC de un texto libre (líneas, comas, espacios…). */
+  function extraerRucs(textoLibre) {
+    const validos = [], invalidos = [], vistos = new Set();
+    for (const t of String(textoLibre || '').split(/[^0-9]+/)) {
+      if (!t || vistos.has(t)) continue;
+      vistos.add(t);
+      if (t.length === 11 && rucValido(t)) validos.push(t);
+      else invalidos.push(t);
+    }
+    return { validos, invalidos };
+  }
+
+  /** Número de comprobante con 8 dígitos solo para mostrar. */
   function numero8(num) {
     const s = texto(num).trim();
     return /^\d+$/.test(s) ? s.padStart(8, '0') : s;
@@ -244,8 +310,8 @@
   }
 
   function crearAbortError() {
-    try { return new DOMException('Proceso cancelado por el usuario', 'AbortError'); }
-    catch (_) { const e = new Error('Proceso cancelado por el usuario'); e.name = 'AbortError'; return e; }
+    try { return new DOMException('Proceso detenido por el usuario', 'AbortError'); }
+    catch (_) { const e = new Error('Proceso detenido por el usuario'); e.name = 'AbortError'; return e; }
   }
   const esAbort = (e) => !!e && e.name === 'AbortError';
 
@@ -266,7 +332,7 @@
   async function esperarSiPausado(signal) {
     let avisado = false;
     while (estado.pausado) {
-      if (!avisado) { log('En pausa. Pulse "Reanudar" o ejecute GREExtractor.reanudar().', 'warn'); avisado = true; actualizarUI(); }
+      if (!avisado) { log('En pausa. Pulse "Continuar" para seguir.', 'warn'); avisado = true; actualizarUI(); }
       await dormir(300, signal);
     }
   }
@@ -276,18 +342,24 @@
     return min + Math.floor(Math.random() * (max - min + 1));
   }
 
+  /** Pausa entre solicitudes (la primera de la ejecución no espera). */
+  async function esperarTurno(ctx) {
+    if (ctx.solicitudes > 0) await dormir(pausaAleatoria(ctx.cfg), ctx.signal);
+    ctx.solicitudes++;
+  }
+
   /* ---------------------------------------------------------------
    * 4. Mensajes (consola + panel). Sin datos personales.
+   *    Nivel "debug": solo en la consola (detalles técnicos).
    * ------------------------------------------------------------- */
   function log(mensaje, nivel = 'info') {
-    const fn = { info: console.log, ok: console.log, warn: console.warn, error: console.error }[nivel] || console.log;
+    const fn = { info: console.log, ok: console.log, warn: console.warn, error: console.error, debug: console.log }[nivel] || console.log;
     fn.call(console, '%c[GRE]', 'color:#0a7d55;font-weight:bold', mensaje);
-    if (ui && ui.log) {
-      const linea = h('div', { class: 'l-' + nivel, text: `[${fechaHoraLocal().slice(11)}] ${mensaje}` });
-      ui.log.append(linea);
-      while (ui.log.childElementCount > 300) ui.log.firstChild.remove();
-      ui.log.scrollTop = ui.log.scrollHeight;
-    }
+    if (nivel === 'debug' || !ui || !ui.log) return;
+    const linea = h('div', { class: 'l-' + nivel, text: `[${fechaHoraLocal().slice(11)}] ${mensaje}` });
+    ui.log.append(linea);
+    while (ui.log.childElementCount > 300) ui.log.firstChild.remove();
+    ui.log.scrollTop = ui.log.scrollHeight;
   }
 
   function registrarError({ guia = '', clave = '', url = '', estadoHttp = '', mensaje = '', intento = '', accion = '' }) {
@@ -298,17 +370,8 @@
   }
 
   /* ---------------------------------------------------------------
-   * 5. Validación y normalización de la configuración
+   * 5. Validación de la configuración y del token
    * ------------------------------------------------------------- */
-  const RE_FECHA = /^\d{4}-\d{2}-\d{2}$/;
-  function parsearFecha(s) {
-    if (typeof s !== 'string' || !RE_FECHA.test(s)) return null;
-    const [y, m, d] = s.split('-').map(Number);
-    const f = new Date(Date.UTC(y, m - 1, d));
-    if (f.getUTCFullYear() !== y || f.getUTCMonth() !== m - 1 || f.getUTCDate() !== d) return null;
-    return f;
-  }
-
   function entero(valor, nombre, min, max, predeterminado) {
     if (esVacio(valor)) return predeterminado;
     const n = Number(valor);
@@ -318,36 +381,87 @@
     return n;
   }
 
+  /** Revisa, ordena y une los periodos (los que se superponen o son seguidos se juntan). */
+  function normalizarPeriodos(lista) {
+    const hoy = hoyISO();
+    const ok = [];
+    lista.forEach((p, i) => {
+      const desde = limpio(p && (p.desde ?? p.fechaInicio));
+      let hasta = limpio(p && (p.hasta ?? p.fechaFin));
+      if (!desde && !hasta) return; // fila vacía
+      const n = lista.length > 1 ? ` ${i + 1}` : '';
+      if (!parsearFecha(desde) || !parsearFecha(hasta)) throw new ErrorValidacion(`Periodo${n}: indique las dos fechas (desde y hasta).`);
+      if (desde > hasta) throw new ErrorValidacion(`Periodo${n}: la fecha "desde" es posterior a "hasta".`);
+      if (desde > hoy) throw new ErrorValidacion(`Periodo${n}: la fecha "desde" todavía no llega.`);
+      if (hasta > hoy) hasta = hoy;
+      ok.push({ desde, hasta });
+    });
+    if (!ok.length) throw new ErrorValidacion('Indique al menos un periodo (desde y hasta).');
+    ok.sort((a, b) => a.desde.localeCompare(b.desde));
+    const unidos = [ok[0]];
+    for (const p of ok.slice(1)) {
+      const u = unidos[unidos.length - 1];
+      if (p.desde <= sumarDias(u.hasta, 1)) { if (p.hasta > u.hasta) u.hasta = p.hasta; }
+      else unidos.push({ ...p });
+    }
+    return unidos;
+  }
+
   function normalizarConfig(op = {}) {
     if (!esObjetoPlano(op)) throw new ErrorValidacion('Las opciones deben ser un objeto.');
     const D = CONFIG_PREDETERMINADA;
-    const t = (v, def = '') => (esVacio(v) ? def : String(v).trim());
+
+    // RUC: lista (rucs) o forma anterior (rucReceptor / rucEmisor)
+    let rol = limpio(op.rol).toLowerCase();
+    let fuente = op.rucs;
+    if (esVacio(fuente) || (Array.isArray(fuente) && !fuente.length)) {
+      const rr = limpio(op.rucReceptor ?? op.numRucReceptor), re = limpio(op.rucEmisor ?? op.numRucEmisor);
+      if (rr) { fuente = rr; if (!rol) rol = 'receptor'; }
+      else if (re) { fuente = re; if (!rol) rol = 'emisor'; }
+    }
+    const { validos, invalidos } = extraerRucs(Array.isArray(fuente) ? fuente.join('\n') : fuente);
+    if (!validos.length) {
+      throw new ErrorValidacion(invalidos.length
+        ? `Ningún RUC es válido (${invalidos.join(', ')}). Revise los dígitos.`
+        : 'Escriba al menos un RUC (11 dígitos).');
+    }
+    if (invalidos.length) log(`Se omiten ${invalidos.length} RUC no válido(s): ${invalidos.join(', ')}.`, 'warn');
+    if (!['receptor', 'emisor', 'ambos'].includes(rol)) rol = D.rol;
+
+    // Periodos: lista (periodos) o forma anterior (fechaInicio / fechaFin)
+    let periodos = Array.isArray(op.periodos) ? op.periodos : [];
+    if (!periodos.length && (op.fechaInicio || op.fechaFin || op.fecEmisionIni || op.fecEmisionFin)) {
+      periodos = [{ desde: op.fechaInicio ?? op.fecEmisionIni, hasta: op.fechaFin ?? op.fecEmisionFin }];
+    }
+    periodos = normalizarPeriodos(periodos);
 
     const cfg = {
-      fechaInicio: t(op.fechaInicio ?? op.fecEmisionIni),
-      fechaFin: t(op.fechaFin ?? op.fecEmisionFin),
-      rucEmisor: t(op.rucEmisor ?? op.numRucEmisor),
-      rucReceptor: t(op.rucReceptor ?? op.numRucReceptor),
-      codCpe: t(op.codCpe, D.codCpe),
-      numSerie: t(op.numSerie ?? op.serie).toUpperCase(),
-      numCpe: t(op.numCpe ?? op.numero),
-      codEstado: t(op.codEstado),
-      codSubEstado: t(op.codSubEstado),
-      rangoHoras: t(op.rangoHoras),
-      tipBusqueda: t(op.tipBusqueda, D.tipBusqueda),
-      perPage: entero(op.perPage ?? op.per_page, 'Cantidad por página', 1, 1000, D.perPage),
+      rucs: validos,
+      rucsInvalidos: invalidos,
+      rol,
+      periodos,
+      codCpe: limpio(op.codCpe) || D.codCpe,
+      numSerie: limpio(op.numSerie ?? op.serie).toUpperCase(),
+      numCpe: limpio(op.numCpe ?? op.numero),
+      codEstado: limpio(op.codEstado),
+      codSubEstado: limpio(op.codSubEstado),
+      rangoHoras: limpio(op.rangoHoras),
+      tipBusqueda: limpio(op.tipBusqueda) || D.tipBusqueda,
+      perPage: entero(op.perPage ?? op.per_page, 'Registros por página', 1, 1000, D.perPage),
+      maxDiasBloque: entero(op.maxDiasBloque, 'Días máximos por búsqueda', 1, 366, D.maxDiasBloque),
+      objetivoPorBusqueda: entero(op.objetivoPorBusqueda, 'Guías esperadas por búsqueda', 1, 1000, D.objetivoPorBusqueda),
       pausaMinMs: D.pausaMinMs,
       pausaMaxMs: D.pausaMaxMs,
-      maxReintentos: entero(op.maxReintentos, 'Máximo de reintentos', 0, 10, D.maxReintentos),
-      maxDiasRango: entero(op.maxDiasRango, 'Máximo de días del rango', 0, 3660, D.maxDiasRango),
-      maxPaginas: entero(op.maxPaginas, 'Máximo de páginas', 1, 100000, D.maxPaginas),
+      maxReintentos: entero(op.maxReintentos, 'Reintentos', 0, 10, D.maxReintentos),
       timeoutMs: entero(op.timeoutMs, 'Tiempo máximo por solicitud', 5000, 300000, D.timeoutMs),
-      maxErroresConsecutivos: entero(op.maxErroresConsecutivos, 'Máximo de errores consecutivos', 1, 1000, D.maxErroresConsecutivos),
-      // Búsqueda capturada de SUNAT: se usa como plantilla para que la consulta sea idéntica a la de la aplicación.
+      maxErroresConsecutivos: entero(op.maxErroresConsecutivos, 'Errores seguidos permitidos', 1, 1000, D.maxErroresConsecutivos),
+      esperaConexionMin: entero(op.esperaConexionMin, 'Minutos de espera de conexión', 1, 240, D.esperaConexionMin),
+      descargarAlTerminar: op.descargarAlTerminar === undefined ? D.descargarAlTerminar
+        : (op.descargarAlTerminar === true || op.descargarAlTerminar === 'true'),
+      // Búsqueda copiada de SUNAT: plantilla para que la consulta sea igual a la de la aplicación
       plantillaListado: urlsCapturadas.listado || ''
     };
 
-    // Pausa: "pausaMs" fija, o rango mínimo/máximo.
     if (!esVacio(op.pausaMs)) {
       const p = entero(op.pausaMs, 'Pausa', 0, 60000, D.pausaMinMs);
       cfg.pausaMinMs = p; cfg.pausaMaxMs = p;
@@ -356,49 +470,11 @@
       cfg.pausaMaxMs = entero(op.pausaMaxMs, 'Pausa máxima', 0, 60000, D.pausaMaxMs);
       if (cfg.pausaMinMs > cfg.pausaMaxMs) [cfg.pausaMinMs, cfg.pausaMaxMs] = [cfg.pausaMaxMs, cfg.pausaMinMs];
     }
+    if (!/^[0-9A-Za-z]{1,4}$/.test(cfg.codCpe)) throw new ErrorValidacion('Código CPE no válido (por ejemplo "09").');
+    if (cfg.numCpe && !/^\d+$/.test(cfg.numCpe)) throw new ErrorValidacion('El número de guía debe tener solo dígitos.');
 
-    // Fechas obligatorias
-    if (!cfg.fechaInicio || !cfg.fechaFin) throw new ErrorValidacion('La fecha inicial y la fecha final son obligatorias.');
-    const fi = parsearFecha(cfg.fechaInicio), ff = parsearFecha(cfg.fechaFin);
-    if (!fi) throw new ErrorValidacion(`Fecha inicial inválida "${cfg.fechaInicio}". Use el formato YYYY-MM-DD.`);
-    if (!ff) throw new ErrorValidacion(`Fecha final inválida "${cfg.fechaFin}". Use el formato YYYY-MM-DD.`);
-    if (fi.getTime() > ff.getTime()) throw new ErrorValidacion('La fecha inicial no puede ser mayor que la fecha final.');
-    const dias = Math.round((ff - fi) / 86400000) + 1;
-    if (cfg.maxDiasRango > 0 && dias > cfg.maxDiasRango) {
-      throw new ErrorValidacion(`El rango tiene ${dias} días y el máximo configurado es ${cfg.maxDiasRango}. Divida la consulta.`);
-    }
-
-    // RUC opcionales, pero si se indican deben tener 11 dígitos
-    for (const [campo, etiqueta] of [['rucEmisor', 'RUC emisor'], ['rucReceptor', 'RUC receptor']]) {
-      if (cfg[campo] && !/^\d{11}$/.test(cfg[campo])) throw new ErrorValidacion(`${etiqueta} debe tener 11 dígitos.`);
-    }
-    if (!cfg.codCpe) throw new ErrorValidacion('El código CPE es obligatorio (por ejemplo "09").');
-    if (!/^[0-9A-Za-z]{1,4}$/.test(cfg.codCpe)) throw new ErrorValidacion('Código CPE inválido.');
-    if (cfg.numCpe && !/^\d+$/.test(cfg.numCpe)) throw new ErrorValidacion('El número de comprobante debe contener solo dígitos.');
-    if (!cfg.rucEmisor && !cfg.rucReceptor) log('Aviso: no indicó RUC emisor ni receptor. La API podría exigir uno de ellos.', 'warn');
-
-    cfg.diasRango = dias;
+    cfg.diasTotales = periodos.reduce((s, p) => s + diasEntre(p.desde, p.hasta), 0);
     return Object.freeze(cfg);
-  }
-
-  /**
-   * Obtiene el token, en este orden: opciones/campo del panel, token capturado
-   * de la aplicación SUNAT, o prompt(). Nunca lo guarda de forma permanente.
-   */
-  function obtenerToken(op) {
-    let t = op && typeof op.token === 'string' ? op.token : '';
-    let origen = 'ingresado';
-    if (!t.trim() && tokenCapturado) { t = tokenCapturado; origen = 'capturado de la aplicación'; }
-    tokenCapturado = null; // se consume una sola vez
-    if (!t.trim()) t = window.prompt('Pegue el token Bearer (solo se usa en memoria y se descarta al terminar):', '') || '';
-    t = limpiarToken(t);
-    if (!t) throw new ErrorValidacion('No se ingresó el token Bearer. Pulse "Capturar desde SUNAT" o péguelo en el campo del token.');
-    if (/…|\.\.\./.test(t)) {
-      throw new ErrorValidacion('El token está cortado (contiene "…"): DevTools solo mostró una parte. ' +
-        'Use "Capturar desde SUNAT" o, en Network, clic derecho sobre la cabecera authorization > "Copy value".');
-    }
-    if (/\s/.test(t)) throw new ErrorValidacion('El token contiene espacios o saltos de línea. Cópielo nuevamente.');
-    return { token: t, origen };
   }
 
   /** Quita lo que suele colarse al copiar: comillas, comas, punto y coma y la palabra "Bearer". */
@@ -409,7 +485,29 @@
   }
 
   /**
-   * Lee, solo localmente, la fecha de vencimiento (y de emisión) de un token JWT.
+   * Token para empezar: el escrito a mano en "Más opciones" o el tomado con "Conectar".
+   * Si no hay ninguno, se esperará a que abra una guía con "Ver" en SUNAT.
+   */
+  function tokenInicial(op) {
+    const manual = op && typeof op.token === 'string' ? limpiarToken(op.token) : '';
+    if (manual) {
+      if (/…|\.\.\./.test(manual)) {
+        throw new ErrorValidacion('El token está cortado (contiene "…"). Mejor use "Conectar" y abra una guía con «Ver».');
+      }
+      if (/\s/.test(manual)) throw new ErrorValidacion('El token contiene espacios o saltos de línea. Cópielo nuevamente.');
+      return { token: manual, origen: 'escrito a mano', cabeceras: {} };
+    }
+    if (tokenCapturado) {
+      const r = { token: tokenCapturado, origen: 'de la pantalla de SUNAT', cabeceras: cabecerasCapturadas ? { ...cabecerasCapturadas } : {} };
+      tokenCapturado = null;
+      cabecerasCapturadas = null;
+      return r;
+    }
+    return null;
+  }
+
+  /**
+   * Lee, solo localmente, la hora de vencimiento (y de emisión) de un token JWT.
    * No registra ni exporta ningún otro dato del token.
    */
   function analizarToken(token) {
@@ -434,51 +532,36 @@
     }
   }
 
-  /** Revisa el vencimiento antes de empezar. Devuelve el vencimiento (ms) o null si no se conoce. */
-  function validarVencimientoToken(token, origen) {
+  /** Informa la vigencia de la conexión. Devuelve el vencimiento (ms) o null si no se conoce. */
+  function describirToken(token, origen) {
     const info = analizarToken(token);
     if (info.tipo === 'ilegible' || info.sinFirma) {
-      log('Aviso: el token no se pudo leer completo; puede estar cortado o tener caracteres de más. Si falla, use "Capturar desde SUNAT".', 'warn');
+      log('Aviso: la conexión no se pudo leer completa; si falla, pulse "Conectar" y abra una guía con «Ver».', 'warn');
       return null;
     }
-    if (!info.exp) {
-      log(`Token ${origen}. No indica su vencimiento; se usará igual.`);
-      return null;
-    }
-    const restante = info.exp - Date.now();
-    if (restante <= 0) {
-      throw new ErrorValidacion(`El token venció a las ${horaDe(info.exp)} (hace ${Math.max(1, Math.round(-restante / 60000))} min). ` +
-        'Obtenga uno nuevo: pulse "Capturar desde SUNAT" y haga una búsqueda o abra una guía con "Ver".');
-    }
-    const vida = info.iat && info.exp > info.iat ? `; dura ${Math.max(1, Math.round((info.exp - info.iat) / 60000))} min en total` : '';
-    log(`Token ${origen}, válido hasta las ${horaDe(info.exp)} (quedan ${Math.floor(restante / 60000)} min${vida}).`, restante < 3 * 60000 ? 'warn' : 'ok');
+    if (!info.exp) { log(`Conexión ${origen} (sin hora de vencimiento).`, 'debug'); return null; }
+    if (info.exp <= Date.now()) { log(`La conexión ${origen} ya venció (a las ${horaDe(info.exp)}).`, 'warn'); return info.exp; }
+    log(`Conectado con SUNAT (${origen}); la conexión vence a las ${horaDe(info.exp)}.`, 'ok');
     return info.exp;
   }
 
-  /** Avisa si, por la cantidad de guías, el token podría vencer antes de terminar. */
-  function avisarSiTokenNoAlcanza(ctx, unicos) {
-    if (!ctx.tokenExp) return;
-    const pendientes = unicos.filter((u) => !estado.previos.has(u.clave) && !estado.memoria.has(u.clave)).length;
-    const estimadoMs = pendientes * ((ctx.cfg.pausaMinMs + ctx.cfg.pausaMaxMs) / 2 + 500);
-    const restanteMs = ctx.tokenExp - Date.now();
-    if (estimadoMs > restanteMs) {
-      log(`Aviso: procesar ${pendientes} guía(s) tomaría unos ${Math.ceil(estimadoMs / 60000)} min, pero el token vence en ${Math.max(0, Math.floor(restanteMs / 60000))} min.`, 'warn');
-      log('Si se detiene por token vencido: pulse "Capturar desde SUNAT", abra una guía con "Ver" y pulse Iniciar. Continuará donde quedó.', 'warn');
-    }
-  }
+  const textoVence = (token) => {
+    const info = analizarToken(token);
+    return info.exp ? ` (vence a las ${horaDe(info.exp)})` : '';
+  };
 
   /** Parámetros que sí pueden exportarse (nunca el token). */
   function parametrosExportables(cfg) {
     if (!cfg) return {};
-    const claves = ['fechaInicio', 'fechaFin', 'rucEmisor', 'rucReceptor', 'codCpe', 'numSerie', 'numCpe',
-      'codEstado', 'codSubEstado', 'rangoHoras', 'tipBusqueda', 'perPage', 'pausaMinMs', 'pausaMaxMs', 'maxReintentos'];
+    const claves = ['rucs', 'rol', 'periodos', 'codCpe', 'numSerie', 'numCpe', 'codEstado', 'codSubEstado', 'rangoHoras',
+      'tipBusqueda', 'perPage', 'maxDiasBloque', 'pausaMinMs', 'pausaMaxMs', 'maxReintentos'];
     const r = {};
-    for (const k of claves) r[k] = cfg[k];
+    for (const k of claves) r[k] = Array.isArray(cfg[k]) ? JSON.parse(JSON.stringify(cfg[k])) : cfg[k];
     return r;
   }
 
   /* ---------------------------------------------------------------
-   * 6. Solicitud HTTP con reintentos
+   * 6. Solicitudes a SUNAT: reintentos, mensajes y conexión
    * ------------------------------------------------------------- */
   function calcularEspera(intento, retryAfter) {
     if (retryAfter) {
@@ -490,51 +573,132 @@
     return 1000 * Math.pow(2, intento - 1) + Math.floor(Math.random() * 250); // 1 s, 2 s, 4 s...
   }
 
-  /** Extrae un mensaje corto del cuerpo de error, sin volcar datos completos. */
-  function mensajeDeCuerpo(cuerpo) {
-    if (!cuerpo) return '';
+  /**
+   * Lee el mensaje de error de SUNAT. Su formato habitual es
+   * { cod, msg, errors: [{ cod, msg }] }: el detalle útil está en "errors".
+   */
+  function erroresDeCuerpo(cuerpo) {
+    const vacio = { principal: '', detalles: [], texto: '' };
+    if (!cuerpo) return vacio;
     try {
       const j = JSON.parse(cuerpo);
-      const m = primero(j && j.msg, j && j.message, j && j.mensaje, j && j.error_description, j && j.error, j && j.cod);
-      return m ? ` – ${texto(m).slice(0, 150)}` : '';
-    } catch (_) { return ''; }
+      if (!esObjetoPlano(j)) return vacio;
+      const principal = texto(primero(j.msg, j.message, j.mensaje, j.error_description, j.error)).slice(0, 200);
+      const lista = [j.errors, j.errores, j.details, j.detalles].find(Array.isArray) || [];
+      const detalles = lista.slice(0, 5).map((e) => {
+        if (esPrimitivo(e)) return texto(e);
+        if (!esObjetoPlano(e)) return '';
+        const m = texto(primero(e.msg, e.message, e.mensaje, e.desc, e.descripcion, e.detail));
+        const c = texto(primero(e.cod, e.code, e.codigo));
+        return m ? (c ? `${m} (código ${c})` : m) : '';
+      }).filter(Boolean).map((s) => s.slice(0, 200));
+      return { principal, detalles, texto: detalles.length ? detalles.join('; ') : principal };
+    } catch (_) { return vacio; }
   }
 
-  function errorTokenVencido(ctx, url, etiqueta, clave, intento) {
-    const msg = `El token venció a las ${horaDe(ctx.tokenExp)}`;
-    registrarError({ guia: etiqueta, clave, url, estadoHttp: '', mensaje: msg, intento, accion: 'PROCESO DETENIDO' });
-    return new ErrorAutenticacion(0, url, `${msg}.`, 'DETENIDO_TOKEN_VENCIDO');
+  const tokenPorVencer = (ctx) => !!ctx.tokenExp && Date.now() >= ctx.tokenExp - MARGEN_VENCIMIENTO_MS;
+
+  /** Si la pantalla de SUNAT generó una conexión más nueva durante la búsqueda, se usa sin detenerse. */
+  function usarTokenMasNuevo(ctx) {
+    if (!tokenCapturado || tokenCapturado === ctx.token) return;
+    const nuevo = analizarToken(tokenCapturado);
+    const vigente = !nuevo.exp || nuevo.exp > Date.now() + MARGEN_VENCIMIENTO_MS;
+    const masNuevo = !ctx.tokenExp || !nuevo.exp || nuevo.exp > ctx.tokenExp;
+    if (vigente && masNuevo) {
+      ctx.token = tokenCapturado;
+      ctx.tokenExp = nuevo.exp || null;
+      if (cabecerasCapturadas) ctx.cabecerasExtra = { ...cabecerasCapturadas };
+      estado.tokenExp = ctx.tokenExp;
+      log(`Conexión con SUNAT renovada${nuevo.exp ? ` (vence a las ${horaDe(nuevo.exp)})` : ''}.`, 'ok');
+    }
+    tokenCapturado = null;
+    cabecerasCapturadas = null;
   }
 
   /**
-   * GET con: credentials "omit", mode "cors", timeout, cancelación,
-   * reintentos para 429/5xx/red, parada ante 401/403 y registro de errores.
-   * Devuelve { ok, status, data, mensaje, intentos }.
+   * Detiene las consultas hasta tener una conexión nueva: se toma sola cuando el usuario
+   * abre cualquier guía con "Ver" (o pulsa "Buscar") en la pantalla de SUNAT.
    */
-  async function pedirJSON(url, ctx, etiqueta, clave = '') {
-    const { signal, cfg } = ctx;
-    const totalIntentos = cfg.maxReintentos + 1;
-    let ultimo = { ok: false, status: 0, mensaje: 'Sin respuesta', intentos: 0 };
+  async function renovarConexion(ctx, motivo) {
+    const textos = {
+      inicial: 'Falta conectar con SUNAT.',
+      vencida: 'La conexión con SUNAT venció.',
+      rechazada: 'SUNAT no aceptó la conexión (HTTP 401).'
+    };
+    const previa = ctx.token;
+    estado.esperandoConexion = true;
+    iniciarCaptura('fondo');
+    log(`${textos[motivo] || textos.vencida} ➜ En la pantalla de SUNAT abra cualquier guía con «Ver» (o pulse «Buscar»). Luego todo continúa solo.`, 'warn');
+    if (ui && ui.compactar) ui.compactar(true);
+    actualizarUI();
+    const limite = Date.now() + ctx.cfg.esperaConexionMin * 60000;
+    try {
+      while (true) {
+        if (ctx.signal.aborted) throw crearAbortError();
+        if (tokenCapturado && tokenCapturado !== previa) {
+          const info = analizarToken(tokenCapturado);
+          if (!info.exp || info.exp > Date.now() + MARGEN_VENCIMIENTO_MS) {
+            ctx.token = tokenCapturado;
+            ctx.tokenExp = info.exp || null;
+            ctx.cabecerasExtra = cabecerasCapturadas ? { ...cabecerasCapturadas } : (ctx.cabecerasExtra || {});
+            tokenCapturado = null;
+            cabecerasCapturadas = null;
+            estado.tokenExp = ctx.tokenExp;
+            log(`Conectado con SUNAT${info.exp ? ` (la conexión vence a las ${horaDe(info.exp)})` : ''}. Continuando…`, 'ok');
+            if (ui && ui.compactar) ui.compactar(false);
+            return;
+          }
+          tokenCapturado = null; // vencido: se descarta
+        }
+        if (Date.now() > limite) {
+          throw new ErrorAutenticacion(0, '', `No se renovó la conexión en ${ctx.cfg.esperaConexionMin} minutos.`, 'DETENIDO_SIN_CONEXION');
+        }
+        await dormir(400, ctx.signal);
+      }
+    } finally {
+      estado.esperandoConexion = false;
+      actualizarUI();
+    }
+  }
 
-    const fallar = (status, mensaje, intento, puedeReintentar, retryAfter) => {
-      ultimo = { ok: false, status, mensaje, intentos: intento };
+  /**
+   * GET a SUNAT con: credentials "omit", mode "cors", tiempo máximo, cancelación,
+   * reintentos para 429/5xx/red, renovación de la conexión (401 o vencida),
+   * parada ante 403 y registro de errores.
+   * Devuelve { ok, status, data, mensaje, detalles, intentos }.
+   */
+  async function pedirJSON(url, ctx, etiqueta, clave = '', opciones = {}) {
+    const { signal, cfg } = ctx;
+    const anotarRechazos = opciones.anotarRechazos !== false;
+    const totalIntentos = cfg.maxReintentos + 1;
+    let ultimo = { ok: false, status: 0, mensaje: 'Sin respuesta', detalles: [], intentos: 0 };
+    let renovaciones = 0;
+
+    const fallar = (status, mensaje, intento, puedeReintentar, retryAfter, detalles = []) => {
+      ultimo = { ok: false, status, mensaje, detalles, intentos: intento };
       if (puedeReintentar && intento < totalIntentos) {
         const espera = calcularEspera(intento, retryAfter);
         registrarError({ guia: etiqueta, clave, url, estadoHttp: status, mensaje, intento, accion: `REINTENTO en ${(espera / 1000).toFixed(1)} s` });
-        log(`${etiqueta}: ${mensaje}. Reintento ${intento}/${totalIntentos - 1} en ${(espera / 1000).toFixed(1)} s.`, 'warn');
+        log(`${etiqueta}: ${mensaje}. Reintento ${intento}/${totalIntentos - 1} en ${(espera / 1000).toFixed(1)} s.`, 'debug');
         return espera;
       }
-      registrarError({ guia: etiqueta, clave, url, estadoHttp: status, mensaje, intento, accion: status === 404 ? 'OMITIDA (no encontrada)' : 'OMITIDA (sin más reintentos)' });
+      const rechazo = status === 400 || status === 422;
+      if (!rechazo || anotarRechazos) {
+        registrarError({
+          guia: etiqueta, clave, url, estadoHttp: status, mensaje, intento,
+          accion: status === 404 ? 'OMITIDA (no encontrada)' : rechazo ? 'RECHAZADA POR SUNAT' : 'OMITIDA (sin más reintentos)'
+        });
+      }
       return null;
     };
 
     for (let intento = 1; intento <= totalIntentos; intento++) {
       await esperarSiPausado(signal);
       if (signal.aborted) throw crearAbortError();
-      // Si el token ya venció, no tiene sentido enviar más solicitudes.
-      if (ctx.tokenExp && Date.now() >= ctx.tokenExp) throw errorTokenVencido(ctx, url, etiqueta, clave, intento);
+      usarTokenMasNuevo(ctx);
+      if (tokenPorVencer(ctx)) await renovarConexion(ctx, 'vencida');
 
-      // Controlador por solicitud: se aborta por cancelación general o por timeout.
+      // Controlador por solicitud: se aborta por cancelación general o por tiempo máximo.
       const ctrl = new AbortController();
       let porTimeout = false;
       const alCancelar = () => ctrl.abort();
@@ -543,14 +707,14 @@
 
       let resp = null, cuerpo = '';
       try {
-        // Misma forma que la solicitud que funciona en la aplicación (sin opciones adicionales).
-        resp = await fetch(url, {
+        // Misma forma que la solicitud de la aplicación (y sus mismas cabeceras, si se tomaron).
+        resp = await fetchPropio.call(window, url, {
           method: 'GET',
           mode: 'cors',
           credentials: 'omit',
           headers: {
             accept: 'application/json, text/plain, */*',
-            ...(ctx.cabecerasExtra || {}),   // las mismas cabeceras que usa la aplicación (si se capturaron)
+            ...(ctx.cabecerasExtra || {}),
             authorization: 'Bearer ' + ctx.token
           },
           signal: ctrl.signal
@@ -560,42 +724,55 @@
         clearTimeout(temporizador);
         signal.removeEventListener('abort', alCancelar);
         if (signal.aborted) throw crearAbortError();
-        // Un token vencido suele verse como "Failed to fetch" (la API responde sin cabeceras CORS).
-        if (ctx.tokenExp && Date.now() >= ctx.tokenExp) throw errorTokenVencido(ctx, url, etiqueta, clave, intento);
+        // Una conexión vencida suele verse como "Failed to fetch": se pide una nueva y se repite.
+        if (tokenPorVencer(ctx)) { intento--; continue; }
         const msg = porTimeout
           ? `Tiempo de espera agotado (${cfg.timeoutMs} ms)`
-          : `La API no respondió o el navegador bloqueó la respuesta (${(e && e.message) || e})`;
+          : `SUNAT no respondió o el navegador bloqueó la respuesta (${(e && e.message) || e})`;
         const espera = fallar(0, msg, intento, true);
         if (espera !== null) { await dormir(espera, signal); continue; }
         return ultimo;
       }
       clearTimeout(temporizador);
       signal.removeEventListener('abort', alCancelar);
-
       const status = resp.status;
 
-      // 401 / 403: detener todo
-      if (status === 401 || status === 403) {
-        registrarError({ guia: etiqueta, clave, url, estadoHttp: status, mensaje: 'Sesión o token no autorizado/vencido', intento, accion: 'PROCESO DETENIDO' });
-        throw new ErrorAutenticacion(status, url);
+      // 401: la conexión no sirve → se espera una nueva y se repite (máximo 2 veces)
+      if (status === 401) {
+        if (renovaciones < 2) {
+          renovaciones++;
+          registrarError({ guia: etiqueta, clave, url, estadoHttp: 401, mensaje: 'SUNAT no aceptó la conexión', intento, accion: 'ESPERA DE CONEXIÓN NUEVA' });
+          await renovarConexion(ctx, 'rechazada');
+          intento--;
+          continue;
+        }
+        registrarError({ guia: etiqueta, clave, url, estadoHttp: 401, mensaje: 'SUNAT no aceptó la conexión', intento, accion: 'PROCESO DETENIDO' });
+        throw new ErrorAutenticacion(401, url);
       }
-      // 404: guía no encontrada, continuar
+      // 403: sin permiso → se detiene todo
+      if (status === 403) {
+        registrarError({ guia: etiqueta, clave, url, estadoHttp: 403, mensaje: 'Sin permiso', intento, accion: 'PROCESO DETENIDO' });
+        throw new ErrorAutenticacion(403, url, 'SUNAT indica que la cuenta no tiene permiso para esta consulta (HTTP 403).');
+      }
+      // 404: no encontrada → se anota y se sigue
       if (status === 404) {
-        fallar(404, 'Guía no encontrada (HTTP 404)' + mensajeDeCuerpo(cuerpo), intento, false);
+        fallar(404, 'Guía no encontrada (HTTP 404)', intento, false);
         return ultimo;
       }
-      // 429 y 5xx temporales: reintentar
+      // 429 y 5xx temporales → se reintenta
       if (ESTADOS_REINTENTABLES.has(status)) {
-        const espera = fallar(status, `HTTP ${status} temporal${mensajeDeCuerpo(cuerpo)}`, intento, true, resp.headers.get('retry-after'));
+        const det = erroresDeCuerpo(cuerpo);
+        const espera = fallar(status, `SUNAT respondió HTTP ${status} (temporal)${det.texto ? ' – ' + det.texto : ''}`, intento, true, resp.headers.get('retry-after'), det.detalles);
         if (espera !== null) { await dormir(espera, signal); continue; }
         return ultimo;
       }
-      // Otros códigos no exitosos: no reintentar
+      // Otros códigos (400, 422…): SUNAT rechazó la solicitud → no se reintenta
       if (!resp.ok) {
-        fallar(status, `HTTP ${status} ${resp.statusText || ''}`.trim() + mensajeDeCuerpo(cuerpo), intento, false);
+        const det = erroresDeCuerpo(cuerpo);
+        fallar(status, det.texto ? `HTTP ${status}: ${det.texto}` : `HTTP ${status} ${resp.statusText || ''}`.trim(), intento, false, null, det.detalles);
         return ultimo;
       }
-      // 2xx: validar cuerpo
+      // 2xx: validar contenido
       if (!cuerpo || !cuerpo.trim()) {
         const espera = fallar(status, 'Respuesta vacía', intento, true);
         if (espera !== null) { await dormir(espera, signal); continue; }
@@ -607,35 +784,35 @@
       } catch (e) {
         const tipo = resp.headers.get('content-type') || '';
         const msg = (/html/i.test(tipo) || /^\s*</.test(cuerpo))
-          ? 'Se recibió HTML en lugar de JSON (posible sesión vencida o redirección al login)'
-          : `JSON inválido (${e.message})`;
+          ? 'Se recibió una página en lugar de datos (posible sesión vencida)'
+          : `Respuesta no válida (${e.message})`;
         fallar(status, msg, intento, false);
         return ultimo;
       }
-      return { ok: true, status, data, mensaje: '', intentos: intento };
+      return { ok: true, status, data, mensaje: '', detalles: [], intentos: intento };
     }
     return ultimo;
   }
 
   /* ---------------------------------------------------------------
-   * 7. Listado paginado
+   * 7. Búsqueda de guías (listado) con división automática de periodos
    * ------------------------------------------------------------- */
-  function construirUrlListado(cfg, page) {
-    // Si hay una búsqueda capturada de SUNAT, se usa como plantilla: conserva el orden, el formato
-    // de las fechas y cualquier parámetro adicional que envíe la aplicación. Solo cambian los valores.
+  function construirUrlListado(cfg, busq, page) {
+    // Si hay una búsqueda copiada de SUNAT, se usa como plantilla: conserva el orden, el formato
+    // de las fechas y cualquier parámetro adicional que envíe la aplicación.
     let p = new URLSearchParams();
     if (cfg.plantillaListado) {
       try { p = new URL(cfg.plantillaListado).searchParams; } catch (_) { p = new URLSearchParams(); }
     }
     const fechaDMY = /^\d{2}\/\d{2}\/\d{4}$/.test(p.get('fecEmisionIni') || '');
-    const fecha = (iso) => (fechaDMY && iso ? iso.split('-').reverse().join('/') : iso);
-    p.set('numRucEmisor', cfg.rucEmisor);
-    p.set('numRucReceptor', cfg.rucReceptor);
+    const fecha = (iso) => (fechaDMY ? dmy(iso) : iso);
+    p.set('numRucEmisor', busq.rol === 'emisor' ? busq.ruc : '');
+    p.set('numRucReceptor', busq.rol === 'receptor' ? busq.ruc : '');
     p.set('codCpe', cfg.codCpe);
     p.set('numSerie', cfg.numSerie);
     p.set('numCpe', cfg.numCpe);
-    p.set('fecEmisionIni', fecha(cfg.fechaInicio));
-    p.set('fecEmisionFin', fecha(cfg.fechaFin));
+    p.set('fecEmisionIni', fecha(busq.desde));
+    p.set('fecEmisionFin', fecha(busq.hasta));
     p.set('codEstado', cfg.codEstado);
     p.set('codSubEstado', cfg.codSubEstado);
     p.set('rangoHoras', cfg.rangoHoras);
@@ -643,6 +820,216 @@
     p.set('per_page', String(cfg.perPage));
     p.set('tipBusqueda', cfg.tipBusqueda);
     return `${API_LISTADO}?${p.toString()}`;
+  }
+
+  /** ¿El rechazo de SUNAT parece deberse a que la búsqueda trae demasiadas guías? */
+  function pareceExceso(mensaje) {
+    const m = String(mensaje || '').replace(/\(c[oó]digo [^)]*\)/gi, '').replace(/HTTP \d{3}:?/gi, '');
+    if (/\b100\b|exced|supera|m[aá]xim|acot|l[ií]mite|demasiad|refin|reduzc|filtr|mayor (a|que)|cantidad de (registros|resultados|comprobantes|gu[ií]as)/i.test(m)) return true;
+    return (m.match(/\b\d{3,6}\b/g) || []).some((n) => Number(n) > 100);
+  }
+
+  /** Una búsqueda (un RUC, un rol, un tramo de fechas), con todas sus páginas. */
+  async function consultarBloque(ctx, busq) {
+    const { cfg } = ctx;
+    const etiqueta = `RUC ${busq.ruc} (${ROLES[busq.rol]}) ${dmy(busq.desde)}–${dmy(busq.hasta)}`;
+    const items = [];
+    let page = 1, total = null, perPageApi = cfg.perPage, totalPaginas = 1, incompleta = false, urlPrimera = '';
+    while (true) {
+      const url = construirUrlListado(cfg, busq, page);
+      if (page === 1) urlPrimera = url;
+      await esperarTurno(ctx);
+      const r = await pedirJSON(url, ctx, page > 1 ? `${etiqueta} (página ${page})` : etiqueta, '', { anotarRechazos: false });
+      let recibidos = 0;
+      if (!r.ok || !esObjetoPlano(r.data)) {
+        if (page === 1) {
+          return { ok: false, status: r.status, mensaje: r.ok ? 'La respuesta de SUNAT no tiene el formato esperado' : r.mensaje, detalles: r.detalles || [], url };
+        }
+        incompleta = true;
+      } else {
+        const pag = esObjetoPlano(r.data.paginacion) ? r.data.paginacion : {};
+        const lote = Array.isArray(r.data.items) ? r.data.items : [];
+        recibidos = lote.length;
+        if (page === 1) {
+          const t = Number(pag.totalRegistros);
+          total = Number.isFinite(t) && !esVacio(pag.totalRegistros) ? t : null;
+          const pp = Number(pag.per_page);
+          perPageApi = Number.isInteger(pp) && pp > 0 ? pp : cfg.perPage;
+          totalPaginas = total !== null ? Math.min(50, Math.max(1, Math.ceil(total / perPageApi))) : 1;
+        }
+        items.push(...lote);
+      }
+      const seguir = total !== null ? page < totalPaginas : (recibidos >= perPageApi && page < 50);
+      if (!seguir) break;
+      page++;
+    }
+    return { ok: true, status: 200, items, total, incompleta: incompleta || (total !== null && items.length < total), url: urlPrimera };
+  }
+
+  const TEXTO_TIPO_BUSQUEDA = {
+    ok: 'Correcta',
+    dividida: 'Muy grande: se dividió',
+    dia_exceso: 'Día con más de 100 guías',
+    dia_rechazado: 'Rechazada por SUNAT',
+    ruc_rechazado: 'RUC rechazado por SUNAT',
+    fallida: 'Sin respuesta de SUNAT'
+  };
+
+  function registrarBusqueda(tarea, busq, r, tipo) {
+    estado.busquedas.push({
+      ruc: tarea.ruc, rol: tarea.rol, desde: busq.desde, hasta: busq.hasta, tipo,
+      total: r.ok && r.total !== null && r.total !== undefined ? r.total : '',
+      recibidos: r.ok ? r.items.length : '',
+      estadoHttp: r.ok ? 200 : r.status, mensaje: r.ok ? '' : r.mensaje, incompleta: !!r.incompleta
+    });
+  }
+
+  function agregarEncontradas(tarea, items, encontradas) {
+    for (const it of items) {
+      if (!esObjetoPlano(it)) continue;
+      const clave = claveGuia(it.rucEmisor, it.codCpe, it.numSerie, it.numCpe);
+      if (tarea.vistas.has(clave)) { estado.duplicados.push(clave); continue; }
+      tarea.vistas.add(clave);
+      tarea.encontradas++;
+      if (!encontradas.has(clave)) encontradas.set(clave, it);
+      if (!estado.origenes.has(clave)) estado.origenes.set(clave, new Set());
+      estado.origenes.get(clave).add(`${tarea.ruc} (${ROLES[tarea.rol]})`);
+    }
+    estado.progreso.encontradas = encontradas.size;
+  }
+
+  /**
+   * Recorre un periodo para un RUC y rol, en tramos de varios días. Si SUNAT rechaza un tramo
+   * (por ejemplo, por pasar de 100 guías), lo divide a la mitad; si un tramo sale bien, calcula
+   * cuántos días caben en la siguiente búsqueda según la cantidad de guías que tuvo.
+   */
+  async function buscarPeriodo(ctx, tarea, periodo, encontradas) {
+    const { cfg } = ctx;
+    const ap = tarea.aprendizaje;
+    const P = estado.progreso;
+    let cursor = periodo.desde;
+    let ultimoRechazo = '';
+    let ultimoRechazoDias = 0;
+    while (cursor <= periodo.hasta) {
+      if (ctx.signal.aborted) throw crearAbortError();
+      const restantes = diasEntre(cursor, periodo.hasta);
+      const dias = Math.max(1, Math.min(ap.tam, ap.tamMax, restantes));
+      const busq = { ruc: tarea.ruc, rol: tarea.rol, desde: cursor, hasta: sumarDias(cursor, dias - 1) };
+      P.busquedaActual = `RUC ${tarea.ruc} · ${dmy(busq.desde)}${dias > 1 ? ' al ' + dmy(busq.hasta) : ''}`;
+      actualizarUI();
+      const r = await consultarBloque(ctx, busq);
+
+      if (r.ok) {
+        registrarBusqueda(tarea, busq, r, 'ok');
+        agregarEncontradas(tarea, r.items, encontradas);
+        estado.huboBusquedaCorrecta = true;
+        estado.fallosRedSeguidos = 0;
+        const cantidad = r.total !== null && r.total !== undefined ? r.total : r.items.length;
+        ap.tam = Math.max(1, Math.min(ap.tamMax, Math.floor(cfg.objetivoPorBusqueda / Math.max(cantidad / dias, 1))));
+        cursor = sumarDias(busq.hasta, 1);
+        P.diasHechos += dias;
+        // Dividir solucionó el rechazo anterior: ese mensaje de SUNAT significa "demasiadas guías".
+        if (ultimoRechazo) estado.mensajesExceso.add(ultimoRechazo);
+        ultimoRechazo = '';
+        ultimoRechazoDias = 0;
+        tarea.rechazosDia = 0;
+        continue;
+      }
+
+      if (r.status === 400 || r.status === 422) {
+        const msg = r.mensaje;
+        const exceso = pareceExceso(msg) || estado.mensajesExceso.has(msg);
+        const especifico = !!(r.detalles && r.detalles.length);
+        const repetido = especifico && !exceso && msg === ultimoRechazo;
+        if (dias > 1) {
+          registrarBusqueda(tarea, busq, r, 'dividida');
+          ap.tamMax = Math.max(1, dias - 1);
+          // Si el mismo rechazo se repite al achicar, se prueba con un solo día para saber si es por cantidad.
+          ap.tam = repetido ? 1 : Math.max(1, Math.floor(dias / 2));
+          ultimoRechazo = msg;
+          ultimoRechazoDias = dias;
+          log(`RUC ${tarea.ruc}: SUNAT no permitió buscar ${dias} días juntos; se divide en tramos más cortos.`, 'debug');
+          continue;
+        }
+        if (repetido && ultimoRechazoDias > 1) {
+          // Ni con un solo día cambia el rechazo: no es por la cantidad de guías.
+          registrarBusqueda(tarea, busq, r, 'ruc_rechazado');
+          tarea.rechazo = msg;
+          P.diasHechos += restantes;
+          return 'rechazado';
+        }
+        ultimoRechazo = msg;
+        ultimoRechazoDias = 1;
+        // Un solo día rechazado
+        registrarBusqueda(tarea, busq, r, exceso ? 'dia_exceso' : 'dia_rechazado');
+        tarea.diasRechazados.push({ dia: cursor, mensaje: msg, exceso });
+        log(exceso
+          ? `El ${dmy(cursor)} el RUC ${tarea.ruc} tiene más de 100 guías: SUNAT no permite traer ese día completo.`
+          : `SUNAT rechazó la búsqueda del RUC ${tarea.ruc} del ${dmy(cursor)}: ${msg}`, 'warn');
+        tarea.rechazosDia = (!exceso && msg === tarea.ultimoRechazoDia) ? tarea.rechazosDia + 1 : 1;
+        tarea.ultimoRechazoDia = msg;
+        P.diasHechos += 1;
+        cursor = sumarDias(cursor, 1);
+        if (!exceso && tarea.rechazosDia >= 3) {
+          tarea.rechazo = msg;
+          if (cursor <= periodo.hasta) P.diasHechos += diasEntre(cursor, periodo.hasta);
+          return 'rechazado';
+        }
+        continue;
+      }
+
+      // Otro problema (red, servidor, 404…): se anota y se sigue con el siguiente tramo.
+      registrarBusqueda(tarea, busq, r, 'fallida');
+      tarea.fallidas++;
+      P.diasHechos += dias;
+      cursor = sumarDias(busq.hasta, 1);
+      log(`No se pudo consultar ${P.busquedaActual}: ${r.mensaje}`, 'warn');
+      if (r.status === 0) {
+        estado.fallosRedSeguidos++;
+        if (!estado.huboBusquedaCorrecta || estado.fallosRedSeguidos >= 3) {
+          const ayuda = await diagnosticarFalloListado(ctx, r.url);
+          throw new ErrorDetencion(`No se pudo consultar a SUNAT: ${r.mensaje}.`, ayuda);
+        }
+      }
+    }
+    return 'ok';
+  }
+
+  /** Recorre todos los RUC, roles y periodos. Devuelve un Map clave -> item del listado. */
+  async function buscarTodo(ctx) {
+    const { cfg } = ctx;
+    const roles = cfg.rol === 'ambos' ? ['emisor', 'receptor'] : [cfg.rol];
+    const tareas = [];
+    for (const ruc of cfg.rucs) {
+      for (const rol of roles) {
+        tareas.push({
+          ruc, rol, aprendizaje: { tam: cfg.maxDiasBloque, tamMax: cfg.maxDiasBloque },
+          encontradas: 0, fallidas: 0, diasRechazados: [], rechazo: '', ultimoRechazoDia: '', rechazosDia: 0, vistas: new Set()
+        });
+      }
+    }
+    estado.tareas = tareas;
+    const P = estado.progreso;
+    P.tareasTotal = tareas.length;
+    P.diasTotales = tareas.length * cfg.diasTotales;
+    const encontradas = new Map();
+    for (let i = 0; i < tareas.length; i++) {
+      const tarea = tareas[i];
+      P.tareaActual = i + 1;
+      log(`Buscando guías del RUC ${tarea.ruc} como ${TEXTO_ROL[tarea.rol]} (${i + 1} de ${tareas.length})…`);
+      for (let k = 0; k < cfg.periodos.length; k++) {
+        const res = await buscarPeriodo(ctx, tarea, cfg.periodos[k], encontradas);
+        if (res === 'rechazado') {
+          for (const p of cfg.periodos.slice(k + 1)) P.diasHechos += diasEntre(p.desde, p.hasta);
+          log(`SUNAT rechaza las búsquedas del RUC ${tarea.ruc} (${TEXTO_ROL[tarea.rol]}): ${tarea.rechazo}. Se continúa con el siguiente.`, 'error');
+          break;
+        }
+      }
+      tarea.vistas = null; // ya no se necesita
+      const extra = tarea.diasRechazados.length ? ` ${tarea.diasRechazados.length} día(s) no se pudieron consultar.` : '';
+      log(`RUC ${tarea.ruc} (${TEXTO_ROL[tarea.rol]}): ${tarea.encontradas} guía(s).${extra}`, tarea.rechazo || extra ? 'warn' : 'ok');
+    }
+    return encontradas;
   }
 
   const NOMBRES_PARAMETROS = {
@@ -668,18 +1055,18 @@
   }
 
   /**
-   * Cuando la primera página falla sin respuesta legible ("Failed to fetch"), repite una sola vez
-   * una consulta que la propia pantalla de SUNAT acaba de hacer, para separar las causas:
-   * si esa funciona, el token y la conexión están bien y el problema son los filtros; si no, es el token.
+   * Cuando SUNAT no responde de forma legible ("Failed to fetch"), repite una sola vez una
+   * consulta que la propia pantalla de SUNAT acaba de hacer, para separar las causas.
    */
   async function diagnosticarFalloListado(ctx, urlFallida) {
     const urlPrueba = urlsCapturadas.listado || urlsCapturadas.detalle;
     if (!urlPrueba) return AYUDA_FALLO_CONEXION.slice();
     const esBusqueda = urlPrueba === urlsCapturadas.listado;
-    const queEs = esBusqueda ? 'la misma búsqueda que hizo la pantalla de SUNAT' : 'la consulta de la guía que abrió en SUNAT';
-    log(`Diagnóstico: se repetirá una sola vez ${queEs}...`, 'warn');
+    const queEs = esBusqueda ? 'la búsqueda que hizo la pantalla de SUNAT' : 'la guía que abrió en SUNAT';
+    log(`Diagnóstico: se repetirá una sola vez ${queEs}…`, 'warn');
     let r;
     try {
+      await esperarTurno(ctx);
       r = await pedirJSON(urlPrueba, { ...ctx, cfg: { ...ctx.cfg, maxReintentos: 0 } }, 'DIAGNÓSTICO');
     } catch (e) {
       if (e instanceof ErrorAutenticacion || esAbort(e)) throw e;
@@ -687,103 +1074,19 @@
     }
     const lineas = ['Diagnóstico automático:'];
     if (r.ok) {
-      lineas.push(`• ${queEs[0].toUpperCase()}${queEs.slice(1)} SÍ funciona desde el extractor: el token y la conexión están bien.`);
+      lineas.push(`• ${queEs[0].toUpperCase()}${queEs.slice(1)} SÍ responde desde el extractor: la conexión está bien.`);
       const difs = esBusqueda ? diferenciasConBusqueda(urlPrueba, urlFallida) : [];
       if (difs.length) {
-        lineas.push('• SUNAT rechaza la consulta por lo que cambió respecto de esa búsqueda:');
+        lineas.push('• SUNAT bloquea la búsqueda por lo que cambió respecto de la suya:');
         for (const d of difs) lineas.push(`   – ${d}`);
-      } else if (esBusqueda) {
-        lineas.push('• No hay diferencias con esa búsqueda; pudo ser un fallo momentáneo. Vuelva a pulsar Iniciar.');
       }
-      lineas.push('• Solución: pulse "Capturar desde SUNAT", haga en la pantalla de SUNAT la búsqueda con el periodo y filtros que quiere, y pulse Iniciar sin cambiar nada.');
+      lineas.push('• Solución: pulse "Conectar", haga en la pantalla de SUNAT una búsqueda de uno de los RUC y vuelva a intentar (se copiará su forma exacta).');
     } else {
       lineas.push(`• Incluso ${queEs} falla desde el extractor.`);
-      lineas.push('• Esto indica que SUNAT no acepta ese token fuera de su pantalla (por ejemplo, si cambia en cada consulta o ya no es válido), o que exige algo más que el extractor no envía.');
+      lineas.push('• SUNAT no acepta esa conexión fuera de su pantalla, o ya no es válida.');
       lineas.push('• Para confirmarlo: pestaña Network > clic en la solicitud "comprobantes?..." en rojo > Headers > "Status Code". Envíe esa captura sin mostrar el token.');
     }
     return lineas;
-  }
-
-  async function obtenerListado(ctx) {
-    const { cfg, signal } = ctx;
-    const L = estado.listado;
-    const todos = [];
-    let page = 1;
-
-    while (true) {
-      if (signal.aborted) throw crearAbortError();
-      log(`Consultando listado, página ${page}${L.totalPaginas ? ' de ' + L.totalPaginas : ''}...`);
-      const url = construirUrlListado(cfg, page);
-      const r = await pedirJSON(url, ctx, `LISTADO página ${page}`);
-
-      if (!r.ok) {
-        if (page === 1) {
-          const ayuda = r.status === 0 ? await diagnosticarFalloListado(ctx, url) : [];
-          throw new ErrorDetencion(`No se pudo obtener la primera página del listado: ${r.mensaje}.`, ayuda);
-        }
-        L.paginas.push({ page, esperados: esperadosEnPagina(L, page), recibidos: 0, ok: false, mensaje: r.mensaje, pageApi: '' });
-        log(`Página ${page} del listado falló: ${r.mensaje}. Se continúa con la siguiente.`, 'error');
-      } else {
-        const data = r.data;
-        if (!esObjetoPlano(data)) throw new ErrorDetencion('La respuesta del listado no es un objeto JSON.');
-        const pag = esObjetoPlano(data.paginacion) ? data.paginacion : {};
-        const items = Array.isArray(data.items) ? data.items : [];
-        if (!Array.isArray(data.items)) log(`Advertencia: la página ${page} no contiene el arreglo "items".`, 'warn');
-
-        if (page === 1) {
-          const total = Number(pag.totalRegistros);
-          const perPageApi = Number(pag.per_page);
-          L.totalApi = Number.isFinite(total) && !esVacio(pag.totalRegistros) ? total : null;
-          L.perPageApi = Number.isInteger(perPageApi) && perPageApi > 0 ? perPageApi : cfg.perPage;
-          if (L.perPageApi !== cfg.perPage) log(`La API usa ${L.perPageApi} registros por página (se pidió ${cfg.perPage}).`, 'warn');
-          if (L.totalApi !== null) {
-            L.totalPaginas = L.totalApi === 0 ? 0 : Math.ceil(L.totalApi / L.perPageApi);
-            log(`La API informa ${L.totalApi} registros en ${L.totalPaginas} página(s).`, 'ok');
-          } else {
-            log('La API no informó paginacion.totalRegistros; se paginará hasta recibir una página incompleta.', 'warn');
-          }
-          if (L.totalPaginas > cfg.maxPaginas) {
-            log(`Se limitará a ${cfg.maxPaginas} páginas (tope de seguridad). Reduzca el rango de fechas.`, 'warn');
-            L.totalPaginas = cfg.maxPaginas;
-          }
-        }
-        L.paginas.push({
-          page, esperados: esperadosEnPagina(L, page), recibidos: items.length, ok: true, mensaje: '',
-          pageApi: texto(pag.page)
-        });
-        todos.push(...items);
-      }
-
-      const ultimaPagina = L.paginas[L.paginas.length - 1];
-      const continuar = L.totalApi !== null
-        ? page < L.totalPaginas
-        : (ultimaPagina.ok && ultimaPagina.recibidos >= L.perPageApi && page < cfg.maxPaginas);
-      if (!continuar) break;
-      page++;
-      await dormir(pausaAleatoria(cfg), signal);
-    }
-
-    L.registros = todos.length;
-    log(`Listado completo: ${todos.length} registro(s) recibido(s).`, 'ok');
-    return todos;
-  }
-
-  function esperadosEnPagina(L, page) {
-    if (L.totalApi === null || !L.perPageApi) return '';
-    return Math.max(0, Math.min(L.perPageApi, L.totalApi - (page - 1) * L.perPageApi));
-  }
-
-  /** Elimina duplicados por rucEmisor + codCpe + numSerie + numCpe. */
-  function deduplicar(items) {
-    const mapa = new Map();
-    const duplicados = [];
-    for (const it of items) {
-      if (!esObjetoPlano(it)) continue;
-      const clave = claveGuia(it.rucEmisor, it.codCpe, it.numSerie, it.numCpe);
-      if (mapa.has(clave)) duplicados.push(clave);
-      else mapa.set(clave, it);
-    }
-    return { unicos: [...mapa.entries()].map(([clave, item]) => ({ clave, item })), duplicados };
   }
 
   /* ---------------------------------------------------------------
@@ -791,7 +1094,7 @@
    * ------------------------------------------------------------- */
   function construirUrlDetalle(item) {
     const segmentos = [item.rucEmisor, item.codCpe, item.numSerie, item.numCpe]
-      .map((v) => encodeURIComponent(texto(v).trim())); // numCpe sin ceros a la izquierda
+      .map((v) => encodeURIComponent(texto(v).trim())); // número sin ceros a la izquierda
     return `${API_LISTADO}/${segmentos.join('-')}`;
   }
 
@@ -828,26 +1131,22 @@
     const yaObtenida = (clave) => estado.previos.get(clave) || estado.memoria.get(clave);
     P.pendientesReales = estado.unicos.filter((u) => !yaObtenida(u.clave)).length;
     estado.tiempos.inicioDetalle = Date.now();
-    if (P.total > P.pendientesReales) {
-      log(`Continuación: ${P.total - P.pendientesReales} guía(s) ya obtenidas antes no se volverán a consultar; quedan ${P.pendientesReales}.`, 'ok');
-    }
+    if (P.total > P.pendientesReales) log(`${P.total - P.pendientesReales} guía(s) ya se habían obtenido antes y no se volverán a consultar.`, 'ok');
+    if (P.pendientesReales) log(`Descargando el detalle de ${P.pendientesReales} guía(s)…`);
 
     let consecutivos = 0;
-    let primeraSolicitud = true;
-
     for (const { clave, item } of estado.unicos) {
       if (signal.aborted) throw crearAbortError();
       const reg = estado.resultados.get(clave);
       const etiqueta = guiaLegible(item.numSerie, item.numCpe) || clave;
       P.actual = etiqueta;
 
-      // Ya recuperada antes (JSON anterior o ejecución anterior de esta sesión)
+      // Ya obtenida antes (JSON anterior o ejecución anterior de esta sesión)
       const pv = yaObtenida(clave);
       if (pv) {
-        const deArchivo = estado.previos.has(clave);
         Object.assign(reg, {
           detalle: pv.detalle, ok: true, procesada: true, http: 'REUTILIZADA',
-          consultadoEn: pv.consultadoEn, origen: deArchivo ? 'previo' : 'memoria'
+          consultadoEn: pv.consultadoEn, origen: estado.previos.has(clave) ? 'previo' : 'memoria'
         });
         compararListadoDetalle(clave, item, pv.detalle);
         P.omitidas++; P.ok++; P.procesadas++;
@@ -855,22 +1154,19 @@
         continue;
       }
 
-      await esperarSiPausado(signal);
-      if (!primeraSolicitud) await dormir(pausaAleatoria(cfg), signal);
-      primeraSolicitud = false;
-
-      // Datos mínimos para construir la URL
+      // Datos mínimos para armar la dirección
       const faltan = ['rucEmisor', 'codCpe', 'numSerie', 'numCpe'].filter((k) => esVacio(item[k]));
       if (faltan.length) {
         const msg = `Datos incompletos en el listado: falta ${faltan.join(', ')}`;
         registrarError({ guia: etiqueta, clave, url: '', estadoHttp: '', mensaje: msg, intento: 0, accion: 'OMITIDA' });
         Object.assign(reg, { procesada: true, error: msg });
         P.error++; P.procesadas++;
-        log(`${etiqueta}: ${msg}`, 'error');
+        log(`${etiqueta}: ${msg}`, 'warn');
         actualizarUI();
         continue;
       }
 
+      await esperarTurno(ctx);
       const url = construirUrlDetalle(item);
       const r = await pedirJSON(url, ctx, etiqueta, clave);
       P.consultadas++;
@@ -885,19 +1181,19 @@
         P.ok++;
         consecutivos = 0;
         compararListadoDetalle(clave, item, r.data);
-        log(`${P.procesadas + 1}/${P.total} ${etiqueta} OK (${obtenerBienes(r.data).length} bien(es))`, 'ok');
+        log(`${P.procesadas + 1}/${P.total} ${etiqueta} OK (${obtenerBienes(r.data).length} bien(es))`, 'debug');
       } else {
-        reg.error = r.ok ? 'La respuesta no contiene un objeto de detalle' : r.mensaje;
+        reg.error = r.ok ? 'La respuesta no contiene el detalle de la guía' : r.mensaje;
         if (r.ok) registrarError({ guia: etiqueta, clave, url, estadoHttp: r.status, mensaje: reg.error, intento: r.intentos, accion: 'OMITIDA' });
         P.error++;
         if (r.status !== 404) consecutivos++;
-        log(`${P.procesadas + 1}/${P.total} ${etiqueta} ERROR: ${reg.error}`, 'error');
+        log(`Guía ${etiqueta}: ${reg.error}`, 'warn');
       }
       P.procesadas++;
       actualizarUI();
 
       if (consecutivos >= cfg.maxErroresConsecutivos) {
-        throw new ErrorDetencion(`Se detuvo el proceso tras ${consecutivos} errores consecutivos (posible caída de red o sesión). Los datos recuperados se conservan.`);
+        throw new ErrorDetencion(`Se detuvo tras ${consecutivos} errores seguidos (posible problema de red o de SUNAT). Lo obtenido se conserva.`);
       }
     }
   }
@@ -908,10 +1204,13 @@
   function reiniciarEstado(cfg) {
     estado.config = cfg;
     estado.motivoFin = 'EN_CURSO';
+    estado.fase = '';
     estado.tiempos = { inicio: Date.now(), inicioDetalle: 0, fin: 0 };
-    estado.listado = listadoVacio();
+    estado.tareas = [];
+    estado.busquedas = [];
     estado.unicos = [];
     estado.duplicados = [];
+    estado.origenes = new Map();
     estado.resultados = new Map();
     estado.errores = [];
     estado.controlDetalle = [];
@@ -919,36 +1218,35 @@
     estado.progreso = progresoVacio();
     estado.resumen = null;
     estado.pausado = false;
+    estado.esperandoConexion = false;
+    estado.fallosRedSeguidos = 0;
+    estado.huboBusquedaCorrecta = false;
+    estado.mensajesExceso = new Set();
+    estado.tokenExp = null;
     estado.controller = new AbortController();
   }
 
   /**
-   * Función principal. Ejemplo:
-   *   await GREExtractor.iniciarExtraccionGRE({ fechaInicio: '2026-11-01', fechaFin: '2026-11-03',
-   *     rucReceptor: '20103913340', codCpe: '09', perPage: 100, pausaMs: 700 });
-   * Si no se pasa "token", se pedirá con prompt().
+   * Función principal. Ejemplo desde la consola:
+   *   await GREExtractor.iniciar({ rucs: ['20103913340'], rol: 'receptor',
+   *     periodos: [{ desde: '2026-11-01', hasta: '2026-11-15' }] });
+   * Si no hay conexión, pedirá abrir una guía con "Ver" en la pantalla de SUNAT.
    */
   async function iniciarExtraccionGRE(opciones = {}) {
     if (estado.ejecutando) {
-      log('Ya existe una extracción en curso. Cancélela o espere a que termine.', 'warn');
+      log('Ya hay una búsqueda en curso. Deténgala o espere a que termine.', 'warn');
       return null;
     }
     estado.ejecutando = true;
     let iniciado = false;
-    const ctx = { token: null, tokenExp: null, cabecerasExtra: null, signal: null, cfg: null };
+    const ctx = { token: null, tokenExp: null, cabecerasExtra: {}, signal: null, cfg: null, solicitudes: 0 };
 
     try {
       const cfg = normalizarConfig(opciones);
-      detenerCaptura('inicio'); // no interceptar solicitudes durante la extracción
-      const datosToken = obtenerToken(opciones);
-      ctx.token = datosToken.token;
-      datosToken.token = null;
-      // Las demás cabeceras que usa la aplicación (si se capturaron) se envían igual que ella.
-      ctx.cabecerasExtra = cabecerasCapturadas ? { ...cabecerasCapturadas } : {};
-      cabecerasCapturadas = null;
+      const inicial = tokenInicial(opciones);
       // Borrar el token del objeto recibido para que no quede referenciado.
       if (opciones && typeof opciones === 'object' && 'token' in opciones) { try { opciones.token = ''; } catch (_) { /* objeto congelado */ } }
-      ctx.tokenExp = validarVencimientoToken(ctx.token, datosToken.origen);
+      detenerCaptura('inicio');
 
       // Guías ya obtenidas en una ejecución anterior de esta sesión: permiten continuar donde quedó.
       const memoria = new Map();
@@ -961,42 +1259,54 @@
       iniciado = true;
       ctx.cfg = cfg;
       ctx.signal = estado.controller.signal;
+      iniciarCaptura('fondo'); // escucha la pantalla de SUNAT para renovar la conexión sola
       actualizarUI();
 
       if (!/(^|\.)intranet\.sunat\.peru$/i.test(location.hostname)) {
-        log(`Aviso: el contexto actual es ${location.origin}. Se esperaba intranet.sunat.peru (iframeApplication).`, 'warn');
+        log(`Aviso: la consola está en ${location.origin}. Se esperaba intranet.sunat.peru (iframeApplication).`, 'warn');
       }
-      log(`Inicio: ${cfg.fechaInicio} a ${cfg.fechaFin} (${cfg.diasRango} día(s)), CPE ${cfg.codCpe}.`);
-      if (cfg.plantillaListado) log('Se usa como base la búsqueda copiada de SUNAT (mismos parámetros y formato; solo cambian los valores del panel).');
-      const nombresExtra = Object.keys(ctx.cabecerasExtra);
-      if (nombresExtra.length) log(`Se envían también las cabeceras que usa la aplicación: ${nombresExtra.join(', ')}.`);
+      const listaPeriodos = cfg.periodos.map((p) => `${dmy(p.desde)} al ${dmy(p.hasta)}`).join('; ');
+      log(`Se buscarán las guías de ${cfg.rucs.length} RUC como ${TEXTO_ROL[cfg.rol]}, periodo(s): ${listaPeriodos}.`);
 
-      // 1) Listado
-      const items = await obtenerListado(ctx);
+      if (inicial) {
+        ctx.token = inicial.token;
+        ctx.cabecerasExtra = inicial.cabeceras || {};
+        inicial.token = null;
+        ctx.tokenExp = describirToken(ctx.token, inicial.origen);
+        estado.tokenExp = ctx.tokenExp;
+      }
+      if (!ctx.token || tokenPorVencer(ctx)) {
+        estado.fase = 'conexion';
+        await renovarConexion(ctx, ctx.token ? 'vencida' : 'inicial');
+      }
+      if (cfg.plantillaListado) log('Se usa como base la búsqueda copiada de SUNAT.', 'debug');
+      const nombresExtra = Object.keys(ctx.cabecerasExtra || {});
+      if (nombresExtra.length) log(`Cabeceras de la aplicación que se envían: ${nombresExtra.join(', ')}.`, 'debug');
 
-      // 2) Duplicados
-      const { unicos, duplicados } = deduplicar(items);
-      estado.unicos = unicos;
-      estado.duplicados = duplicados;
-      if (duplicados.length) log(`Se eliminaron ${duplicados.length} registro(s) duplicado(s) del listado.`, 'warn');
-      for (const { clave, item } of unicos) estado.resultados.set(clave, crearRegistro(clave, item));
-      log(`Guías únicas a procesar: ${unicos.length}.`, 'ok');
-      avisarSiTokenNoAlcanza(ctx, unicos);
+      // Fase 1: buscar las guías
+      estado.fase = 'busqueda';
+      actualizarUI();
+      const encontradas = await buscarTodo(ctx);
+      estado.unicos = [...encontradas.entries()].map(([clave, item]) => ({ clave, item }));
+      for (const { clave, item } of estado.unicos) estado.resultados.set(clave, crearRegistro(clave, item));
+      log(`Búsqueda terminada: ${estado.unicos.length} guía(s) encontradas.`, 'ok');
 
-      // 3) Detalles
+      // Fase 2: detalle de cada guía
+      estado.fase = 'detalle';
+      actualizarUI();
       await obtenerDetalles(ctx);
       estado.motivoFin = 'COMPLETADO';
       log('Extracción completada.', 'ok');
     } catch (e) {
       if (esAbort(e)) {
         estado.motivoFin = 'CANCELADO';
-        log('Proceso cancelado. Se conservan los resultados ya recuperados; puede descargarlos.', 'warn');
+        log('Proceso detenido. Lo obtenido se conserva y puede descargarlo.', 'warn');
       } else if (e instanceof ErrorAutenticacion) {
         estado.motivoFin = e.codigo;
         log(`${e.message} Proceso detenido; lo ya obtenido se conserva.`, 'error');
-        log('Para continuar: pulse "Capturar desde SUNAT", abra una guía con "Ver" y pulse Iniciar con los mismos filtros. Solo se consultarán las guías que faltan.', 'warn');
+        if (e.status !== 403) log('Para continuar: pulse "Buscar y descargar Excel" otra vez y abra una guía con «Ver» cuando se le pida. Solo se consultará lo que falta.', 'warn');
       } else if (e instanceof ErrorValidacion) {
-        log(`Validación: ${e.message}`, 'error');
+        log(e.message, 'error');
       } else if (e instanceof ErrorDetencion) {
         estado.motivoFin = 'DETENIDO';
         log(e.message, 'error');
@@ -1007,37 +1317,50 @@
         console.error(e);
       }
     } finally {
-      // Descartar el token y las cabeceras usadas (el token capturado ya se consumió al iniciar;
-      // si la ejecución no llegó a usarlo, por ejemplo por una fecha mal escrita, se conserva para reintentar).
+      // Descartar la conexión (token y cabeceras) y dejar la página como estaba
       ctx.token = null;
       ctx.tokenExp = null;
       ctx.cabecerasExtra = null;
+      detenerCaptura('fin');
+      if (iniciado) { tokenCapturado = null; cabecerasCapturadas = null; }
+      estado.tokenExp = null;
       estado.ejecutando = false;
       estado.pausado = false;
+      estado.esperandoConexion = false;
       estado.controller = null;
+      estado.fase = '';
       if (iniciado) {
         estado.tiempos.fin = Date.now();
-        try { finalizar(); } catch (e) { log(`Error al generar el resumen: ${e.message}`, 'error'); }
+        try { finalizar(); } catch (e) { log(`Error al preparar el resumen: ${e.message}`, 'error'); }
+        const hayDetalles = [...estado.resultados.values()].some((r) => r.ok);
+        if (estado.config.descargarAlTerminar && estado.motivoFin !== 'CANCELADO' && hayDetalles) {
+          try { await descargar('excel'); } catch (e) { log(`No se pudo descargar el Excel: ${e.message}`, 'error'); }
+        }
       }
+      if (ui && ui.compactar) ui.compactar(false);
       actualizarUI();
     }
     return iniciado ? estado.resumen : null;
   }
 
   function pausar() {
-    if (!estado.ejecutando) { log('No hay un proceso en curso.', 'warn'); return; }
-    estado.pausado = true; log('Pausa solicitada (se aplica antes de la siguiente solicitud).', 'warn'); actualizarUI();
+    if (!estado.ejecutando) { log('No hay una búsqueda en curso.', 'warn'); return; }
+    estado.pausado = true;
+    log('Pausa solicitada (se aplica antes de la siguiente consulta).', 'warn');
+    actualizarUI();
   }
   function reanudar() {
-    if (!estado.ejecutando) { log('No hay un proceso en curso.', 'warn'); return; }
+    if (!estado.ejecutando) { log('No hay una búsqueda en curso.', 'warn'); return; }
     if (!estado.pausado) return;
-    estado.pausado = false; log('Proceso reanudado.', 'ok'); actualizarUI();
+    estado.pausado = false;
+    log('Continuando.', 'ok');
+    actualizarUI();
   }
   function cancelar() {
-    if (!estado.ejecutando || !estado.controller) { log('No hay un proceso en curso.', 'warn'); return; }
+    if (!estado.ejecutando || !estado.controller) { log('No hay una búsqueda en curso.', 'warn'); return; }
     estado.pausado = false;
     estado.controller.abort();
-    log('Cancelación solicitada...', 'warn');
+    log('Deteniendo…', 'warn');
   }
 
   /* ---------------------------------------------------------------
@@ -1049,54 +1372,58 @@
     return esObjetoPlano(b) ? [b] : [];
   }
 
+  const TIPO_CONTROL_BUSQUEDA = {
+    dia_exceso: 'DIA_SUPERA_100', dia_rechazado: 'DIA_RECHAZADO', ruc_rechazado: 'RUC_RECHAZADO', fallida: 'BUSQUEDA_FALLIDA'
+  };
+
   function construirControl() {
     const C = [...estado.controlDetalle];
-    const L = estado.listado;
-
-    if (L.totalApi !== null && L.totalApi !== L.registros) {
-      agregarControl(C, 'TOTAL_NO_COINCIDE', '', 'paginacion.totalRegistros vs registros recuperados', L.totalApi, L.registros,
-        'La cantidad informada por la API no coincide con la recuperada');
+    for (const b of estado.busquedas) {
+      const guia = `${b.ruc} (${ROLES[b.rol]})`;
+      const tramo = `${dmy(b.desde)} al ${dmy(b.hasta)}`;
+      if (b.tipo === 'ok' && b.incompleta) agregarControl(C, 'BUSQUEDA_INCOMPLETA', guia, tramo, b.total, b.recibidos, 'SUNAT informó más guías de las recibidas');
+      if (TIPO_CONTROL_BUSQUEDA[b.tipo]) agregarControl(C, TIPO_CONTROL_BUSQUEDA[b.tipo], guia, tramo, '', b.estadoHttp, b.mensaje);
     }
-    for (const p of L.paginas) {
-      if (!p.ok) agregarControl(C, 'PAGINA_FALLIDA', `página ${p.page}`, 'items', p.esperados, 0, p.mensaje);
-      else if (p.esperados !== '' && p.recibidos < p.esperados) agregarControl(C, 'PAGINA_INCOMPLETA', `página ${p.page}`, 'items.length', p.esperados, p.recibidos, 'La página trajo menos registros de los esperados');
-      if (p.ok && p.pageApi !== '' && Number(p.pageApi) !== p.page) agregarControl(C, 'PAGINA_NO_COINCIDE', `página ${p.page}`, 'paginacion.page', p.page, p.pageApi, 'La API devolvió otro número de página');
-    }
-    if (L.totalApi !== null && estado.motivoFin === 'COMPLETADO' && L.paginas.length < L.totalPaginas) {
-      agregarControl(C, 'PAGINAS_FALTANTES', '', 'páginas', L.totalPaginas, L.paginas.length, 'No se consultaron todas las páginas');
-    }
-    for (const d of estado.duplicados) agregarControl(C, 'GUIA_REPETIDA_EN_LISTADO', d, 'clave', d, '', 'Registro duplicado eliminado');
-
+    for (const d of estado.duplicados) agregarControl(C, 'GUIA_REPETIDA_EN_BUSQUEDA', d, 'clave', d, '', 'Registro duplicado eliminado');
     for (const r of estado.resultados.values()) {
-      if (!r.procesada) agregarControl(C, 'GUIA_NO_PROCESADA', r.clave, '', '', '', `Proceso finalizado como ${estado.motivoFin}`);
+      if (!r.procesada) agregarControl(C, 'GUIA_NO_PROCESADA', r.clave, '', '', '', `Proceso finalizado como ${textoMotivo(estado.motivoFin)}`);
       else if (!r.ok) agregarControl(C, 'GUIA_SIN_DETALLE', r.clave, 'HTTP', '', r.http, r.error);
       else if (obtenerBienes(r.detalle).length === 0) agregarControl(C, 'GUIA_SIN_BIENES', r.clave, 'traslado.bien', '', '0', 'La guía no tiene bienes');
-      if (r.origen === 'previo_fuera_del_listado') agregarControl(C, 'PREVIO_FUERA_DEL_LISTADO', r.clave, '', '', '', 'Guía del JSON anterior que no aparece en el listado actual');
+      if (r.origen === 'previo_fuera_del_listado') agregarControl(C, 'PREVIO_FUERA_DEL_LISTADO', r.clave, '', '', '', 'Guía del JSON anterior que no aparece en las búsquedas actuales');
     }
     estado.control = C;
+  }
+
+  function textoMotivo(m) {
+    return {
+      EN_CURSO: 'En curso', COMPLETADO: 'Completado', CANCELADO: 'Detenido por el usuario', DETENIDO: 'Detenido por un problema',
+      DETENIDO_SIN_CONEXION: 'Detenido: no se renovó la conexión', DETENIDO_HTTP_401: 'Detenido: SUNAT no aceptó la conexión',
+      DETENIDO_HTTP_403: 'Detenido: sin permiso (HTTP 403)', ERROR: 'Detenido por un error'
+    }[m] || m || '';
   }
 
   function calcularResumen() {
     const regs = [...estado.resultados.values()];
     const ok = regs.filter((r) => r.ok);
-    const L = estado.listado, P = estado.progreso, T = estado.tiempos;
-    const totalBienes = ok.reduce((s, r) => s + obtenerBienes(r.detalle).length, 0);
+    const P = estado.progreso, T = estado.tiempos, cfg = estado.config;
     const tiempoTotal = (T.fin || Date.now()) - T.inicio;
     const tiempoDetalle = T.inicioDetalle ? (T.fin || Date.now()) - T.inicioDetalle : 0;
+    const informadas = estado.busquedas.filter((b) => b.tipo === 'ok' && b.total !== '').reduce((s, b) => s + Number(b.total), 0);
     return {
-      'Estado final': estado.motivoFin,
-      'Rango': estado.config ? `${estado.config.fechaInicio} a ${estado.config.fechaFin}` : '',
-      'Total informado por la API': L.totalApi === null ? '' : L.totalApi,
-      'Registros obtenidos del listado': L.registros,
-      'Páginas esperadas / consultadas': `${L.totalPaginas} / ${L.paginas.length}`,
-      'Guías únicas': estado.unicos.length,
+      'Estado final': textoMotivo(estado.motivoFin),
+      'RUC consultados': cfg ? cfg.rucs.length : 0,
+      'Buscados como': cfg ? TEXTO_ROL[cfg.rol] : '',
+      'Periodos': cfg ? cfg.periodos.map((p) => `${dmy(p.desde)} al ${dmy(p.hasta)}`).join('; ') : '',
+      'Búsquedas hechas en SUNAT': estado.busquedas.length,
+      'Guías informadas por SUNAT (suma de búsquedas)': informadas,
+      'Guías encontradas (sin repetir)': estado.unicos.length,
       'Duplicados eliminados': estado.duplicados.length,
-      'Detalles correctos': ok.length,
-      '  de ellos reutilizados (JSON previo o esta sesión)': regs.filter((r) => r.ok && r.origen !== 'actual').length,
+      'Días que SUNAT no permitió consultar': estado.tareas.reduce((s, t) => s + t.diasRechazados.length, 0),
+      'Guías con detalle': ok.length,
+      '  de ellas reutilizadas': regs.filter((r) => r.ok && r.origen !== 'actual').length,
       'Guías con error': regs.filter((r) => r.procesada && !r.ok).length,
       'Guías no procesadas': regs.filter((r) => !r.procesada).length,
-      'Entradas en registro de errores': estado.errores.length,
-      'Total de bienes': totalBienes,
+      'Total de bienes': ok.reduce((s, r) => s + obtenerBienes(r.detalle).length, 0),
       'Guías sin bienes': ok.filter((r) => obtenerBienes(r.detalle).length === 0).length,
       'Observaciones de control': estado.control.length,
       'Tiempo total': duracion(tiempoTotal),
@@ -1104,12 +1431,40 @@
     };
   }
 
+  /** Una fila por RUC y rol, para la hoja "Resumen". */
+  function resumenPorRuc() {
+    const conteo = new Map();
+    for (const r of estado.resultados.values()) {
+      const orig = estado.origenes.get(r.clave);
+      if (!orig) continue;
+      for (const o of orig) {
+        if (!conteo.has(o)) conteo.set(o, { ok: 0, error: 0 });
+        if (r.ok) conteo.get(o).ok++;
+        else if (r.procesada) conteo.get(o).error++;
+      }
+    }
+    return estado.tareas.map((t) => {
+      const c = conteo.get(`${t.ruc} (${ROLES[t.rol]})`) || { ok: 0, error: 0 };
+      const exceso = t.diasRechazados.filter((d) => d.exceso).length;
+      const observacion = [
+        t.rechazo && `SUNAT rechazó las búsquedas: ${t.rechazo}`,
+        exceso && `${exceso} día(s) con más de 100 guías`,
+        t.diasRechazados.length > exceso && `${t.diasRechazados.length - exceso} día(s) rechazados`,
+        t.fallidas && `${t.fallidas} búsqueda(s) sin respuesta`
+      ].filter(Boolean).join('; ');
+      return {
+        ruc: t.ruc, rol: ROLES[t.rol], encontradas: t.encontradas, ok: c.ok, error: c.error,
+        diasNoConsultados: t.diasRechazados.length, observacion
+      };
+    });
+  }
+
   function finalizar() {
-    // Incluir guías del JSON previo que no aparecieron en el listado actual
+    // Incluir guías del JSON anterior que no aparecieron en las búsquedas actuales
     for (const [clave, pv] of estado.previos) {
       if (!estado.resultados.has(clave)) {
         estado.resultados.set(clave, crearRegistro(clave, null, {
-          detalle: pv.detalle, ok: true, procesada: true, http: 'PREVIO',
+          detalle: pv.detalle, ok: true, procesada: true, http: 'REUTILIZADA',
           consultadoEn: pv.consultadoEn, origen: 'previo_fuera_del_listado'
         }));
       }
@@ -1117,17 +1472,19 @@
     estado.memoria = new Map();
     construirControl();
     estado.resumen = calcularResumen();
+    const R = estado.resumen;
 
     console.log('%c[GRE] RESUMEN', 'color:#0a7d55;font-weight:bold;font-size:13px');
-    console.table(estado.resumen);
+    console.table(R);
     if (estado.control.length) {
       const porTipo = {};
       for (const c of estado.control) porTipo[c.tipo] = (porTipo[c.tipo] || 0) + 1;
       console.log('%c[GRE] Control de calidad (cantidad por tipo)', 'color:#b36b00;font-weight:bold');
       console.table(porTipo);
     }
-    for (const [k, v] of Object.entries(estado.resumen)) log(`${k.trim()}: ${v}`, 'info');
-    log('Use los botones de descarga o GREExtractor.descargarTodo().', 'ok');
+    log(`Resultado: ${R['Guías encontradas (sin repetir)']} guía(s) encontradas, ${R['Guías con detalle']} con detalle y ${R['Total de bienes']} bien(es).`, 'ok');
+    if (R['Días que SUNAT no permitió consultar']) log(`${R['Días que SUNAT no permitió consultar']} día(s) no se pudieron consultar: vea la hoja "Búsquedas" del Excel.`, 'warn');
+    if (R['Guías con error']) log(`${R['Guías con error']} guía(s) con error: vea la hoja "Errores" del Excel.`, 'warn');
   }
 
   /* ---------------------------------------------------------------
@@ -1136,8 +1493,7 @@
   /**
    * Convierte un objeto anidado en { "ruta.a.b": valorPrimitivo }.
    * - Arreglos de primitivos: se unen con " | ".
-   * - Arreglos de objetos (o vacíos): solo se registra "<ruta>[cantidad]";
-   *   su contenido se exporta en archivos separados.
+   * - Arreglos de objetos (o vacíos): solo "<ruta>[cantidad]"; su contenido va en hojas aparte.
    */
   function flattenObject(valor, prefijo = '', salida = {}) {
     if (esPrimitivo(valor)) {
@@ -1158,7 +1514,7 @@
   }
 
   /* ---------------------------------------------------------------
-   * 12. Extracción de datos legibles (sin inventar propiedades)
+   * 12. Filas legibles (sin inventar propiedades)
    * ------------------------------------------------------------- */
   function subnodos(n) {
     return esObjetoPlano(n) ? [n, ...Object.values(n).filter(esObjetoPlano)] : [];
@@ -1203,8 +1559,18 @@
     }).filter(Boolean).join(' | ');
   }
 
+  /** RUC y rol con que se encontró la guía. */
+  function origenDe(clave) {
+    const s = estado.origenes.get(clave);
+    if (!s || !s.size) return { ruc: '', rol: '' };
+    const lista = [...s];
+    const rucs = [...new Set(lista.map((x) => x.split(' ')[0]))];
+    const roles = [...new Set(lista.map((x) => x.replace(/^\S+ \((.*)\)$/, '$1')))];
+    return { ruc: rucs.join(' | '), rol: roles.join(' y ') };
+  }
+
   const COLUMNAS_GUIAS = [
-    'Clave', 'ID interno', 'RUC emisor', 'Nombre emisor', 'Código CPE', 'Tipo CPE', 'Serie', 'Número', 'Guía completa',
+    'Clave', 'RUC consultado', 'Buscado como', 'ID interno', 'RUC emisor', 'Nombre emisor', 'Código CPE', 'Tipo CPE', 'Serie', 'Número', 'Guía completa',
     'Código estado', 'Estado', 'Fecha emisión', 'Fecha generación CDR', 'Observaciones guía', 'Observaciones receptor',
     'Código motivo traslado', 'Motivo traslado', 'Fecha inicio traslado', 'Fecha entrega', 'Modalidad traslado',
     'Bultos/Pallets', 'Unidad peso', 'Peso bruto', 'Placa',
@@ -1217,21 +1583,21 @@
     'Origen', 'Consulta correcta', 'HTTP', 'Intentos', 'Consultado en', 'Mensaje error'
   ];
 
-  /** Datos de identificación comunes (de detalle o, si falta, del listado). */
+  /** Datos de identificación comunes (del detalle o, si falta, del listado). */
   function datosBase(reg) {
     const d = reg.detalle || {}, it = reg.listado || {};
     const ruc = primero(d.numRuc, obtener(d, 'emisor.numRuc'), it.rucEmisor);
     const serie = primero(d.numSerie, it.numSerie);
     const num = primero(d.numCpe, it.numCpe);
-    const emisor = d.emisor;
     const traslado = esObjetoPlano(d.traslado) ? d.traslado : {};
     const partida = datosDireccion(traslado.partida);
     const llegada = datosDireccion(traslado.llegada);
     const transp = datosPersona(traslado.transportista);
+    const origen = origenDe(reg.clave);
     return {
-      d, it, traslado, partida, llegada, transp,
+      d, it, traslado, partida, llegada, transp, origen,
       ruc: texto(ruc),
-      nombreEmisor: texto(buscarClave(subnodos(emisor), [/raz[oó]n/i, /^desNombre/i, /^nomb/i, /^nom[A-Z_]/, /nombre/i])),
+      nombreEmisor: texto(buscarClave(subnodos(d.emisor), [/raz[oó]n/i, /^desNombre/i, /^nomb/i, /^nom[A-Z_]/, /nombre/i])),
       serie: texto(serie),
       num: texto(num),
       guia: guiaLegible(serie, num),
@@ -1250,6 +1616,8 @@
     const aud = subnodos(d.auditoria);
     const fila = {
       'Clave': reg.clave,
+      'RUC consultado': b.origen.ruc,
+      'Buscado como': b.origen.rol,
       'ID interno': texto(d.id),
       'RUC emisor': b.ruc,
       'Nombre emisor': b.nombreEmisor,
@@ -1309,7 +1677,7 @@
       'Consultado en': reg.consultadoEn,
       'Mensaje error': reg.error
     };
-    // Columnas dinámicas: todas las propiedades primitivas del detalle.
+    // Columnas dinámicas: todas las propiedades del detalle (los campos nuevos aparecen solos).
     if (reg.detalle) Object.assign(fila, flattenObject(reg.detalle));
     return fila;
   }
@@ -1320,7 +1688,8 @@
   function filasBienes(reg) {
     const b = datosBase(reg);
     const base = {
-      'Clave': reg.clave, 'RUC emisor': b.ruc, 'Nombre emisor': b.nombreEmisor, 'Serie': b.serie, 'Número': b.num,
+      'Clave': reg.clave, 'RUC consultado': b.origen.ruc, 'Buscado como': b.origen.rol,
+      'RUC emisor': b.ruc, 'Nombre emisor': b.nombreEmisor, 'Serie': b.serie, 'Número': b.num,
       'Guía completa': b.guia, 'Fecha emisión': b.fecEmision, 'Estado': b.estado, 'Motivo traslado': b.motivo,
       'Partida': [b.partida.direccion, b.partida.ubigeo].filter(Boolean).join(' - '),
       'Llegada': [b.llegada.direccion, b.llegada.ubigeo].filter(Boolean).join(' - '),
@@ -1361,18 +1730,23 @@
     });
   }
 
-  const COLUMNAS_BIENES = ['Clave', 'RUC emisor', 'Nombre emisor', 'Serie', 'Número', 'Guía completa', 'Fecha emisión', 'Estado',
-    'Motivo traslado', 'Partida', 'Llegada', 'Transportista', 'Indicador bienes', 'N° orden', 'Código bien', 'Código producto SUNAT',
-    'Subpartida', 'GTIN', 'Descripción bien', 'Unidad medida', 'Descripción unidad', 'Cantidad', 'Bien regulado',
+  const COLUMNAS_BIENES = ['Clave', 'RUC consultado', 'Buscado como', 'RUC emisor', 'Nombre emisor', 'Serie', 'Número', 'Guía completa',
+    'Fecha emisión', 'Estado', 'Motivo traslado', 'Partida', 'Llegada', 'Transportista', 'Indicador bienes', 'N° orden', 'Código bien',
+    'Código producto SUNAT', 'Subpartida', 'GTIN', 'Descripción bien', 'Unidad medida', 'Descripción unidad', 'Cantidad', 'Bien regulado',
     'Documento relacionado', 'Contenedor', 'Precinto', 'Contenedor vacío'];
 
   /* ---------------------------------------------------------------
-   * 13. Colecciones (arreglos) en archivos adicionales
+   * 13. Colecciones (arreglos) en hojas o archivos aparte
    * ------------------------------------------------------------- */
   const ARCHIVO_POR_COLECCION = {
     proveedor: 'GRE_PROVEEDORES', conductor: 'GRE_CONDUCTORES', vehiculo: 'GRE_VEHICULOS',
     contenedores: 'GRE_CONTENEDORES', contenedor: 'GRE_CONTENEDORES', receptorObs: 'GRE_OBSERVACIONES',
     docRelacionado: 'GRE_DOCUMENTOS_RELACIONADOS', docGrePorEvento: 'GRE_DOC_GRE_POR_EVENTO'
+  };
+  const HOJA_POR_ARCHIVO = {
+    GRE_PROVEEDORES: 'Proveedores', GRE_CONDUCTORES: 'Conductores', GRE_VEHICULOS: 'Vehículos',
+    GRE_CONTENEDORES: 'Contenedores', GRE_OBSERVACIONES: 'Observaciones', GRE_DOCUMENTOS_RELACIONADOS: 'Documentos relacionados',
+    GRE_DOC_GRE_POR_EVENTO: 'GRE por evento'
   };
   // Si estas propiedades vienen como objeto (no arreglo), también se exportan como una fila.
   const OBJETOS_COMO_COLECCION = new Set(['proveedor', 'conductor', 'vehiculo', 'contenedores']);
@@ -1385,12 +1759,10 @@
   function recolectarColecciones(reg, salida) {
     const b = datosBase(reg);
     const base = { 'Clave': reg.clave, 'RUC emisor': b.ruc, 'Serie': b.serie, 'Número': b.num, 'Guía completa': b.guia, 'Fecha emisión': b.fecEmision };
-
     const agregar = (archivo, fila) => {
       if (!salida.has(archivo)) salida.set(archivo, []);
       salida.get(archivo).push(fila);
     };
-
     const recorrer = (nodo, ruta, indicePadre) => {
       if (!esObjetoPlano(nodo)) return;
       for (const [k, v] of Object.entries(nodo)) {
@@ -1419,9 +1791,293 @@
   }
 
   /* ---------------------------------------------------------------
-   * 14. CSV y descargas
+   * 14. Tablas de salida: Excel, CSV y JSON
    * ------------------------------------------------------------- */
-  /** Sanitiza una celda: sin null/undefined, sin saltos de línea, comillas escapadas y protección anti-fórmulas. */
+  function unirColumnas(base, filas) {
+    const cols = [...base];
+    const vistas = new Set(cols);
+    for (const f of filas) for (const k of Object.keys(f)) if (!vistas.has(k)) { vistas.add(k); cols.push(k); }
+    return cols;
+  }
+
+  /** Reúne todos los datos en tablas (filas como objetos), para Excel y CSV. */
+  function prepararTablas() {
+    const regs = [...estado.resultados.values()];
+    const fGuias = regs.map(filaGuia);
+    const fBienes = regs.flatMap(filasBienes);
+    const colsErr = ['Guía', 'Clave', 'URL', 'Estado HTTP', 'Mensaje', 'Número de intento', 'Fecha y hora', 'Acción tomada'];
+    const fErr = estado.errores.map((e) => ({
+      'Guía': e.guia, 'Clave': e.clave, 'URL': e.url, 'Estado HTTP': e.estadoHttp, 'Mensaje': e.mensaje,
+      'Número de intento': e.intento, 'Fecha y hora': e.fechaHora, 'Acción tomada': e.accion
+    }));
+    const colsBusq = ['RUC', 'Buscado como', 'Desde', 'Hasta', 'Resultado', 'Guías recibidas', 'Total SUNAT', 'HTTP', 'Mensaje de SUNAT'];
+    const fBusq = estado.busquedas.map((b) => ({
+      'RUC': b.ruc, 'Buscado como': ROLES[b.rol], 'Desde': dmy(b.desde), 'Hasta': dmy(b.hasta),
+      'Resultado': TEXTO_TIPO_BUSQUEDA[b.tipo] || b.tipo, 'Guías recibidas': b.recibidos, 'Total SUNAT': b.total,
+      'HTTP': b.estadoHttp, 'Mensaje de SUNAT': b.mensaje
+    }));
+    const colsCtl = ['Tipo', 'Guía', 'Campo', 'Valor listado', 'Valor detalle', 'Detalle'];
+    const fCtl = estado.control.map((c) => ({
+      'Tipo': c.tipo, 'Guía': c.guia, 'Campo': c.campo, 'Valor listado': c.valorListado, 'Valor detalle': c.valorDetalle, 'Detalle': c.detalle
+    }));
+    const colecciones = new Map();
+    for (const r of regs) if (r.ok && r.detalle) recolectarColecciones(r, colecciones);
+    return {
+      guias: { columnas: unirColumnas(COLUMNAS_GUIAS, fGuias), filas: fGuias },
+      bienes: { columnas: unirColumnas(COLUMNAS_BIENES, fBienes), filas: fBienes },
+      errores: { columnas: colsErr, filas: fErr },
+      busquedas: { columnas: colsBusq, filas: fBusq },
+      control: { columnas: colsCtl, filas: fCtl },
+      colecciones: [...colecciones].map(([nombre, filas]) => ({ nombre, columnas: unirColumnas(COLUMNAS_COLECCION, filas), filas })),
+      resumen: estado.resumen || calcularResumen(),
+      porRuc: resumenPorRuc()
+    };
+  }
+
+  function sufijoArchivos() {
+    const cfg = estado.config;
+    const marca = marcaTiempo();
+    if (!cfg) return `sin_rango_${marca}`;
+    const quien = cfg.rucs.length === 1 ? cfg.rucs[0] : `${cfg.rucs.length}RUC`;
+    const desde = cfg.periodos[0].desde, hasta = cfg.periodos[cfg.periodos.length - 1].hasta;
+    return `${quien}_${desde}_a_${hasta}_${marca}`;
+  }
+
+  // ---------- Excel (.xlsx) sin librerías: ZIP sin compresión + hojas XML ----------
+  const TABLA_CRC = (() => {
+    const t = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+      t[n] = c >>> 0;
+    }
+    return t;
+  })();
+  function crc32(bytes) {
+    let c = 0xFFFFFFFF;
+    for (let i = 0; i < bytes.length; i++) c = TABLA_CRC[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+    return (c ^ 0xFFFFFFFF) >>> 0;
+  }
+
+  /** Arma un archivo ZIP (método "store", sin compresión). */
+  function crearZip(archivos, tipoMime) {
+    const enc = new TextEncoder();
+    const ahora = new Date();
+    const horaDos = (ahora.getHours() << 11) | (ahora.getMinutes() << 5) | Math.floor(ahora.getSeconds() / 2);
+    const fechaDos = ((ahora.getFullYear() - 1980) << 9) | ((ahora.getMonth() + 1) << 5) | ahora.getDate();
+    const partes = [], central = [];
+    let desplazamiento = 0;
+    for (const a of archivos) {
+      const nombre = enc.encode(a.nombre);
+      const datos = a.datos;
+      const crc = crc32(datos);
+      const local = new DataView(new ArrayBuffer(30));
+      local.setUint32(0, 0x04034b50, true);
+      local.setUint16(4, 20, true);
+      local.setUint16(6, 0x0800, true);
+      local.setUint16(8, 0, true);
+      local.setUint16(10, horaDos, true);
+      local.setUint16(12, fechaDos, true);
+      local.setUint32(14, crc, true);
+      local.setUint32(18, datos.length, true);
+      local.setUint32(22, datos.length, true);
+      local.setUint16(26, nombre.length, true);
+      local.setUint16(28, 0, true);
+      partes.push(new Uint8Array(local.buffer), nombre, datos);
+      const cen = new DataView(new ArrayBuffer(46));
+      cen.setUint32(0, 0x02014b50, true);
+      cen.setUint16(4, 20, true);
+      cen.setUint16(6, 20, true);
+      cen.setUint16(8, 0x0800, true);
+      cen.setUint16(10, 0, true);
+      cen.setUint16(12, horaDos, true);
+      cen.setUint16(14, fechaDos, true);
+      cen.setUint32(16, crc, true);
+      cen.setUint32(20, datos.length, true);
+      cen.setUint32(24, datos.length, true);
+      cen.setUint16(28, nombre.length, true);
+      cen.setUint16(30, 0, true);
+      cen.setUint16(32, 0, true);
+      cen.setUint16(34, 0, true);
+      cen.setUint16(36, 0, true);
+      cen.setUint32(38, 0, true);
+      cen.setUint32(42, desplazamiento, true);
+      central.push(new Uint8Array(cen.buffer), nombre);
+      desplazamiento += 30 + nombre.length + datos.length;
+    }
+    const tamCentral = central.reduce((s, p) => s + p.length, 0);
+    const fin = new DataView(new ArrayBuffer(22));
+    fin.setUint32(0, 0x06054b50, true);
+    fin.setUint16(4, 0, true);
+    fin.setUint16(6, 0, true);
+    fin.setUint16(8, archivos.length, true);
+    fin.setUint16(10, archivos.length, true);
+    fin.setUint32(12, tamCentral, true);
+    fin.setUint32(16, desplazamiento, true);
+    fin.setUint16(20, 0, true);
+    return new Blob([...partes, ...central, new Uint8Array(fin.buffer)], { type: tipoMime });
+  }
+
+  const XML_DECL = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
+  const NS_MAIN = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
+  const NS_REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+  const NS_PKG = 'http://schemas.openxmlformats.org/package/2006/relationships';
+  const MIME_XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+  function escaparXml(s) {
+    return String(s).replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '').replace(RE_NO_XML, '')
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+  function letraColumna(i) {
+    let n = i + 1, s = '';
+    while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); }
+    return s;
+  }
+
+  /** Celda: los números quedan como números; todo lo demás como texto (conserva ceros a la izquierda). */
+  function celdaXml(v, ref, estilo) {
+    const s = estilo ? ` s="${estilo}"` : '';
+    if (v === null || v === undefined || v === '') return estilo ? `<c r="${ref}"${s}/>` : '';
+    if (typeof v === 'number') return Number.isFinite(v) ? `<c r="${ref}"${s}><v>${v}</v></c>` : '';
+    if (typeof v === 'boolean') return `<c r="${ref}"${s} t="b"><v>${v ? 1 : 0}</v></c>`;
+    let t = sinSaltos(typeof v === 'object' ? texto(v) : String(v));
+    if (t.length > 32767) t = t.slice(0, 32767);
+    return `<c r="${ref}"${s} t="inlineStr"><is><t xml:space="preserve">${escaparXml(t)}</t></is></c>`;
+  }
+
+  function numColumnas(hoja) {
+    let n = hoja.columnas.length;
+    for (const f of hoja.filas) if (f.length > n) n = f.length;
+    return Math.max(1, n);
+  }
+
+  function hojaXml(hoja) {
+    const todas = [hoja.columnas, ...hoja.filas];
+    const nCols = numColumnas(hoja);
+    const letras = [];
+    for (let c = 0; c < nCols; c++) letras.push(letraColumna(c));
+    const anchos = [];
+    for (let c = 0; c < nCols; c++) {
+      let max = 0;
+      for (let r = 0; r < Math.min(todas.length, 400); r++) {
+        const v = todas[r][c];
+        const l = v === null || v === undefined ? 0 : String(v).length;
+        if (l > max) max = l;
+      }
+      anchos.push(Math.max(8, Math.min(60, max + 2)));
+    }
+    const partes = [XML_DECL, `<worksheet xmlns="${NS_MAIN}">`];
+    partes.push(hoja.congelar === false
+      ? '<sheetViews><sheetView workbookViewId="0"/></sheetViews>'
+      : '<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>');
+    partes.push('<cols>' + anchos.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join('') + '</cols>');
+    partes.push('<sheetData>');
+    for (let r = 0; r < todas.length; r++) {
+      const fila = todas[r];
+      const estilo = r === 0 || (hoja.negritas && hoja.negritas.has(r)) ? 1 : 0;
+      let celdas = '';
+      for (let c = 0; c < fila.length; c++) celdas += celdaXml(fila[c], letras[c] + (r + 1), estilo);
+      partes.push(`<row r="${r + 1}">${celdas}</row>`);
+    }
+    partes.push('</sheetData>');
+    if (hoja.filtro !== false && hoja.filas.length) partes.push(`<autoFilter ref="A1:${letras[nCols - 1]}${todas.length}"/>`);
+    partes.push('</worksheet>');
+    return partes.join('');
+  }
+
+  function nombreHojaUnico(nombre, usados) {
+    const base = String(nombre).replace(/[[\]:*?/\\]/g, ' ').trim().slice(0, 31) || 'Hoja';
+    let n = base, i = 2;
+    while (usados.has(n.toLowerCase())) { const suf = ` ${i++}`; n = base.slice(0, 31 - suf.length) + suf; }
+    usados.add(n.toLowerCase());
+    return n;
+  }
+
+  /** Arma el libro .xlsx con varias hojas. */
+  function construirXlsx(hojas) {
+    const enc = new TextEncoder();
+    const usados = new Set();
+    for (const h of hojas) h.nombreFinal = nombreHojaUnico(h.nombre, usados);
+    const tipos = XML_DECL + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+      '<Default Extension="xml" ContentType="application/xml"/>' +
+      '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+      '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' +
+      hojas.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('') +
+      '</Types>';
+    const rels = `${XML_DECL}<Relationships xmlns="${NS_PKG}"><Relationship Id="rId1" Type="${NS_REL}/officeDocument" Target="xl/workbook.xml"/></Relationships>`;
+    const definidos = hojas.map((h, i) => {
+      if (h.filtro === false || !h.filas.length) return '';
+      const nombre = h.nombreFinal.replace(/'/g, "''");
+      return `<definedName name="_xlnm._FilterDatabase" localSheetId="${i}" hidden="1">${escaparXml(`'${nombre}'!$A$1:$${letraColumna(numColumnas(h) - 1)}$${h.filas.length + 1}`)}</definedName>`;
+    }).join('');
+    const libro = `${XML_DECL}<workbook xmlns="${NS_MAIN}" xmlns:r="${NS_REL}"><sheets>` +
+      hojas.map((h, i) => `<sheet name="${escaparXml(h.nombreFinal)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('') +
+      `</sheets>${definidos ? `<definedNames>${definidos}</definedNames>` : ''}</workbook>`;
+    const relsLibro = `${XML_DECL}<Relationships xmlns="${NS_PKG}">` +
+      hojas.map((_, i) => `<Relationship Id="rId${i + 1}" Type="${NS_REL}/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('') +
+      `<Relationship Id="rId${hojas.length + 1}" Type="${NS_REL}/styles" Target="styles.xml"/></Relationships>`;
+    const estilos = `${XML_DECL}<styleSheet xmlns="${NS_MAIN}">` +
+      '<fonts count="2"><font><sz val="11"/><name val="Calibri"/><family val="2"/></font><font><b/><sz val="11"/><name val="Calibri"/><family val="2"/></font></fonts>' +
+      '<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>' +
+      '<fill><patternFill patternType="solid"><fgColor rgb="FFDCE6F1"/><bgColor indexed="64"/></patternFill></fill></fills>' +
+      '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>' +
+      '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
+      '<cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>' +
+      '<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/></cellXfs>' +
+      '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>';
+    const archivos = [
+      { nombre: '[Content_Types].xml', datos: enc.encode(tipos) },
+      { nombre: '_rels/.rels', datos: enc.encode(rels) },
+      { nombre: 'xl/workbook.xml', datos: enc.encode(libro) },
+      { nombre: 'xl/_rels/workbook.xml.rels', datos: enc.encode(relsLibro) },
+      { nombre: 'xl/styles.xml', datos: enc.encode(estilos) },
+      ...hojas.map((h, i) => ({ nombre: `xl/worksheets/sheet${i + 1}.xml`, datos: enc.encode(hojaXml(h)) }))
+    ];
+    return crearZip(archivos, MIME_XLSX);
+  }
+
+  // Columnas que en Excel conviene tener como número (para sumar u ordenar)
+  const COLUMNAS_NUMERICAS = new Set(['Número', 'N° orden', 'Cantidad', 'Peso bruto', 'Bultos/Pallets', 'Cantidad bienes', 'Intentos']);
+  const RE_NUMERO_SIMPLE = /^-?(0|[1-9]\d{0,14})(\.\d+)?$/;
+
+  function tablaAHoja(nombre, tabla, opciones = {}) {
+    const filas = tabla.filas.map((f) => tabla.columnas.map((c) => {
+      const v = f[c];
+      if (COLUMNAS_NUMERICAS.has(c) && typeof v === 'string' && RE_NUMERO_SIMPLE.test(v)) return Number(v);
+      return v;
+    }));
+    return { nombre, columnas: tabla.columnas, filas, ...opciones };
+  }
+
+  function hojaResumen(tablas) {
+    const filas = [
+      ['Generado', fechaHoraLocal()],
+      ['Versión del extractor', VERSION]
+    ];
+    for (const [k, v] of Object.entries(tablas.resumen)) filas.push([k.trim(), v]);
+    filas.push([]);
+    const negritas = new Set([filas.length + 1]); // índice dentro de [encabezado, ...filas]
+    filas.push(['RUC', 'Buscado como', 'Guías encontradas', 'Con detalle', 'Con error', 'Días no consultados', 'Observación']);
+    for (const r of tablas.porRuc) filas.push([r.ruc, r.rol, r.encontradas, r.ok, r.error, r.diasNoConsultados, r.observacion]);
+    return { nombre: 'Resumen', columnas: ['Concepto', 'Valor'], filas, negritas, congelar: false, filtro: false };
+  }
+
+  function construirExcel(tablas) {
+    const hojas = [hojaResumen(tablas), tablaAHoja('Guías', tablas.guias), tablaAHoja('Bienes', tablas.bienes)];
+    for (const col of tablas.colecciones) {
+      const ruta = (col.filas[0] && col.filas[0]['Colección']) || col.nombre;
+      const nombre = HOJA_POR_ARCHIVO[col.nombre] || String(ruta).replace(/\[\]/g, '').split('.').slice(-2).join(' ');
+      hojas.push(tablaAHoja(nombre, col));
+    }
+    hojas.push(tablaAHoja('Búsquedas', tablas.busquedas));
+    if (tablas.errores.filas.length) hojas.push(tablaAHoja('Errores', tablas.errores));
+    hojas.push(tablaAHoja('Control', tablas.control));
+    return construirXlsx(hojas);
+  }
+
+  // ---------- CSV ----------
+  /** Celda CSV: sin null/undefined, sin saltos de línea, comillas escapadas y protección anti-fórmulas. */
   function celdaCSV(v) {
     let s;
     if (v === null || v === undefined) s = '';
@@ -1430,88 +2086,51 @@
     else if (v instanceof Date) s = isNaN(v.getTime()) ? '' : v.toISOString();
     else if (typeof v === 'object') { try { s = JSON.stringify(v); } catch (_) { s = ''; } }
     else {
-      s = String(v).replace(/\r\n|\r|\n|\u2028|\u2029|\t/g, ' ');
+      s = sinSaltos(v);
       if (/^[=+\-@]/.test(s)) s = "'" + s; // evita fórmulas inyectadas en Excel
     }
-    s = s.replace(/\r\n|\r|\n|\u2028|\u2029|\t/g, ' ');
+    s = sinSaltos(s);
     return '"' + s.replace(/"/g, '""') + '"';
-  }
-
-  function unirColumnas(base, filas) {
-    const cols = [...base];
-    const vistas = new Set(cols);
-    for (const f of filas) for (const k of Object.keys(f)) if (!vistas.has(k)) { vistas.add(k); cols.push(k); }
-    return cols;
   }
 
   function generarCSV(columnas, filas) {
     const lineas = [columnas.map(celdaCSV).join(';')];
     for (const f of filas) lineas.push(columnas.map((c) => celdaCSV(f[c])).join(';'));
-    return '﻿' + lineas.join('\r\n') + '\r\n';
+    return BOM + lineas.join('\r\n') + '\r\n';
   }
 
-  /** Construye todos los archivos con los datos reales en memoria. */
-  function construirArchivos() {
-    const cfg = estado.config;
-    const marca = marcaTiempo();
-    const sufijo = cfg ? `${cfg.fechaInicio}_a_${cfg.fechaFin}_${marca}` : `sin_rango_${marca}`;
-    const regs = [...estado.resultados.values()];
-    const archivos = [];
+  /** Archivos CSV y JSON (opción "Más opciones > CSV y JSON"). */
+  function construirArchivosCsv(tablas, sufijo) {
     const csv = 'text/csv;charset=utf-8';
+    const archivos = [];
+    const agregar = (tipo, base, tabla) => archivos.push({
+      tipo, nombre: `${base}_${sufijo}.csv`, tipoMime: csv, filas: tabla.filas.length, contenido: generarCSV(tabla.columnas, tabla.filas)
+    });
+    agregar('guias', 'GRE_GUIAS', tablas.guias);
+    agregar('bienes', 'GRE_BIENES', tablas.bienes);
+    agregar('errores', 'GRE_ERRORES', tablas.errores);
+    agregar('busquedas', 'GRE_BUSQUEDAS', tablas.busquedas);
 
-    // A. Guías
-    const fGuias = regs.map(filaGuia);
-    archivos.push({ tipo: 'guias', nombre: `GRE_GUIAS_${sufijo}.csv`, tipoMime: csv, filas: fGuias.length,
-      contenido: generarCSV(unirColumnas(COLUMNAS_GUIAS, fGuias), fGuias) });
-
-    // B. Bienes
-    const fBienes = regs.flatMap(filasBienes);
-    archivos.push({ tipo: 'bienes', nombre: `GRE_BIENES_${sufijo}.csv`, tipoMime: csv, filas: fBienes.length,
-      contenido: generarCSV(unirColumnas(COLUMNAS_BIENES, fBienes), fBienes) });
-
-    // C. Errores
-    const colsErr = ['Guía', 'Clave', 'URL', 'Estado HTTP', 'Mensaje', 'Número de intento', 'Fecha y hora', 'Acción tomada'];
-    const fErr = estado.errores.map((e) => ({
-      'Guía': e.guia, 'Clave': e.clave, 'URL': e.url, 'Estado HTTP': e.estadoHttp, 'Mensaje': e.mensaje,
-      'Número de intento': e.intento, 'Fecha y hora': e.fechaHora, 'Acción tomada': e.accion
-    }));
-    archivos.push({ tipo: 'errores', nombre: `GRE_ERRORES_${sufijo}.csv`, tipoMime: csv, filas: fErr.length, contenido: generarCSV(colsErr, fErr) });
-
-    // D. JSON completo (solo detalles correctos, estructura original intacta, sin token)
-    const detalles = regs.filter((r) => r.ok && r.detalle).map((r) => ({
+    // JSON completo (solo detalles correctos, estructura original intacta, sin token)
+    const detalles = [...estado.resultados.values()].filter((r) => r.ok && r.detalle).map((r) => ({
       clave: r.clave, consultadoEn: r.consultadoEn, origen: r.origen, detalle: r.detalle
     }));
     const json = {
       formato: 'GRE_EXTRACTOR_JSON', version: VERSION, generadoEn: fechaHoraLocal(),
-      estadoFinal: estado.motivoFin, parametros: parametrosExportables(cfg),
+      estadoFinal: estado.motivoFin, parametros: parametrosExportables(estado.config),
       totales: { detalles: detalles.length, errores: estado.errores.length }, detalles
     };
-    archivos.push({ tipo: 'json', nombre: `GRE_JSON_COMPLETO_${sufijo}.json`, tipoMime: 'application/json;charset=utf-8',
-      filas: detalles.length, contenido: JSON.stringify(json, null, 2) });
+    archivos.push({ tipo: 'json', nombre: `GRE_JSON_COMPLETO_${sufijo}.json`, tipoMime: 'application/json;charset=utf-8', filas: detalles.length, contenido: JSON.stringify(json, null, 2) });
 
-    // E. Control de calidad + resumen
-    const colsCtl = ['Tipo', 'Guía', 'Campo', 'Valor listado', 'Valor detalle', 'Detalle'];
-    const fCtl = [];
-    for (const [k, v] of Object.entries(estado.resumen || calcularResumen())) {
-      fCtl.push({ 'Tipo': 'RESUMEN', 'Guía': '', 'Campo': k.trim(), 'Valor listado': texto(v), 'Valor detalle': '', 'Detalle': '' });
-    }
-    for (const c of estado.control) {
-      fCtl.push({ 'Tipo': c.tipo, 'Guía': c.guia, 'Campo': c.campo, 'Valor listado': c.valorListado, 'Valor detalle': c.valorDetalle, 'Detalle': c.detalle });
-    }
-    archivos.push({ tipo: 'control', nombre: `GRE_CONTROL_${sufijo}.csv`, tipoMime: csv, filas: fCtl.length, contenido: generarCSV(colsCtl, fCtl) });
-
-    // F. Archivos adicionales por arreglo
-    const colecciones = new Map();
-    for (const r of regs) if (r.ok && r.detalle) recolectarColecciones(r, colecciones);
-    for (const [nombre, filas] of colecciones) {
-      archivos.push({ tipo: 'adicionales', nombre: `${nombre}_${sufijo}.csv`, tipoMime: csv, filas: filas.length,
-        contenido: generarCSV(unirColumnas(COLUMNAS_COLECCION, filas), filas) });
-    }
+    // Control de calidad + resumen
+    const filasControl = Object.entries(tablas.resumen).map(([k, v]) => ({ 'Tipo': 'RESUMEN', 'Guía': '', 'Campo': k.trim(), 'Valor listado': texto(v), 'Valor detalle': '', 'Detalle': '' }));
+    agregar('control', 'GRE_CONTROL', { columnas: tablas.control.columnas, filas: [...filasControl, ...tablas.control.filas] });
+    for (const col of tablas.colecciones) agregar('adicionales', col.nombre, col);
     return archivos;
   }
 
-  function descargarArchivo(nombre, contenido, tipoMime) {
-    const blob = new Blob([contenido], { type: tipoMime });
+  function descargarBlob(nombre, contenido, tipoMime) {
+    const blob = contenido instanceof Blob ? contenido : new Blob([contenido], { type: tipoMime });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url; a.download = nombre; a.style.display = 'none';
@@ -1521,26 +2140,39 @@
     setTimeout(() => URL.revokeObjectURL(url), 60000);
   }
 
-  /** tipos: 'todo' | 'guias' | 'bienes' | 'errores' | 'json' | 'control' | 'adicionales' */
-  async function descargar(tipo = 'todo') {
-    if (!estado.resultados.size && !estado.errores.length) { log('Todavía no hay datos para descargar.', 'warn'); return []; }
-    let archivos;
-    try { archivos = construirArchivos(); } catch (e) { log(`No se pudieron generar los archivos: ${e.message}`, 'error'); console.error(e); return []; }
+  /** tipos: 'excel' (predeterminado) | 'todo' (CSV y JSON) | 'guias' | 'bienes' | 'errores' | 'busquedas' | 'json' | 'control' | 'adicionales' */
+  async function descargar(tipo = 'excel') {
+    if (!estado.resultados.size && !estado.errores.length && !estado.busquedas.length) { log('Todavía no hay datos para descargar.', 'warn'); return []; }
+    let tablas;
+    try { tablas = prepararTablas(); } catch (e) { log(`No se pudieron preparar los datos: ${e.message}`, 'error'); console.error(e); return []; }
+    const sufijo = sufijoArchivos();
+    if (tipo === 'excel') {
+      try {
+        const nombre = `GRE_${sufijo}.xlsx`;
+        descargarBlob(nombre, construirExcel(tablas));
+        log(`Excel descargado: ${nombre}`, 'ok');
+        return [nombre];
+      } catch (e) {
+        log(`No se pudo generar el Excel: ${e.message}`, 'error');
+        console.error(e);
+        return [];
+      }
+    }
+    const archivos = construirArchivosCsv(tablas, sufijo);
     const elegidos = tipo === 'todo' ? archivos : archivos.filter((a) => a.tipo === tipo);
     if (!elegidos.length) { log(`No hay archivos del tipo "${tipo}".`, 'warn'); return []; }
     for (const a of elegidos) {
-      try { descargarArchivo(a.nombre, a.contenido, a.tipoMime); log(`Descargado: ${a.nombre} (${a.filas} fila(s))`, 'ok'); }
+      try { descargarBlob(a.nombre, a.contenido, a.tipoMime); log(`Descargado: ${a.nombre} (${a.filas} fila(s))`, 'ok'); }
       catch (e) { log(`Descarga bloqueada de ${a.nombre}: ${e.message}`, 'error'); }
       await dormir(450); // pausa para que el navegador no bloquee descargas múltiples
     }
     return elegidos.map((a) => a.nombre);
   }
-  const descargarTodo = () => descargar('todo');
 
-  /** Devuelve el contenido de los archivos (alternativa si las descargas están bloqueadas). */
+  /** Contenido de los CSV y del JSON (alternativa si las descargas están bloqueadas). */
   function exportar() {
     const r = {};
-    for (const a of construirArchivos()) r[a.nombre] = a.contenido;
+    for (const a of construirArchivosCsv(prepararTablas(), sufijoArchivos())) r[a.nombre] = a.contenido;
     return r;
   }
 
@@ -1548,7 +2180,7 @@
    * 15. Reanudación desde GRE_JSON_COMPLETO.json
    * ------------------------------------------------------------- */
   async function cargarJSONPrevio(fuente) {
-    if (estado.ejecutando) { log('No se puede cargar un JSON mientras hay una extracción en curso.', 'warn'); return null; }
+    if (estado.ejecutando) { log('No se puede cargar un JSON mientras hay una búsqueda en curso.', 'warn'); return null; }
     try {
       let obj;
       if (typeof Blob !== 'undefined' && fuente instanceof Blob) obj = JSON.parse(await fuente.text());
@@ -1567,11 +2199,11 @@
         estado.previos.set(clave, { detalle: det, consultadoEn: esObjetoPlano(e) ? texto(e.consultadoEn) : '' });
         cargadas++;
       }
-      log(`JSON previo cargado: ${cargadas} guía(s) válidas${invalidas ? `, ${invalidas} entrada(s) ignorada(s)` : ''}. Total en memoria: ${estado.previos.size}.`, 'ok');
+      log(`JSON anterior cargado: ${cargadas} guía(s)${invalidas ? `, ${invalidas} entrada(s) ignorada(s)` : ''}. No se volverán a consultar.`, 'ok');
       actualizarUI();
       return { cargadas, invalidas, total: estado.previos.size };
     } catch (e) {
-      log(`No se pudo leer el JSON previo: ${e.message}`, 'error');
+      log(`No se pudo leer el JSON anterior: ${e.message}`, 'error');
       return null;
     }
   }
@@ -1590,41 +2222,44 @@
   }
 
   function limpiarPrevios() {
-    if (estado.ejecutando) { log('No se puede limpiar durante una extracción.', 'warn'); return; }
-    estado.previos.clear(); log('Se descartó el JSON previo cargado.', 'ok'); actualizarUI();
+    if (estado.ejecutando) { log('No se puede limpiar durante una búsqueda.', 'warn'); return; }
+    estado.previos.clear();
+    log('Se quitó el JSON anterior cargado.', 'ok');
+    actualizarUI();
   }
 
-  /** Olvida todo lo obtenido (resultados, errores y JSON previo) para que la próxima ejecución consulte todo de nuevo. */
+  /** Olvida todo lo obtenido para que la próxima búsqueda consulte todo de nuevo. */
   function olvidarResultados() {
-    if (estado.ejecutando) { log('No se puede limpiar durante una extracción.', 'warn'); return; }
+    if (estado.ejecutando) { log('No se puede limpiar durante una búsqueda.', 'warn'); return; }
     estado.resultados = new Map();
     estado.previos.clear();
     estado.memoria = new Map();
+    estado.origenes = new Map();
+    estado.tareas = []; estado.busquedas = [];
     estado.errores = []; estado.control = []; estado.controlDetalle = [];
     estado.unicos = []; estado.duplicados = [];
-    estado.listado = listadoVacio(); estado.progreso = progresoVacio();
-    estado.resumen = null; estado.motivoFin = ''; estado.tiempos = { inicio: 0, inicioDetalle: 0, fin: 0 };
-    log('Se olvidaron los resultados anteriores. La próxima ejecución consultará todas las guías.', 'ok');
+    estado.progreso = progresoVacio();
+    estado.resumen = null; estado.motivoFin = '';
+    estado.tiempos = { inicio: 0, inicioDetalle: 0, fin: 0 };
+    log('Se olvidaron los resultados anteriores. La próxima búsqueda consultará todo de nuevo.', 'ok');
     actualizarUI();
   }
 
   /* ---------------------------------------------------------------
-   * 16. Captura del token y de los filtros desde la propia aplicación SUNAT
-   *     Escucha temporalmente (máx. 5 min) las solicitudes que la pantalla de
-   *     SUNAT hace a la API de GRE en esta misma pestaña, y toma su token y,
-   *     si es una búsqueda, sus filtros. No envía nada a ningún lado y al
-   *     terminar deja la página como estaba.
+   * 16. Conexión con SUNAT: escucha temporal de la pantalla de SUNAT
+   *     Toma el token (y las demás cabeceras) de las consultas que la propia
+   *     pantalla hace a la API de GRE en esta pestaña. No envía nada a ningún
+   *     lado y al terminar deja la página como estaba.
+   *     - modo "manual": botón "Conectar" (máx. 5 min); si es una búsqueda,
+   *       copia además sus datos al panel.
+   *     - modo "fondo": durante una búsqueda del extractor, para renovar la
+   *       conexión sola cuando se abre una guía con "Ver".
    * ------------------------------------------------------------- */
   const HOST_API = 'api-intranet.sunat.peru';
   const RUTA_API_GRE = '/v1/contribuyente/gre/';
   const RUTA_LISTADO = '/v1/contribuyente/gre/comprobantes';
-  const CAPTURA_MAX_MS = 5 * 60 * 1000;
   const RE_RUTA_DETALLE = /^\/v1\/contribuyente\/gre\/comprobantes\/[^/]+$/;
-  const PARAMETROS_A_CAMPOS = {
-    numRucEmisor: 'rucEmisor', numRucReceptor: 'rucReceptor', codCpe: 'codCpe', numSerie: 'numSerie',
-    numCpe: 'numCpe', fecEmisionIni: 'fechaInicio', fecEmisionFin: 'fechaFin', codEstado: 'codEstado',
-    codSubEstado: 'codSubEstado', rangoHoras: 'rangoHoras', tipBusqueda: 'tipBusqueda', per_page: 'perPage'
-  };
+  const CAPTURA_MAX_MS = 5 * 60 * 1000;
   // Cabeceras que no se copian: el token va aparte y las demás las pone el propio navegador.
   const CABECERAS_NO_COPIABLES = /^(authorization|cookie2?|content-length|host|origin|referer|connection|keep-alive|te|trailer|transfer-encoding|upgrade|via|expect|date|dnt|accept-charset|accept-encoding|set-cookie|proxy-.*|sec-.*|access-control-request-.*)$/i;
 
@@ -1640,8 +2275,6 @@
     try { new Headers(fuente).forEach((v, k) => { r[k.toLowerCase()] = v; }); } catch (_) { /* formato no estándar */ }
     return r;
   }
-
-  /** Cabeceras de una llamada fetch(input, init). */
   function cabecerasDeFetch(input, init) {
     const r = {};
     if (typeof Request !== 'undefined' && input instanceof Request) Object.assign(r, cabecerasComoObjeto(input.headers));
@@ -1649,15 +2282,36 @@
     return r;
   }
 
-  function textoVence(token) {
-    const info = analizarToken(token);
-    return info.exp ? ` (vence a las ${horaDe(info.exp)})` : '';
+  /** Copia al panel los datos de una búsqueda hecha en SUNAT (RUC, rol, fechas y opciones). */
+  function aplicarBusquedaCapturada(u) {
+    urlsCapturadas.listado = u.href; // solo la dirección con los filtros (sin token)
+    const g = (n) => (u.searchParams.has(n) ? u.searchParams.get(n).trim() : '');
+    const re = g('numRucEmisor'), rr = g('numRucReceptor');
+    const opciones = {
+      codCpe: g('codCpe'), tipBusqueda: g('tipBusqueda'), numSerie: g('numSerie'), numCpe: g('numCpe'),
+      codEstado: g('codEstado'), codSubEstado: g('codSubEstado'), rangoHoras: g('rangoHoras')
+    };
+    const desde = normalizarFechaCapturada(g('fecEmisionIni')), hasta = normalizarFechaCapturada(g('fecEmisionFin'));
+    const ruc = rr || re;
+    const rol = rr && !re ? 'receptor' : (re && !rr ? 'emisor' : '');
+    filtrosCapturados = { ...opciones, ruc, rol, desde, hasta };
+    if (ui) {
+      if (ruc && !ui.txtRucs.value.trim()) { ui.txtRucs.value = ruc; ui.txtRucs.dispatchEvent(new Event('input')); }
+      if (rol && ui.radios[rol]) ui.radios[rol].checked = true;
+      if (!periodosEditados && parsearFecha(desde) && parsearFecha(hasta)) {
+        ui.periodos.splice(0, ui.periodos.length, { desde, hasta });
+        ui.pintarPeriodos();
+      }
+      for (const [k, v] of Object.entries(opciones)) if (v && ui.inputs[k]) ui.inputs[k].value = v;
+    }
+    const partes = [
+      ruc && `RUC ${ruc}${rol ? ` (${TEXTO_ROL[rol]})` : ''}`,
+      parsearFecha(desde) && parsearFecha(hasta) && `del ${dmy(desde)} al ${dmy(hasta)}`
+    ].filter(Boolean);
+    if (partes.length) log(`Se copiaron los datos de su búsqueda en SUNAT: ${partes.join(', ')}.`, 'ok');
   }
 
-  /**
-   * Revisa una solicitud de la aplicación: si va a la API de GRE, toma el token y las demás
-   * cabeceras; si es una búsqueda (listado), copia además sus filtros y la guarda como plantilla.
-   */
+  /** Revisa una consulta de la pantalla de SUNAT: si va a la API de GRE, toma su conexión. */
   function procesarSolicitudApp(metodo, url, cabeceras) {
     if (!captura.activa || !url) return;
     let u;
@@ -1668,45 +2322,32 @@
 
     const extra = {};
     for (const [k, v] of Object.entries(cabeceras || {})) if (!CABECERAS_NO_COPIABLES.test(k)) extra[k] = v;
+    tokenCapturado = m[1];
     cabecerasCapturadas = extra;
-    if (m[1] !== tokenCapturado) {
-      tokenCapturado = m[1];
-      log(`Token capturado de la aplicación${textoVence(tokenCapturado)}.`, 'ok');
-    }
-
     const ruta = u.pathname.replace(/\/+$/, '');
     const esGet = String(metodo || 'GET').toUpperCase() === 'GET';
     if (esGet && RE_RUTA_DETALLE.test(ruta)) urlsCapturadas.detalle = u.href;
 
-    if (esGet && ruta === RUTA_LISTADO) {
-      urlsCapturadas.listado = u.href; // solo la dirección con los filtros (sin token)
-      const filtros = {};
-      for (const [param, campo] of Object.entries(PARAMETROS_A_CAMPOS)) {
-        if (u.searchParams.has(param)) filtros[campo] = normalizarFechaCapturada(u.searchParams.get(param).trim());
-      }
-      filtrosCapturados = filtros;
-      if (ui) for (const [campo, v] of Object.entries(filtros)) if (ui.inputs[campo]) ui.inputs[campo].value = v;
-      const descripcion = [
-        `fechas ${filtros.fechaInicio || '?'} a ${filtros.fechaFin || '?'}`,
-        filtros.rucEmisor && `RUC emisor ${filtros.rucEmisor}`,
-        filtros.rucReceptor && `RUC receptor ${filtros.rucReceptor}`,
-        filtros.tipBusqueda && `tipo de búsqueda ${filtros.tipBusqueda}`
-      ].filter(Boolean).join(', ');
-      log(`Filtros copiados de su búsqueda: ${descripcion}. Puede cambiar las fechas y pulsar Iniciar.`, 'ok');
-      detenerCaptura('listo');
-    } else {
-      actualizarUI();
-    }
+    if (captura.modo === 'fondo') { actualizarUI(); return; } // durante una búsqueda: solo la conexión
+    log(`Conectado con SUNAT ✓${textoVence(tokenCapturado)}.`, 'ok');
+    if (esGet && ruta === RUTA_LISTADO) aplicarBusquedaCapturada(u);
+    detenerCaptura('listo');
   }
 
-  /** Empieza a escuchar (temporalmente) las solicitudes de la aplicación SUNAT. */
-  function iniciarCaptura() {
-    if (estado.ejecutando) { log('No se puede capturar durante una extracción.', 'warn'); return; }
-    if (captura.activa) return;
+  /** Empieza a escuchar (temporalmente) las consultas de la pantalla de SUNAT. */
+  function iniciarCaptura(modo = 'manual') {
+    if (captura.activa) {
+      if (modo === 'fondo' && captura.modo !== 'fondo') {
+        captura.modo = 'fondo';
+        clearTimeout(captura.temporizador);
+        captura.temporizador = null;
+      }
+      return;
+    }
+    if (modo === 'manual' && estado.ejecutando) { log('Durante la búsqueda la conexión se renueva sola.', 'warn'); return; }
     const restauradores = [];
 
-    // Solicitudes XMLHttpRequest (las que usa normalmente la aplicación).
-    // Se anotan método, dirección y cabeceras, y se revisan al momento de enviarse.
+    // XMLHttpRequest (lo que usa normalmente la aplicación): se anotan método, dirección y cabeceras.
     const protoXHR = window.XMLHttpRequest && window.XMLHttpRequest.prototype;
     if (protoXHR) {
       const datos = new WeakMap(); // xhr -> { metodo, url, cabeceras }
@@ -1741,7 +2382,7 @@
       });
     }
 
-    // Solicitudes fetch (por si la aplicación las usa)
+    // fetch (por si la aplicación lo usa)
     const fetchOriginal = window.fetch;
     if (typeof fetchOriginal === 'function') {
       const fetchEnvuelto = function (input, init) {
@@ -1758,37 +2399,56 @@
     }
 
     captura.activa = true;
+    captura.modo = modo;
     captura.restaurar = () => restauradores.forEach((f) => { try { f(); } catch (_) { /* ignorar */ } });
-    captura.temporizador = setTimeout(() => detenerCaptura('tiempo'), CAPTURA_MAX_MS);
-    log('Captura activa (5 min). En la pantalla de SUNAT pulse "Buscar" con los filtros que desea (copia token y filtros) o abra una guía con "Ver" (solo token). Si el panel tapa la pantalla, minimícelo con "–".', 'ok');
+    if (modo === 'manual') {
+      captura.temporizador = setTimeout(() => detenerCaptura('tiempo'), CAPTURA_MAX_MS);
+      log('Conectando: en la pantalla de SUNAT abra cualquier guía con «Ver» (o pulse «Buscar»).', 'ok');
+    }
     actualizarUI();
   }
 
   /** Deja de escuchar y restaura la página. */
   function detenerCaptura(motivo) {
     if (!captura.activa) return;
+    const eraManual = captura.modo === 'manual';
     captura.activa = false;
+    captura.modo = '';
     clearTimeout(captura.temporizador);
     captura.temporizador = null;
     if (captura.restaurar) captura.restaurar();
     captura.restaurar = null;
-    if (motivo === 'usuario') log('Captura detenida.');
-    if (motivo === 'tiempo') {
-      if (tokenCapturado) log('Captura finalizada por tiempo; el token capturado sigue disponible.');
-      else log('No se detectó ninguna búsqueda en 5 minutos. Revise que la consola esté en "iframeApplication" y vuelva a intentarlo, o pegue el token manualmente.', 'warn');
-    }
+    if (motivo === 'usuario') log('Conexión cancelada.');
+    if (motivo === 'tiempo') log('No se detectó ninguna guía abierta en 5 minutos. Revise que la consola esté en "iframeApplication" y vuelva a pulsar "Conectar".', 'warn');
+    if (eraManual && ui && ui.compactar) ui.compactar(false);
     actualizarUI();
   }
 
-  function textoEstadoToken() {
-    const base = urlsCapturadas.listado ? ' Búsqueda de SUNAT copiada: se usará como base.' : '';
-    if (captura.activa) {
-      return tokenCapturado
-        ? `Token capturado${textoVence(tokenCapturado)}. Si quiere copiar también los filtros, pulse "Buscar" en SUNAT; si no, pulse Iniciar.`
-        : 'Esperando… En la pantalla de SUNAT pulse "Buscar" (copia token y filtros) o abra una guía con "Ver" (solo token).';
+  /** Botón "Conectar". */
+  function conectar() {
+    if (estado.ejecutando) { log('Durante la búsqueda la conexión se renueva sola.', 'warn'); return; }
+    iniciarCaptura('manual');
+    if (captura.activa && ui && ui.compactar) ui.compactar(true);
+  }
+
+  /** Texto y color del indicador de conexión. */
+  function estadoConexion() {
+    if (estado.ejecutando) {
+      if (estado.esperandoConexion) return { clase: 'alerta', texto: 'Abra cualquier guía con «Ver» en la pantalla de SUNAT' };
+      if (estado.tokenExp) {
+        const resta = estado.tokenExp - Date.now();
+        if (resta < 5 * 60000) return { clase: 'espera', texto: `Vence a las ${horaDe(estado.tokenExp)}: abra una guía con «Ver» para renovarla` };
+        return { clase: 'ok', texto: `Conectado · vence a las ${horaDe(estado.tokenExp)}` };
+      }
+      return { clase: 'ok', texto: 'Conectado' };
     }
-    if (tokenCapturado) return `Token capturado de la aplicación${textoVence(tokenCapturado)}.${base} Listo para Iniciar.`;
-    return `Sin token capturado.${base} Pulse "Capturar desde SUNAT", o pegue el token abajo (si no, se pedirá al iniciar).`;
+    if (captura.activa && captura.modo === 'manual') return { clase: 'espera', texto: 'Conectando… abra cualquier guía con «Ver» en SUNAT' };
+    if (tokenCapturado) {
+      const info = analizarToken(tokenCapturado);
+      if (info.exp && info.exp <= Date.now()) return { clase: 'no', texto: 'La conexión venció: pulse "Conectar"' };
+      return { clase: 'ok', texto: `Conectado${info.exp ? ` · vence a las ${horaDe(info.exp)}` : ''}` };
+    }
+    return { clase: 'no', texto: 'Sin conectar (se le pedirá al empezar)' };
   }
 
   /* ---------------------------------------------------------------
@@ -1811,71 +2471,150 @@
   const CSS = `
     :host{all:initial}
     *{box-sizing:border-box}
-    .p{position:fixed;top:10px;right:10px;width:420px;max-height:92vh;display:flex;flex-direction:column;background:#fff;color:#1d2433;
-      font:12px/1.35 "Segoe UI",system-ui,sans-serif;border:1px solid #c9d1dc;border-radius:8px;box-shadow:0 6px 24px rgba(0,0,0,.25);z-index:2147483647}
-    .hd{display:flex;align-items:center;gap:6px;padding:7px 10px;background:#12355b;color:#fff;border-radius:8px 8px 0 0;cursor:move;user-select:none}
-    .hd b{flex:1;font-size:13px}
-    .hd button{background:transparent;color:#fff;border:1px solid rgba(255,255,255,.4);border-radius:4px;width:24px;height:22px;cursor:pointer;padding:0}
-    .bd{overflow:auto;padding:8px 10px}
-    .g{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:5px 8px}
-    label{display:flex;flex-direction:column;min-width:0;font-size:11px;color:#4a5568}
-    input{font:12px "Segoe UI",system-ui,sans-serif;padding:3px 5px;border:1px solid #b8c2cf;border-radius:4px;color:#1d2433;background:#fff;min-width:0;width:100%}
-    .full{grid-column:1/-1}
-    .row{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}
-    button.b{font:12px "Segoe UI",system-ui,sans-serif;padding:4px 9px;border-radius:4px;border:1px solid #12355b;background:#12355b;color:#fff;cursor:pointer}
+    .p{position:fixed;top:10px;right:10px;width:440px;max-width:calc(100vw - 20px);max-height:94vh;display:flex;flex-direction:column;background:#fff;color:#1d2433;
+      font:13px/1.4 "Segoe UI",system-ui,sans-serif;border:1px solid #c9d1dc;border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.28);z-index:2147483647}
+    .hd{display:flex;align-items:center;gap:6px;padding:8px 12px;background:#12355b;color:#fff;border-radius:10px 10px 0 0;cursor:move;user-select:none}
+    .hd b{flex:1;font-size:14px}
+    .hd small{opacity:.7;font-weight:normal;margin-left:6px;font-size:11px}
+    .hd button{background:transparent;color:#fff;border:1px solid rgba(255,255,255,.45);border-radius:4px;width:26px;height:24px;cursor:pointer;padding:0;font-size:14px}
+    .franja{display:flex;align-items:center;gap:8px;padding:9px 12px;background:#fff4d6;color:#7a4f00;font-size:13px;border-radius:0 0 10px 10px}
+    .bd{overflow:auto;padding:10px 12px}
+    .sec{margin-bottom:12px}
+    .tit{display:flex;align-items:center;gap:8px;font-weight:600;color:#12355b;margin-bottom:6px}
+    .num{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:#12355b;color:#fff;font-size:12px}
+    .con{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+    .pill{padding:3px 10px;border-radius:12px;font-size:12px;background:#eef1f5;color:#4a5568}
+    .pill.ok{background:#e3f5ec;color:#16653f}
+    .pill.espera{background:#fff4d6;color:#8a5a00}
+    .pill.alerta{background:#ffe1e1;color:#9b1c1c;font-weight:600;animation:parpadeo 1.2s infinite}
+    @keyframes parpadeo{50%{opacity:.55}}
+    textarea,input{font:13px "Segoe UI",system-ui,sans-serif;padding:5px 7px;border:1px solid #b8c2cf;border-radius:5px;color:#1d2433;background:#fff;width:100%;min-width:0}
+    textarea{resize:vertical;min-height:68px}
+    .nota{font-size:11.5px;color:#6b7686;margin-top:4px}
+    .aviso{font-size:12px;color:#9b1c1c;margin-top:4px}
+    .bien{font-size:12px;color:#16653f;margin-top:4px}
+    .roles{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:3px;font-size:12.5px}
+    .roles label{display:flex;align-items:center;gap:4px;cursor:pointer}
+    .roles input,.chk input{width:auto}
+    .per{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) 32px;gap:6px;align-items:end;margin-bottom:6px}
+    .per label{display:flex;flex-direction:column;font-size:11px;color:#4a5568;min-width:0}
+    button.b{font:13px "Segoe UI",system-ui,sans-serif;padding:6px 11px;border-radius:5px;border:1px solid #12355b;background:#12355b;color:#fff;cursor:pointer}
     button.s{background:#fff;color:#12355b}
     button.r{background:#a12b2b;border-color:#a12b2b}
+    button.x{background:#fff;color:#a12b2b;border-color:#d7b4b4;padding:5px 0;width:32px}
+    button.grande{width:100%;padding:11px;font-size:15px;font-weight:600;background:#1f8a5b;border-color:#1f8a5b}
     button:disabled{opacity:.45;cursor:not-allowed}
-    .bar{height:10px;background:#e6ebf1;border-radius:5px;overflow:hidden;margin-top:8px}
-    .bar>div{height:100%;width:0;background:#1f8a5b;transition:width .2s}
-    .st{margin-top:5px;display:grid;grid-template-columns:1fr 1fr;gap:2px 8px;font-size:11.5px}
-    .st span b{color:#12355b}
-    .log{margin-top:7px;height:150px;overflow:auto;background:#0f1724;color:#d6dde8;font:11px Consolas,monospace;padding:5px;border-radius:4px}
+    .row{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px}
+    .bar{height:12px;background:#e6ebf1;border-radius:6px;overflow:hidden;margin-top:9px}
+    .bar>div{height:100%;width:0;background:#1f8a5b;transition:width .25s}
+    .linea{margin-top:6px;font-size:12.5px;min-height:18px}
+    .cont{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-top:6px;font-size:11.5px;text-align:center;color:#4a5568}
+    .cont div{background:#f4f6f9;border-radius:6px;padding:5px}
+    .cont b{display:block;font-size:16px;color:#12355b}
+    .log{margin-top:8px;height:120px;overflow:auto;background:#0f1724;color:#d6dde8;font:11.5px Consolas,monospace;padding:6px;border-radius:5px}
     .l-ok{color:#7ee2a8}.l-warn{color:#ffd479}.l-error{color:#ff8c8c}
-    .nota{font-size:10.5px;color:#6b7686;margin-top:4px}
-    h4{margin:9px 0 3px;font-size:12px;color:#12355b}
+    details{margin-top:10px;border-top:1px solid #e3e8ef;padding-top:7px}
+    summary{cursor:pointer;color:#12355b;font-weight:600}
+    .g{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:6px 8px;margin-top:7px}
+    .g label{display:flex;flex-direction:column;font-size:11px;color:#4a5568;min-width:0}
+    .full{grid-column:1/-1}
+    .chk{display:flex;align-items:center;gap:6px;font-size:12.5px;margin-top:8px}
+    h4{margin:10px 0 3px;font-size:12px;color:#12355b}
   `;
 
-  const CAMPOS_FORM = [
-    ['fechaInicio', 'Fecha inicial *', 'date'], ['fechaFin', 'Fecha final *', 'date'],
-    ['rucEmisor', 'RUC emisor', 'text'], ['rucReceptor', 'RUC receptor', 'text'],
+  const CAMPOS_AVANZADOS = [
     ['codCpe', 'Código CPE', 'text'], ['tipBusqueda', 'Tipo de búsqueda', 'text'],
     ['numSerie', 'Serie', 'text'], ['numCpe', 'Número', 'text'],
     ['codEstado', 'Código estado', 'text'], ['codSubEstado', 'Código subestado', 'text'],
-    ['rangoHoras', 'Rango de horas', 'text'], ['perPage', 'Registros por página', 'number'],
-    ['maxReintentos', 'Máx. reintentos', 'number'], ['timeoutMs', 'Tiempo máx. por solicitud (ms)', 'number'],
+    ['rangoHoras', 'Rango de horas', 'text'], ['maxDiasBloque', 'Días máximos por búsqueda', 'number'],
     ['pausaMinMs', 'Pausa mínima (ms)', 'number'], ['pausaMaxMs', 'Pausa máxima (ms)', 'number'],
-    ['maxDiasRango', 'Máx. días de rango (0 = sin límite)', 'number']
+    ['maxReintentos', 'Reintentos', 'number'], ['timeoutMs', 'Tiempo máx. por solicitud (ms)', 'number']
   ];
+  const ETIQUETAS_ROL = { receptor: 'Receptor (destinatario)', emisor: 'Emisor (remitente)', ambos: 'Ambos' };
 
   function crearPanel() {
     if (typeof document === 'undefined') return;
     cerrarPanel();
     const D = CONFIG_PREDETERMINADA;
-    const valoresIniciales = {
-      ...D, fechaInicio: hoyISO(), fechaFin: hoyISO(),
-      ...(estado.config ? parametrosExportables(estado.config) : (filtrosCapturados || {}))
-    };
-
+    const cfgPrev = estado.config;
     const host = h('div', { id: PANEL_ID });
     const root = host.attachShadow({ mode: 'open' });
     try { const hoja = new CSSStyleSheet(); hoja.replaceSync(CSS); root.adoptedStyleSheets = [hoja]; }
     catch (_) { root.append(h('style', { text: CSS })); }
 
+    // 1. Conexión
+    const pill = h('span', { class: 'pill' });
+    const btnConectar = h('button', {
+      class: 'b s', onclick: () => (captura.activa && captura.modo === 'manual' ? detenerCaptura('usuario') : conectar())
+    }, '🔗 Conectar');
+
+    // 2. RUC
+    const txtRucs = h('textarea', { rows: '4', placeholder: 'Escriba o pegue los RUC, uno por línea', spellcheck: 'false' });
+    txtRucs.value = cfgPrev ? cfgPrev.rucs.join('\n') : '';
+    const msgRucs = h('div', { class: 'nota' });
+    const revisarRucs = () => {
+      const { validos, invalidos } = extraerRucs(txtRucs.value);
+      if (!validos.length && !invalidos.length) { msgRucs.className = 'nota'; msgRucs.textContent = 'Puede pegar varios RUC a la vez.'; return; }
+      msgRucs.className = invalidos.length ? 'aviso' : 'bien';
+      msgRucs.textContent = `${validos.length} RUC válido(s)` + (invalidos.length ? ` · No válidos (revise los dígitos): ${invalidos.join(', ')}` : ' ✓');
+    };
+    txtRucs.addEventListener('input', revisarRucs);
+    const radios = {};
+    const grupoRoles = h('div', { class: 'roles' }, ...Object.keys(ETIQUETAS_ROL).map((v) => {
+      radios[v] = h('input', { type: 'radio', name: 'gre-rol', value: v });
+      return h('label', {}, radios[v], ETIQUETAS_ROL[v]);
+    }));
+    radios[(cfgPrev && cfgPrev.rol) || D.rol].checked = true;
+    const rolSeleccionado = () => Object.keys(radios).find((k) => radios[k].checked) || D.rol;
+
+    // 3. Periodos
+    const periodos = cfgPrev ? cfgPrev.periodos.map((p) => ({ desde: p.desde, hasta: p.hasta })) : [{ desde: primerDiaMes(), hasta: hoyISO() }];
+    const contPeriodos = h('div');
+    const pintarPeriodos = () => {
+      contPeriodos.textContent = '';
+      periodos.forEach((p, i) => {
+        const desde = h('input', { type: 'date', value: p.desde });
+        const hasta = h('input', { type: 'date', value: p.hasta });
+        const alCambiar = () => { p.desde = desde.value; p.hasta = hasta.value; periodosEditados = true; };
+        for (const ev of ['change', 'input']) { desde.addEventListener(ev, alCambiar); hasta.addEventListener(ev, alCambiar); }
+        const quitar = h('button', {
+          class: 'b x', title: 'Quitar periodo',
+          onclick: () => { if (periodos.length > 1) { periodos.splice(i, 1); periodosEditados = true; pintarPeriodos(); } }
+        }, '✕');
+        contPeriodos.append(h('div', { class: 'per' }, h('label', {}, 'Desde', desde), h('label', {}, 'Hasta', hasta), quitar));
+      });
+      actualizarUI();
+    };
+    const btnAgregar = h('button', {
+      class: 'b s', onclick: () => { periodos.push({ desde: '', hasta: '' }); periodosEditados = true; pintarPeriodos(); }
+    }, '+ Agregar periodo');
+
+    // Acción y avance
+    const btnIniciar = h('button', { class: 'b grande', onclick: () => alIniciar() }, '▶ Buscar y descargar Excel');
+    const btnPausa = h('button', { class: 'b s', onclick: () => (estado.pausado ? reanudar() : pausar()) }, '⏸ Pausar');
+    const btnDetener = h('button', { class: 'b r', onclick: () => cancelar() }, '■ Detener');
+    const btnExcel = h('button', { class: 'b', onclick: () => descargar('excel') }, '⬇ Descargar Excel');
+    const barra = h('div');
+    const linea = h('div', { class: 'linea' });
+    const cont = {};
+    const contador = (k, etiqueta) => { cont[k] = h('b', { text: '0' }); return h('div', {}, cont[k], etiqueta); };
+
+    // Más opciones
     const inputs = {};
-    const campos = CAMPOS_FORM.map(([nombre, etiqueta, tipo]) => {
-      inputs[nombre] = h('input', { type: tipo, value: texto(valoresIniciales[nombre]), autocomplete: 'off', spellcheck: 'false' });
+    const valores = { ...D, ...(cfgPrev || {}) };
+    const campos = CAMPOS_AVANZADOS.map(([nombre, etiqueta, tipo]) => {
+      inputs[nombre] = h('input', { type: tipo, value: texto(valores[nombre]), autocomplete: 'off', spellcheck: 'false' });
       return h('label', {}, etiqueta, inputs[nombre]);
     });
-    inputs.token = h('input', { type: 'password', autocomplete: 'off', placeholder: 'Déjelo vacío si usó "Capturar desde SUNAT"' });
-    const estadoToken = h('div', { class: 'nota' });
-
+    inputs.token = h('input', { type: 'password', autocomplete: 'off', placeholder: 'Solo si no usa "Conectar"' });
+    const chkDescargar = h('input', { type: 'checkbox', checked: valores.descargarAlTerminar !== false });
+    const fileInput = h('input', { type: 'file', accept: '.json,application/json', style: 'display:none' });
+    fileInput.addEventListener('change', async () => {
+      const f = fileInput.files && fileInput.files[0];
+      if (f) await cargarJSONPrevio(f);
+      fileInput.value = '';
+    });
     const btn = {
-      capturar: h('button', { class: 'b', onclick: () => (captura.activa ? detenerCaptura('usuario') : iniciarCaptura()) }, '🎯 Capturar desde SUNAT'),
-      iniciar: h('button', { class: 'b', onclick: () => alIniciar() }, '▶ Iniciar'),
-      pausar: h('button', { class: 'b s', onclick: () => pausar() }, '⏸ Pausar'),
-      reanudar: h('button', { class: 'b s', onclick: () => reanudar() }, '⏵ Reanudar'),
-      cancelar: h('button', { class: 'b r', onclick: () => cancelar() }, '■ Cancelar'),
       cargar: h('button', { class: 'b s', onclick: () => fileInput.click() }, '📂 Cargar JSON anterior'),
       limpiar: h('button', { class: 'b s', onclick: () => limpiarPrevios() }, 'Quitar JSON anterior'),
       olvidar: h('button', {
@@ -1884,65 +2623,80 @@
           if (!n || window.confirm(`Se olvidarán ${n} guía(s) ya obtenidas (descárguelas antes si las necesita). ¿Continuar?`)) olvidarResultados();
         }
       }, 'Empezar de cero'),
-      todo: h('button', { class: 'b', onclick: () => descargar('todo') }, '⬇ Descargar todo'),
-      guias: h('button', { class: 'b s', onclick: () => descargar('guias') }, 'Guías'),
-      bienes: h('button', { class: 'b s', onclick: () => descargar('bienes') }, 'Bienes'),
-      errores: h('button', { class: 'b s', onclick: () => descargar('errores') }, 'Errores'),
-      json: h('button', { class: 'b s', onclick: () => descargar('json') }, 'JSON'),
-      control: h('button', { class: 'b s', onclick: () => descargar('control') }, 'Control'),
-      adicionales: h('button', { class: 'b s', onclick: () => descargar('adicionales') }, 'Adicionales')
+      csv: h('button', { class: 'b s', onclick: () => descargar('todo') }, '⬇ CSV y JSON')
     };
-    const fileInput = h('input', { type: 'file', accept: '.json,application/json', style: 'display:none' });
-    fileInput.addEventListener('change', async () => {
-      const f = fileInput.files && fileInput.files[0];
-      if (f) await cargarJSONPrevio(f);
-      fileInput.value = '';
-    });
-
-    const barra = h('div');
-    const stats = {};
-    const stat = (k, etiqueta) => { stats[k] = h('b', { text: '0' }); return h('span', {}, `${etiqueta}: `, stats[k]); };
-    const cuerpo = h('div', { class: 'bd' },
-      h('h4', { text: '1. Token y filtros' }),
-      h('div', { class: 'row' }, btn.capturar),
-      estadoToken,
-      h('h4', { text: '2. Revise los filtros' }),
-      h('div', { class: 'g' }, ...campos,
-        h('label', { class: 'full' }, 'Token Bearer manual (opcional; solo memoria, se borra al iniciar)', inputs.token)),
-      h('h4', { text: '3. Ejecutar' }),
-      h('div', { class: 'row' }, btn.iniciar, btn.pausar, btn.reanudar, btn.cancelar),
-      h('div', { class: 'bar' }, barra),
-      h('div', { class: 'st' },
-        stat('total', 'Total guías'), stat('actual', 'Guía actual'),
-        stat('ok', 'Correctas'), stat('error', 'Con error'),
-        stat('pct', 'Avance'), stat('omitidas', 'Reutilizadas'),
-        stat('trans', 'Transcurrido'), stat('eta', 'Restante estimado'),
-        stat('previos', 'Guías en JSON previo'), stat('estado', 'Estado')),
-      h('h4', { text: 'Reanudación' }),
-      h('div', { class: 'row' }, btn.cargar, btn.limpiar, btn.olvidar, fileInput),
-      h('div', { class: 'nota', text: 'Si el proceso se detiene, al pulsar Iniciar de nuevo continúa donde quedó (mientras no recargue la página).' }),
-      h('h4', { text: 'Descargas' }),
-      h('div', { class: 'row' }, btn.todo, btn.guias, btn.bienes, btn.errores, btn.json, btn.control, btn.adicionales),
-      h('div', { class: 'nota', text: 'Si el navegador pregunta, permita "descargar varios archivos".' }),
-      h('div', { class: 'log' })
+    const masOpciones = h('details', {},
+      h('summary', { text: 'Más opciones' }),
+      h('div', { class: 'g' }, ...campos, h('label', { class: 'full' }, 'Token manual (opcional; solo memoria)', inputs.token)),
+      h('label', { class: 'chk' }, chkDescargar, 'Descargar el Excel automáticamente al terminar'),
+      h('h4', { text: 'Continuar con un archivo anterior' }),
+      h('div', { class: 'row' }, btn.cargar, btn.limpiar, fileInput),
+      h('h4', { text: 'Otras descargas y limpieza' }),
+      h('div', { class: 'row' }, btn.csv, btn.olvidar)
     );
-    const btnMin = h('button', { title: 'Minimizar', onclick: () => { cuerpo.style.display = cuerpo.style.display === 'none' ? '' : 'none'; } }, '–');
-    const btnCerrar = h('button', { title: 'Cerrar panel', onclick: () => {
-      if (estado.ejecutando) log('El panel se cerró; el proceso sigue en la consola. Reábralo con GREExtractor.mostrarPanel().', 'warn');
-      cerrarPanel();
-    } }, '×');
-    const cabecera = h('div', { class: 'hd' }, h('b', { text: `Extractor GRE v${VERSION}` }), btnMin, btnCerrar);
-    const panel = h('div', { class: 'p' }, cabecera, cuerpo);
+
+    const cuerpo = h('div', { class: 'bd' },
+      h('div', { class: 'sec' },
+        h('div', { class: 'tit' }, h('span', { class: 'num', text: '1' }), 'Conexión con SUNAT'),
+        h('div', { class: 'con' }, pill, btnConectar),
+        h('div', { class: 'nota', text: 'Para conectar, abra cualquier guía con «Ver» en la pantalla de SUNAT. Si no lo hace ahora, se le pedirá al empezar.' })),
+      h('div', { class: 'sec' },
+        h('div', { class: 'tit' }, h('span', { class: 'num', text: '2' }), 'RUC a consultar'),
+        txtRucs, msgRucs,
+        h('div', { class: 'nota', text: 'En la guía, el RUC es:' }), grupoRoles),
+      h('div', { class: 'sec' },
+        h('div', { class: 'tit' }, h('span', { class: 'num', text: '3' }), 'Periodos'),
+        contPeriodos, btnAgregar,
+        h('div', { class: 'nota', text: 'SUNAT entrega como máximo 100 guías por búsqueda: el extractor divide los periodos solo.' })),
+      btnIniciar,
+      h('div', { class: 'row' }, btnPausa, btnDetener, btnExcel),
+      h('div', { class: 'bar' }, barra),
+      linea,
+      h('div', { class: 'cont' }, contador('encontradas', 'guías encontradas'), contador('ok', 'con detalle'), contador('error', 'con error')),
+      h('div', { class: 'log' }),
+      masOpciones
+    );
+
+    // Franja compacta: deja ver la pantalla de SUNAT mientras se espera la conexión
+    const franjaTexto = h('span', { style: 'flex:1' });
+    const franja = h('div', { class: 'franja', style: 'display:none' }, franjaTexto, h('button', { class: 'b s', onclick: () => compactar(false) }, 'Ver panel'));
+    const compactar = (si) => {
+      cuerpo.style.display = si ? 'none' : '';
+      franja.style.display = si ? '' : 'none';
+      actualizarUI();
+    };
+    const btnMin = h('button', { title: 'Minimizar', onclick: () => compactar(cuerpo.style.display !== 'none') }, '–');
+    const btnCerrar = h('button', {
+      title: 'Cerrar panel', onclick: () => {
+        if (estado.ejecutando) log('El panel se cerró; la búsqueda sigue. Reábralo con GREExtractor.mostrarPanel().', 'warn');
+        cerrarPanel();
+      }
+    }, '×');
+    const cabecera = h('div', { class: 'hd' }, h('b', {}, 'Extractor de GRE', h('small', { text: `v${VERSION}` })), btnMin, btnCerrar);
+    const panel = h('div', { class: 'p' }, cabecera, franja, cuerpo);
     root.append(panel);
     (document.body || document.documentElement).appendChild(host);
 
     habilitarArrastre(cabecera, panel);
-    ui = { host, inputs, btn, barra, stats, estadoToken, log: cuerpo.querySelector('.log') };
+    ui = {
+      host, pill, btnConectar, txtRucs, msgRucs, radios, periodos, pintarPeriodos, btnAgregar, inputs, chkDescargar, btn,
+      btnIniciar, btnPausa, btnDetener, btnExcel, barra, linea, cont, franja, franjaTexto, cuerpo, compactar,
+      log: cuerpo.querySelector('.log')
+    };
+    pintarPeriodos();
+    revisarRucs();
     actualizarUI();
 
     function alIniciar() {
-      const op = {};
-      for (const [nombre] of CAMPOS_FORM) op[nombre] = inputs[nombre].value;
+      const { validos, invalidos } = extraerRucs(txtRucs.value);
+      if (!validos.length) {
+        log(invalidos.length ? `Ningún RUC es válido: ${invalidos.join(', ')}. Revise los dígitos.` : 'Escriba al menos un RUC.', 'error');
+        txtRucs.focus();
+        return;
+      }
+      if (invalidos.length && !window.confirm(`Estos RUC no son válidos y se omitirán:\n${invalidos.join(', ')}\n\n¿Continuar con los ${validos.length} RUC válidos?`)) return;
+      const op = { rucs: validos, rol: rolSeleccionado(), periodos: periodos.map((p) => ({ ...p })), descargarAlTerminar: chkDescargar.checked };
+      for (const [nombre] of CAMPOS_AVANZADOS) op[nombre] = inputs[nombre].value;
       op.token = inputs.token.value;
       inputs.token.value = ''; // borrar el token del campo de inmediato
       iniciarExtraccionGRE(op).catch((e) => log(`Error: ${e.message}`, 'error'));
@@ -1983,48 +2737,65 @@
 
   function actualizarUI() {
     if (!ui) return;
-    const P = estado.progreso, E = estado;
-    const hay = E.resultados.size > 0 || E.errores.length > 0;
-    const b = ui.btn;
-    b.capturar.disabled = E.ejecutando;
-    b.capturar.textContent = captura.activa ? '⏹ Detener captura' : '🎯 Capturar desde SUNAT';
-    ui.estadoToken.textContent = textoEstadoToken();
-    b.iniciar.disabled = E.ejecutando;
-    b.pausar.disabled = !E.ejecutando || E.pausado;
-    b.reanudar.disabled = !E.ejecutando || !E.pausado;
-    b.cancelar.disabled = !E.ejecutando;
-    b.cargar.disabled = E.ejecutando;
-    b.limpiar.disabled = E.ejecutando || E.previos.size === 0;
-    b.olvidar.disabled = E.ejecutando || (E.resultados.size === 0 && E.previos.size === 0);
-    for (const k of ['todo', 'guias', 'bienes', 'errores', 'json', 'control', 'adicionales']) b[k].disabled = !hay;
-    for (const inp of Object.values(ui.inputs)) inp.disabled = E.ejecutando;
+    const E = estado, P = E.progreso;
 
-    const pct = P.total ? (P.procesadas / P.total) * 100 : 0;
+    // Conexión
+    const c = estadoConexion();
+    ui.pill.className = 'pill ' + c.clase;
+    ui.pill.textContent = c.texto;
+    ui.btnConectar.disabled = E.ejecutando;
+    ui.btnConectar.textContent = captura.activa && captura.modo === 'manual' ? '✕ Cancelar' : (tokenCapturado ? '🔗 Volver a conectar' : '🔗 Conectar');
+    ui.franjaTexto.textContent = (E.esperandoConexion || (captura.activa && captura.modo === 'manual'))
+      ? '⚠ Abra cualquier guía con «Ver» en la pantalla de SUNAT. Luego todo continúa solo.'
+      : c.texto;
+
+    // Botones y campos
+    const hay = E.resultados.size > 0 || E.busquedas.length > 0 || E.errores.length > 0;
+    ui.btnIniciar.disabled = E.ejecutando;
+    ui.btnPausa.disabled = !E.ejecutando;
+    ui.btnPausa.textContent = E.pausado ? '▶ Continuar' : '⏸ Pausar';
+    ui.btnDetener.disabled = !E.ejecutando;
+    ui.btnExcel.disabled = !hay;
+    ui.btn.csv.disabled = !hay;
+    ui.btn.cargar.disabled = E.ejecutando;
+    ui.btn.limpiar.disabled = E.ejecutando || E.previos.size === 0;
+    ui.btn.olvidar.disabled = E.ejecutando || (E.resultados.size === 0 && E.previos.size === 0);
+    ui.btnAgregar.disabled = E.ejecutando;
+    for (const el of ui.cuerpo.querySelectorAll('textarea, .roles input, details input, .per input')) el.disabled = E.ejecutando;
+    for (const el of ui.cuerpo.querySelectorAll('.per button')) el.disabled = E.ejecutando || ui.periodos.length === 1;
+
+    // Avance
+    let pct = 0, textoLinea = '';
+    if (E.ejecutando) {
+      if (E.esperandoConexion) textoLinea = '⚠ Esperando conexión: abra cualquier guía con «Ver» en la pantalla de SUNAT.';
+      else if (E.pausado) textoLinea = '⏸ En pausa.';
+      else if (E.fase === 'busqueda') {
+        pct = P.diasTotales ? (P.diasHechos / P.diasTotales) * 100 : 0;
+        textoLinea = `Buscando guías (${P.tareaActual} de ${P.tareasTotal}) · ${P.busquedaActual}`;
+      } else if (E.fase === 'detalle') {
+        pct = P.total ? (P.procesadas / P.total) * 100 : 100;
+        let eta = '';
+        if (P.consultadas > 0 && E.tiempos.inicioDetalle) {
+          const porGuia = (Date.now() - E.tiempos.inicioDetalle) / P.consultadas;
+          eta = duracion(porGuia * Math.max(0, P.pendientesReales - P.consultadas));
+        }
+        textoLinea = `Descargando detalle: ${Math.min(P.procesadas + 1, P.total)} de ${P.total}${eta ? ` · faltan ${eta}` : ''}`;
+      } else textoLinea = 'Preparando…';
+    } else if (E.motivoFin && E.motivoFin !== 'EN_CURSO') {
+      pct = E.motivoFin === 'COMPLETADO' ? 100 : (P.total ? (P.procesadas / P.total) * 100 : 0);
+      textoLinea = textoMotivo(E.motivoFin) + (E.resumen ? `: ${E.resumen['Guías con detalle']} guía(s) con detalle y ${E.resumen['Total de bienes']} bien(es).` : '.');
+    } else textoLinea = 'Escriba los RUC y periodos, y pulse "Buscar y descargar Excel".';
     ui.barra.style.width = pct.toFixed(1) + '%';
-    const ahora = E.tiempos.fin && !E.ejecutando ? E.tiempos.fin : Date.now();
-    const trans = E.tiempos.inicio ? ahora - E.tiempos.inicio : 0;
-    let eta = '';
-    if (E.ejecutando && P.consultadas > 0 && E.tiempos.inicioDetalle) {
-      const porGuia = (Date.now() - E.tiempos.inicioDetalle) / P.consultadas;
-      eta = duracion(porGuia * Math.max(0, P.pendientesReales - P.consultadas));
-    }
-    const s = ui.stats;
-    s.total.textContent = String(P.total);
-    s.actual.textContent = P.actual || '-';
-    s.ok.textContent = String(P.ok);
-    s.error.textContent = String(P.error);
-    s.pct.textContent = pct.toFixed(1) + '%';
-    s.omitidas.textContent = String(P.omitidas);
-    s.trans.textContent = E.tiempos.inicio ? duracion(trans) : '-';
-    s.eta.textContent = eta || '-';
-    s.previos.textContent = String(E.previos.size);
-    s.estado.textContent = E.ejecutando ? (E.pausado ? 'PAUSADO' : 'EN CURSO') : (E.motivoFin || 'LISTO');
+    ui.linea.textContent = textoLinea;
+    ui.cont.encontradas.textContent = String(P.encontradas || E.unicos.length || 0);
+    ui.cont.ok.textContent = String(P.ok);
+    ui.cont.error.textContent = String(P.error);
   }
 
-  // Refresco periódico del tiempo transcurrido mientras hay ejecución.
-  const refresco = setInterval(() => { if (estado.ejecutando) actualizarUI(); }, 1000);
+  // Refresco periódico (hora de vencimiento, tiempo restante) mientras hay actividad
+  const refresco = setInterval(() => { if (estado.ejecutando || captura.activa) actualizarUI(); }, 1000);
 
-  /** Elimina completamente el panel, los datos en memoria y el objeto global. */
+  /** Elimina el panel, la escucha, los datos en memoria y el objeto global. */
   function destruir() {
     if (estado.ejecutando && estado.controller) estado.controller.abort();
     detenerCaptura('destruir');
@@ -2034,8 +2805,8 @@
     urlsCapturadas.listado = ''; urlsCapturadas.detalle = '';
     clearInterval(refresco);
     cerrarPanel();
-    estado.resultados.clear(); estado.previos.clear(); estado.memoria.clear();
-    estado.errores = []; estado.control = []; estado.controlDetalle = [];
+    estado.resultados.clear(); estado.previos.clear(); estado.memoria.clear(); estado.origenes.clear();
+    estado.errores = []; estado.control = []; estado.controlDetalle = []; estado.busquedas = []; estado.tareas = [];
     try { delete window.GREExtractor; } catch (_) { window.GREExtractor = undefined; }
     console.log('[GRE] Extractor eliminado de la página.');
   }
@@ -2045,29 +2816,36 @@
    * ------------------------------------------------------------- */
   window.GREExtractor = {
     version: VERSION,
-    iniciarExtraccionGRE,
     iniciar: iniciarExtraccionGRE,
+    iniciarExtraccionGRE,
     pausar, reanudar, cancelar,
-    capturarDesdeSUNAT: iniciarCaptura,
+    conectar,
+    capturarDesdeSUNAT: conectar,
     detenerCaptura: () => detenerCaptura('usuario'),
-    get hayTokenCapturado() { return !!tokenCapturado; },
-    get filtrosCapturados() { return filtrosCapturados ? { ...filtrosCapturados } : null; },
-    get busquedaCapturada() { return urlsCapturadas.listado || null; }, // solo la dirección, sin token
     cargarJSONPrevio, seleccionarJSONPrevio, limpiarPrevios, olvidarResultados,
-    descargar, descargarTodo, exportar,
+    descargar,
+    descargarExcel: () => descargar('excel'),
+    descargarTodo: () => descargar('todo'),
+    exportar,
     flattenObject,
+    validarRuc: rucValido,
     mostrarPanel: crearPanel, cerrarPanel, destruir,
     get ejecutando() { return estado.ejecutando; },
     get resumen() { return estado.resumen; },
     get errores() { return estado.errores.slice(); },
     get control() { return estado.control.slice(); },
-    get progreso() { return { ...estado.progreso, pausado: estado.pausado, estado: estado.motivoFin }; },
+    get busquedas() { return estado.busquedas.map((b) => ({ ...b })); },
+    get progreso() {
+      return { ...estado.progreso, fase: estado.fase, pausado: estado.pausado, esperandoConexion: estado.esperandoConexion, estado: estado.motivoFin };
+    },
+    get hayTokenCapturado() { return !!tokenCapturado; },
+    get filtrosCapturados() { return filtrosCapturados ? { ...filtrosCapturados } : null; },
+    get busquedaCapturada() { return urlsCapturadas.listado || null; }, // solo la dirección, sin token
     detallesCorrectos() { return [...estado.resultados.values()].filter((r) => r.ok).map((r) => r.detalle); }
   };
 
   crearPanel();
-  log(`Extractor GRE v${VERSION} listo en ${location.origin}.`, 'ok');
-  log('Paso 1: pulse "Capturar desde SUNAT" y haga su búsqueda en la pantalla de SUNAT.');
+  log(`Extractor de GRE v${VERSION} listo.`, 'ok');
   if (!/(^|\.)intranet\.sunat\.peru$/i.test(location.hostname)) {
     log('Aviso: este no parece el contexto "iframeApplication (intranet.sunat.peru)". Cámbielo en el selector de contexto de la consola.', 'warn');
   }
