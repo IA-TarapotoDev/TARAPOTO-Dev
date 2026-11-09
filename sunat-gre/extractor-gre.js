@@ -1,19 +1,24 @@
 /* =====================================================================
  * EXTRACTOR GRE – Guías de Remisión Electrónica (SUNAT, uso autorizado)
- * Versión 1.0.0
+ * Versión 1.1.0
  *
  * Dónde ejecutarlo:
  *   Microsoft Edge > DevTools > Console > contexto
  *   "iframeApplication (resultado) – intranet.sunat.peru"
  *
  * Qué hace:
+ *   0. (Opcional) Toma el token y los filtros de una búsqueda hecha en la
+ *      propia pantalla de SUNAT ("Capturar desde SUNAT"), sin copiar nada a mano.
  *   1. Consulta el listado paginado de GRE del rango indicado.
  *   2. Elimina duplicados.
  *   3. Consulta el detalle de cada guía, de una en una, con pausas.
  *   4. Exporta CSV (UTF-8 con BOM, separador ;) y JSON completo.
+ *   5. Si se detiene (token vencido, cancelación), al volver a iniciar continúa
+ *      donde quedó sin repetir las guías ya obtenidas en esta sesión.
  *
  * Seguridad:
  *   - El token solo vive en memoria durante la ejecución y se descarta al final.
+ *   - Se revisa localmente su vencimiento (si es JWT); no se muestra ni exporta.
  *   - No usa localStorage, sessionStorage, cookies ni servidores externos.
  *   - credentials: "omit" y mode: "cors" (nunca "no-cors").
  *   - Ante HTTP 401/403 el proceso se detiene.
@@ -23,7 +28,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '1.0.0';
+  const VERSION = '1.1.0';
   const API_LISTADO = 'https://api-intranet.sunat.peru/v1/contribuyente/gre/comprobantes';
   const PANEL_ID = 'gre-extractor-host';
 
@@ -67,6 +72,16 @@
 
   const ESTADOS_REINTENTABLES = new Set([429, 500, 502, 503, 504]);
 
+  // Explicación que se muestra cuando el navegador no puede leer la respuesta ("Failed to fetch").
+  const AYUDA_FALLO_CONEXION = [
+    'El navegador no pudo leer la respuesta de la API. Causas más comunes:',
+    '1) Token vencido, incompleto o copiado de otra solicitud.',
+    '2) Filtros que la API rechaza (por ejemplo, el RUC en un campo que no corresponde al "Tipo de búsqueda").',
+    '3) La consola no está en el contexto "iframeApplication (intranet.sunat.peru)".',
+    'Solución recomendada: pulse "Capturar desde SUNAT", haga la búsqueda en la pantalla de SUNAT y vuelva a pulsar Iniciar.',
+    'La causa exacta aparece en el mensaje rojo de la consola y en la pestaña Network (columna Estado).'
+  ];
+
   /* ---------------------------------------------------------------
    * 2. Estado interno (no contiene el token)
    * ------------------------------------------------------------- */
@@ -82,6 +97,7 @@
     duplicados: [],
     resultados: new Map(),   // clave -> registro
     previos: new Map(),      // clave -> { detalle, consultadoEn } (cargado desde JSON anterior)
+    memoria: new Map(),      // clave -> { detalle, consultadoEn } (obtenidas en una ejecución anterior de esta sesión)
     errores: [],
     controlDetalle: [],
     control: [],
@@ -100,17 +116,25 @@
 
   let ui = null; // referencias del panel (si existe)
 
+  // Captura desde la aplicación SUNAT. Solo en memoria (nunca global ni persistente).
+  let tokenCapturado = null;     // se consume al iniciar y se descarta al terminar
+  let filtrosCapturados = null;  // filtros de la última búsqueda hecha en la pantalla de SUNAT (sin token)
+  const captura = { activa: false, temporizador: null, restaurar: null };
+
   /* ---------------------------------------------------------------
    * 3. Utilidades generales
    * ------------------------------------------------------------- */
   class ErrorValidacion extends Error { constructor(m) { super(m); this.name = 'ErrorValidacion'; } }
   class ErrorAutenticacion extends Error {
-    constructor(status, url) {
-      super(`HTTP ${status}: acceso no autorizado o sesión/token vencido.`);
+    constructor(status, url, mensaje, codigo) {
+      super(mensaje || `HTTP ${status}: acceso no autorizado o sesión/token vencido.`);
       this.name = 'ErrorAutenticacion'; this.status = status; this.url = url;
+      this.codigo = codigo || `DETENIDO_HTTP_${status}`;
     }
   }
-  class ErrorDetencion extends Error { constructor(m) { super(m); this.name = 'ErrorDetencion'; } }
+  class ErrorDetencion extends Error {
+    constructor(m, ayuda = []) { super(m); this.name = 'ErrorDetencion'; this.ayuda = ayuda; }
+  }
 
   const esVacio = (v) => v === null || v === undefined || (typeof v === 'string' && v.trim() === '');
   const esObjetoPlano = (v) => v !== null && typeof v === 'object' && !Array.isArray(v) && !(v instanceof Date);
@@ -189,6 +213,8 @@
     const s = Math.round(ms / 1000);
     return `${dos(Math.floor(s / 3600))}:${dos(Math.floor((s % 3600) / 60))}:${dos(s % 60)}`;
   }
+
+  const horaDe = (ms) => fechaHoraLocal(new Date(ms)).slice(11);
 
   /** Número de comprobante con 8 dígitos solo para mostrar/CSV. */
   function numero8(num) {
@@ -346,14 +372,71 @@
     return Object.freeze(cfg);
   }
 
-  /** Obtiene el token: desde las opciones o mediante prompt(). Nunca lo guarda. */
+  /**
+   * Obtiene el token, en este orden: opciones/campo del panel, token capturado
+   * de la aplicación SUNAT, o prompt(). Nunca lo guarda de forma permanente.
+   */
   function obtenerToken(op) {
     let t = op && typeof op.token === 'string' ? op.token : '';
-    if (!t) t = window.prompt('Pegue el token Bearer (solo se usa en memoria y se descarta al terminar):', '') || '';
+    let origen = 'ingresado';
+    if (!t.trim() && tokenCapturado) { t = tokenCapturado; origen = 'capturado de la aplicación'; }
+    tokenCapturado = null; // se consume una sola vez
+    if (!t.trim()) t = window.prompt('Pegue el token Bearer (solo se usa en memoria y se descarta al terminar):', '') || '';
     t = t.trim().replace(/^bearer\s+/i, '').trim();
-    if (!t) throw new ErrorValidacion('No se ingresó el token Bearer.');
+    if (!t) throw new ErrorValidacion('No se ingresó el token Bearer. Pulse "Capturar desde SUNAT" o péguelo en el campo del token.');
     if (/\s/.test(t)) throw new ErrorValidacion('El token contiene espacios o saltos de línea. Cópielo nuevamente.');
-    return t;
+    return { token: t, origen };
+  }
+
+  /**
+   * Lee, solo localmente, la fecha de vencimiento de un token JWT.
+   * No registra ni exporta ningún otro dato del token.
+   */
+  function analizarToken(token) {
+    const partes = String(token || '').split('.');
+    if (partes.length !== 3) return { tipo: 'opaco', exp: null };
+    try {
+      let b64 = partes[1].replace(/-/g, '+').replace(/_/g, '/');
+      b64 += '='.repeat((4 - (b64.length % 4)) % 4);
+      const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+      const carga = JSON.parse(new TextDecoder().decode(bytes));
+      const exp = Number(carga && carga.exp);
+      return { tipo: 'jwt', exp: Number.isFinite(exp) && exp > 0 ? exp * 1000 : null, sinFirma: !partes[2] };
+    } catch (_) {
+      return { tipo: 'ilegible', exp: null };
+    }
+  }
+
+  /** Revisa el vencimiento antes de empezar. Devuelve el vencimiento (ms) o null si no se conoce. */
+  function validarVencimientoToken(token, origen) {
+    const info = analizarToken(token);
+    if (info.tipo === 'ilegible' || info.sinFirma) {
+      log('Aviso: el token no se pudo leer completo; puede estar cortado. Si falla, use "Capturar desde SUNAT" o cópielo de nuevo.', 'warn');
+      return null;
+    }
+    if (!info.exp) {
+      log(`Token ${origen}. No indica su vencimiento; se usará igual.`);
+      return null;
+    }
+    const restante = info.exp - Date.now();
+    if (restante <= 0) {
+      throw new ErrorValidacion(`El token venció a las ${horaDe(info.exp)} (hace ${Math.max(1, Math.round(-restante / 60000))} min). ` +
+        'Obtenga uno nuevo: pulse "Capturar desde SUNAT" y haga una búsqueda o abra una guía con "Ver".');
+    }
+    log(`Token ${origen}, válido hasta las ${horaDe(info.exp)} (quedan ${Math.floor(restante / 60000)} min).`, restante < 3 * 60000 ? 'warn' : 'ok');
+    return info.exp;
+  }
+
+  /** Avisa si, por la cantidad de guías, el token podría vencer antes de terminar. */
+  function avisarSiTokenNoAlcanza(ctx, unicos) {
+    if (!ctx.tokenExp) return;
+    const pendientes = unicos.filter((u) => !estado.previos.has(u.clave) && !estado.memoria.has(u.clave)).length;
+    const estimadoMs = pendientes * ((ctx.cfg.pausaMinMs + ctx.cfg.pausaMaxMs) / 2 + 500);
+    const restanteMs = ctx.tokenExp - Date.now();
+    if (estimadoMs > restanteMs) {
+      log(`Aviso: procesar ${pendientes} guía(s) tomaría unos ${Math.ceil(estimadoMs / 60000)} min, pero el token vence en ${Math.max(0, Math.floor(restanteMs / 60000))} min.`, 'warn');
+      log('Si se detiene por token vencido: pulse "Capturar desde SUNAT", abra una guía con "Ver" y pulse Iniciar. Continuará donde quedó.', 'warn');
+    }
   }
 
   /** Parámetros que sí pueden exportarse (nunca el token). */
@@ -389,6 +472,12 @@
     } catch (_) { return ''; }
   }
 
+  function errorTokenVencido(ctx, url, etiqueta, clave, intento) {
+    const msg = `El token venció a las ${horaDe(ctx.tokenExp)}`;
+    registrarError({ guia: etiqueta, clave, url, estadoHttp: '', mensaje: msg, intento, accion: 'PROCESO DETENIDO' });
+    return new ErrorAutenticacion(0, url, `${msg}.`, 'DETENIDO_TOKEN_VENCIDO');
+  }
+
   /**
    * GET con: credentials "omit", mode "cors", timeout, cancelación,
    * reintentos para 429/5xx/red, parada ante 401/403 y registro de errores.
@@ -414,6 +503,8 @@
     for (let intento = 1; intento <= totalIntentos; intento++) {
       await esperarSiPausado(signal);
       if (signal.aborted) throw crearAbortError();
+      // Si el token ya venció, no tiene sentido enviar más solicitudes.
+      if (ctx.tokenExp && Date.now() >= ctx.tokenExp) throw errorTokenVencido(ctx, url, etiqueta, clave, intento);
 
       // Controlador por solicitud: se aborta por cancelación general o por timeout.
       const ctrl = new AbortController();
@@ -424,11 +515,11 @@
 
       let resp = null, cuerpo = '';
       try {
+        // Misma forma que la solicitud que funciona en la aplicación (sin opciones adicionales).
         resp = await fetch(url, {
           method: 'GET',
           mode: 'cors',
           credentials: 'omit',
-          cache: 'no-store',
           headers: {
             accept: 'application/json, text/plain, */*',
             authorization: 'Bearer ' + ctx.token
@@ -440,9 +531,11 @@
         clearTimeout(temporizador);
         signal.removeEventListener('abort', alCancelar);
         if (signal.aborted) throw crearAbortError();
+        // Un token vencido suele verse como "Failed to fetch" (la API responde sin cabeceras CORS).
+        if (ctx.tokenExp && Date.now() >= ctx.tokenExp) throw errorTokenVencido(ctx, url, etiqueta, clave, intento);
         const msg = porTimeout
           ? `Tiempo de espera agotado (${cfg.timeoutMs} ms)`
-          : `Error de red o CORS (${(e && e.message) || e})`;
+          : `La API no respondió o el navegador bloqueó la respuesta (${(e && e.message) || e})`;
         const espera = fallar(0, msg, intento, true);
         if (espera !== null) { await dormir(espera, signal); continue; }
         return ultimo;
@@ -529,7 +622,10 @@
       const r = await pedirJSON(url, ctx, `LISTADO página ${page}`);
 
       if (!r.ok) {
-        if (page === 1) throw new ErrorDetencion(`No se pudo obtener la primera página del listado: ${r.mensaje}`);
+        if (page === 1) {
+          throw new ErrorDetencion(`No se pudo obtener la primera página del listado: ${r.mensaje}.`,
+            r.status === 0 ? AYUDA_FALLO_CONEXION : []);
+        }
         L.paginas.push({ page, esperados: esperadosEnPagina(L, page), recibidos: 0, ok: false, mensaje: r.mensaje, pageApi: '' });
         log(`Página ${page} del listado falló: ${r.mensaje}. Se continúa con la siguiente.`, 'error');
       } else {
@@ -634,9 +730,12 @@
     const { cfg, signal } = ctx;
     const P = estado.progreso;
     P.total = estado.unicos.length;
-    P.pendientesReales = estado.unicos.filter((u) => !estado.previos.has(u.clave)).length;
+    const yaObtenida = (clave) => estado.previos.get(clave) || estado.memoria.get(clave);
+    P.pendientesReales = estado.unicos.filter((u) => !yaObtenida(u.clave)).length;
     estado.tiempos.inicioDetalle = Date.now();
-    if (estado.previos.size) log(`Reanudación: ${P.total - P.pendientesReales} guía(s) ya recuperadas se omitirán; quedan ${P.pendientesReales} por consultar.`, 'ok');
+    if (P.total > P.pendientesReales) {
+      log(`Continuación: ${P.total - P.pendientesReales} guía(s) ya obtenidas antes no se volverán a consultar; quedan ${P.pendientesReales}.`, 'ok');
+    }
 
     let consecutivos = 0;
     let primeraSolicitud = true;
@@ -647,10 +746,14 @@
       const etiqueta = guiaLegible(item.numSerie, item.numCpe) || clave;
       P.actual = etiqueta;
 
-      // Ya recuperada en una ejecución anterior
-      if (estado.previos.has(clave)) {
-        const pv = estado.previos.get(clave);
-        Object.assign(reg, { detalle: pv.detalle, ok: true, procesada: true, http: 'PREVIO', consultadoEn: pv.consultadoEn, origen: 'previo' });
+      // Ya recuperada antes (JSON anterior o ejecución anterior de esta sesión)
+      const pv = yaObtenida(clave);
+      if (pv) {
+        const deArchivo = estado.previos.has(clave);
+        Object.assign(reg, {
+          detalle: pv.detalle, ok: true, procesada: true, http: 'REUTILIZADA',
+          consultadoEn: pv.consultadoEn, origen: deArchivo ? 'previo' : 'memoria'
+        });
         compararListadoDetalle(clave, item, pv.detalle);
         P.omitidas++; P.ok++; P.procesadas++;
         actualizarUI();
@@ -737,15 +840,26 @@
     }
     estado.ejecutando = true;
     let iniciado = false;
-    const ctx = { token: null, signal: null, cfg: null };
+    const ctx = { token: null, tokenExp: null, signal: null, cfg: null };
 
     try {
       const cfg = normalizarConfig(opciones);
-      ctx.token = obtenerToken(opciones);
+      detenerCaptura('inicio'); // no interceptar solicitudes durante la extracción
+      const datosToken = obtenerToken(opciones);
+      ctx.token = datosToken.token;
+      datosToken.token = null;
       // Borrar el token del objeto recibido para que no quede referenciado.
       if (opciones && typeof opciones === 'object' && 'token' in opciones) { try { opciones.token = ''; } catch (_) { /* objeto congelado */ } }
+      ctx.tokenExp = validarVencimientoToken(ctx.token, datosToken.origen);
+
+      // Guías ya obtenidas en una ejecución anterior de esta sesión: permiten continuar donde quedó.
+      const memoria = new Map();
+      for (const r of estado.resultados.values()) {
+        if (r.ok && esObjetoPlano(r.detalle)) memoria.set(r.clave, { detalle: r.detalle, consultadoEn: r.consultadoEn });
+      }
 
       reiniciarEstado(cfg);
+      estado.memoria = memoria;
       iniciado = true;
       ctx.cfg = cfg;
       ctx.signal = estado.controller.signal;
@@ -766,6 +880,7 @@
       if (duplicados.length) log(`Se eliminaron ${duplicados.length} registro(s) duplicado(s) del listado.`, 'warn');
       for (const { clave, item } of unicos) estado.resultados.set(clave, crearRegistro(clave, item));
       log(`Guías únicas a procesar: ${unicos.length}.`, 'ok');
+      avisarSiTokenNoAlcanza(ctx, unicos);
 
       // 3) Detalles
       await obtenerDetalles(ctx);
@@ -776,13 +891,15 @@
         estado.motivoFin = 'CANCELADO';
         log('Proceso cancelado. Se conservan los resultados ya recuperados; puede descargarlos.', 'warn');
       } else if (e instanceof ErrorAutenticacion) {
-        estado.motivoFin = `DETENIDO_HTTP_${e.status}`;
-        log(`${e.message} Renueve la sesión (abra una guía con "Ver") y obtenga un token nuevo. Puede descargar lo recuperado y reanudar con el JSON.`, 'error');
+        estado.motivoFin = e.codigo;
+        log(`${e.message} Proceso detenido; lo ya obtenido se conserva.`, 'error');
+        log('Para continuar: pulse "Capturar desde SUNAT", abra una guía con "Ver" y pulse Iniciar con los mismos filtros. Solo se consultarán las guías que faltan.', 'warn');
       } else if (e instanceof ErrorValidacion) {
         log(`Validación: ${e.message}`, 'error');
       } else if (e instanceof ErrorDetencion) {
         estado.motivoFin = 'DETENIDO';
         log(e.message, 'error');
+        for (const linea of e.ayuda) log(linea, 'warn');
       } else {
         estado.motivoFin = 'ERROR';
         log(`Error inesperado: ${(e && e.message) || e}`, 'error');
@@ -791,6 +908,8 @@
     } finally {
       // Descartar el token
       ctx.token = null;
+      ctx.tokenExp = null;
+      tokenCapturado = null;
       estado.ejecutando = false;
       estado.pausado = false;
       estado.controller = null;
@@ -871,7 +990,7 @@
       'Guías únicas': estado.unicos.length,
       'Duplicados eliminados': estado.duplicados.length,
       'Detalles correctos': ok.length,
-      '  de ellos reutilizados del JSON previo': regs.filter((r) => r.ok && r.origen !== 'actual').length,
+      '  de ellos reutilizados (JSON previo o esta sesión)': regs.filter((r) => r.ok && r.origen !== 'actual').length,
       'Guías con error': regs.filter((r) => r.procesada && !r.ok).length,
       'Guías no procesadas': regs.filter((r) => !r.procesada).length,
       'Entradas en registro de errores': estado.errores.length,
@@ -893,6 +1012,7 @@
         }));
       }
     }
+    estado.memoria = new Map();
     construirControl();
     estado.resumen = calcularResumen();
 
@@ -1372,8 +1492,170 @@
     estado.previos.clear(); log('Se descartó el JSON previo cargado.', 'ok'); actualizarUI();
   }
 
+  /** Olvida todo lo obtenido (resultados, errores y JSON previo) para que la próxima ejecución consulte todo de nuevo. */
+  function olvidarResultados() {
+    if (estado.ejecutando) { log('No se puede limpiar durante una extracción.', 'warn'); return; }
+    estado.resultados = new Map();
+    estado.previos.clear();
+    estado.memoria = new Map();
+    estado.errores = []; estado.control = []; estado.controlDetalle = [];
+    estado.unicos = []; estado.duplicados = [];
+    estado.listado = listadoVacio(); estado.progreso = progresoVacio();
+    estado.resumen = null; estado.motivoFin = ''; estado.tiempos = { inicio: 0, inicioDetalle: 0, fin: 0 };
+    log('Se olvidaron los resultados anteriores. La próxima ejecución consultará todas las guías.', 'ok');
+    actualizarUI();
+  }
+
   /* ---------------------------------------------------------------
-   * 16. Panel flotante (HTML/CSS nativo, Shadow DOM, removible)
+   * 16. Captura del token y de los filtros desde la propia aplicación SUNAT
+   *     Escucha temporalmente (máx. 5 min) las solicitudes que la pantalla de
+   *     SUNAT hace a la API de GRE en esta misma pestaña, y toma su token y,
+   *     si es una búsqueda, sus filtros. No envía nada a ningún lado y al
+   *     terminar deja la página como estaba.
+   * ------------------------------------------------------------- */
+  const HOST_API = 'api-intranet.sunat.peru';
+  const RUTA_API_GRE = '/v1/contribuyente/gre/';
+  const RUTA_LISTADO = '/v1/contribuyente/gre/comprobantes';
+  const CAPTURA_MAX_MS = 5 * 60 * 1000;
+  const PARAMETROS_A_CAMPOS = {
+    numRucEmisor: 'rucEmisor', numRucReceptor: 'rucReceptor', codCpe: 'codCpe', numSerie: 'numSerie',
+    numCpe: 'numCpe', fecEmisionIni: 'fechaInicio', fecEmisionFin: 'fechaFin', codEstado: 'codEstado',
+    codSubEstado: 'codSubEstado', rangoHoras: 'rangoHoras', tipBusqueda: 'tipBusqueda'
+  };
+
+  /** Convierte dd/mm/aaaa a aaaa-mm-dd si la aplicación usara ese formato. */
+  function normalizarFechaCapturada(valor) {
+    const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(valor || '');
+    return m ? `${m[3]}-${m[2]}-${m[1]}` : valor;
+  }
+
+  /** Lee la cabecera Authorization de una llamada fetch(input, init). */
+  function autorizacionDeFetch(input, init) {
+    const fuentes = [];
+    if (init && init.headers) fuentes.push(init.headers);
+    if (typeof Request !== 'undefined' && input instanceof Request) fuentes.push(input.headers);
+    for (const cabeceras of fuentes) {
+      try { const v = new Headers(cabeceras).get('authorization'); if (v) return v; } catch (_) { /* formato no estándar */ }
+    }
+    return '';
+  }
+
+  function textoVence(token) {
+    const info = analizarToken(token);
+    return info.exp ? ` (vence a las ${horaDe(info.exp)})` : '';
+  }
+
+  /** Revisa una solicitud de la aplicación: si va a la API de GRE, toma el token y, si es el listado, los filtros. */
+  function procesarSolicitudApp(url, autorizacion) {
+    if (!captura.activa || !url) return;
+    let u;
+    try { u = new URL(String(url), location.href); } catch (_) { return; }
+    if (u.hostname !== HOST_API || !u.pathname.startsWith(RUTA_API_GRE)) return;
+    const m = /^bearer\s+(\S+)$/i.exec(String(autorizacion || '').trim());
+    if (!m || /^(null|undefined)$/i.test(m[1])) return;
+
+    if (m[1] !== tokenCapturado) {
+      tokenCapturado = m[1];
+      log(`Token capturado de la aplicación${textoVence(tokenCapturado)}.`, 'ok');
+    }
+
+    if (u.pathname.replace(/\/+$/, '') === RUTA_LISTADO) {
+      const filtros = {};
+      for (const [param, campo] of Object.entries(PARAMETROS_A_CAMPOS)) {
+        if (u.searchParams.has(param)) filtros[campo] = normalizarFechaCapturada(u.searchParams.get(param).trim());
+      }
+      filtrosCapturados = filtros;
+      if (ui) for (const [campo, v] of Object.entries(filtros)) if (ui.inputs[campo]) ui.inputs[campo].value = v;
+      const descripcion = [
+        `fechas ${filtros.fechaInicio || '?'} a ${filtros.fechaFin || '?'}`,
+        filtros.rucEmisor && `RUC emisor ${filtros.rucEmisor}`,
+        filtros.rucReceptor && `RUC receptor ${filtros.rucReceptor}`,
+        filtros.tipBusqueda && `tipo de búsqueda ${filtros.tipBusqueda}`
+      ].filter(Boolean).join(', ');
+      log(`Filtros copiados de su búsqueda: ${descripcion}. Puede cambiar las fechas y pulsar Iniciar.`, 'ok');
+      detenerCaptura('listo');
+    } else {
+      actualizarUI();
+    }
+  }
+
+  /** Empieza a escuchar (temporalmente) las solicitudes de la aplicación SUNAT. */
+  function iniciarCaptura() {
+    if (estado.ejecutando) { log('No se puede capturar durante una extracción.', 'warn'); return; }
+    if (captura.activa) return;
+    const restauradores = [];
+
+    // Solicitudes XMLHttpRequest (las que usa normalmente la aplicación)
+    const protoXHR = window.XMLHttpRequest && window.XMLHttpRequest.prototype;
+    if (protoXHR) {
+      const urls = new WeakMap();
+      const openOriginal = protoXHR.open;
+      const cabeceraOriginal = protoXHR.setRequestHeader;
+      const openEnvuelto = function (metodo, url) {
+        try { urls.set(this, String(url)); } catch (_) { /* ignorar */ }
+        return openOriginal.apply(this, arguments);
+      };
+      const cabeceraEnvuelta = function (nombre, valor) {
+        try { if (/^authorization$/i.test(String(nombre))) procesarSolicitudApp(urls.get(this), valor); } catch (_) { /* nunca romper la aplicación */ }
+        return cabeceraOriginal.apply(this, arguments);
+      };
+      protoXHR.open = openEnvuelto;
+      protoXHR.setRequestHeader = cabeceraEnvuelta;
+      restauradores.push(() => {
+        if (protoXHR.open === openEnvuelto) protoXHR.open = openOriginal;
+        if (protoXHR.setRequestHeader === cabeceraEnvuelta) protoXHR.setRequestHeader = cabeceraOriginal;
+      });
+    }
+
+    // Solicitudes fetch (por si la aplicación las usa)
+    const fetchOriginal = window.fetch;
+    if (typeof fetchOriginal === 'function') {
+      const fetchEnvuelto = function (input, init) {
+        try {
+          const url = (typeof Request !== 'undefined' && input instanceof Request) ? input.url : String(input);
+          procesarSolicitudApp(url, autorizacionDeFetch(input, init));
+        } catch (_) { /* nunca romper la aplicación */ }
+        return fetchOriginal.apply(window, arguments);
+      };
+      window.fetch = fetchEnvuelto;
+      restauradores.push(() => { if (window.fetch === fetchEnvuelto) window.fetch = fetchOriginal; });
+    }
+
+    captura.activa = true;
+    captura.restaurar = () => restauradores.forEach((f) => { try { f(); } catch (_) { /* ignorar */ } });
+    captura.temporizador = setTimeout(() => detenerCaptura('tiempo'), CAPTURA_MAX_MS);
+    log('Captura activa (5 min). En la pantalla de SUNAT pulse "Buscar" con los filtros que desea (copia token y filtros) o abra una guía con "Ver" (solo token). Si el panel tapa la pantalla, minimícelo con "–".', 'ok');
+    actualizarUI();
+  }
+
+  /** Deja de escuchar y restaura la página. */
+  function detenerCaptura(motivo) {
+    if (!captura.activa) return;
+    captura.activa = false;
+    clearTimeout(captura.temporizador);
+    captura.temporizador = null;
+    if (captura.restaurar) captura.restaurar();
+    captura.restaurar = null;
+    if (motivo === 'usuario') log('Captura detenida.');
+    if (motivo === 'tiempo') {
+      if (tokenCapturado) log('Captura finalizada por tiempo; el token capturado sigue disponible.');
+      else log('No se detectó ninguna búsqueda en 5 minutos. Revise que la consola esté en "iframeApplication" y vuelva a intentarlo, o pegue el token manualmente.', 'warn');
+    }
+    actualizarUI();
+  }
+
+  function textoEstadoToken() {
+    if (captura.activa) {
+      return tokenCapturado
+        ? `Token capturado${textoVence(tokenCapturado)}. Si quiere copiar también los filtros, pulse "Buscar" en SUNAT; si no, pulse Iniciar.`
+        : 'Esperando… En la pantalla de SUNAT pulse "Buscar" (copia token y filtros) o abra una guía con "Ver" (solo token).';
+    }
+    if (tokenCapturado) return `Token capturado de la aplicación${textoVence(tokenCapturado)}. Listo para Iniciar.`;
+    return 'Sin token capturado. Pulse el botón, o pegue el token abajo (si no, se pedirá al iniciar).';
+  }
+
+  /* ---------------------------------------------------------------
+   * 17. Panel flotante (HTML/CSS nativo, Shadow DOM, removible)
    * ------------------------------------------------------------- */
   function h(tag, props = {}, ...hijos) {
     const el = document.createElement(tag);
@@ -1423,16 +1705,20 @@
     ['codCpe', 'Código CPE', 'text'], ['tipBusqueda', 'Tipo de búsqueda', 'text'],
     ['numSerie', 'Serie', 'text'], ['numCpe', 'Número', 'text'],
     ['codEstado', 'Código estado', 'text'], ['codSubEstado', 'Código subestado', 'text'],
-    ['perPage', 'Registros por página', 'number'], ['maxReintentos', 'Máx. reintentos', 'number'],
+    ['rangoHoras', 'Rango de horas', 'text'], ['perPage', 'Registros por página', 'number'],
+    ['maxReintentos', 'Máx. reintentos', 'number'], ['timeoutMs', 'Tiempo máx. por solicitud (ms)', 'number'],
     ['pausaMinMs', 'Pausa mínima (ms)', 'number'], ['pausaMaxMs', 'Pausa máxima (ms)', 'number'],
-    ['maxDiasRango', 'Máx. días de rango (0 = sin límite)', 'number'], ['timeoutMs', 'Tiempo máx. por solicitud (ms)', 'number']
+    ['maxDiasRango', 'Máx. días de rango (0 = sin límite)', 'number']
   ];
 
   function crearPanel() {
     if (typeof document === 'undefined') return;
     cerrarPanel();
     const D = CONFIG_PREDETERMINADA;
-    const valoresIniciales = { ...D, fechaInicio: hoyISO(), fechaFin: hoyISO(), ...(estado.config ? parametrosExportables(estado.config) : {}) };
+    const valoresIniciales = {
+      ...D, fechaInicio: hoyISO(), fechaFin: hoyISO(),
+      ...(estado.config ? parametrosExportables(estado.config) : (filtrosCapturados || {}))
+    };
 
     const host = h('div', { id: PANEL_ID });
     const root = host.attachShadow({ mode: 'open' });
@@ -1444,15 +1730,23 @@
       inputs[nombre] = h('input', { type: tipo, value: texto(valoresIniciales[nombre]), autocomplete: 'off', spellcheck: 'false' });
       return h('label', {}, etiqueta, inputs[nombre]);
     });
-    inputs.token = h('input', { type: 'password', autocomplete: 'off', placeholder: 'Opcional: si lo deja vacío se pedirá con prompt()' });
+    inputs.token = h('input', { type: 'password', autocomplete: 'off', placeholder: 'Déjelo vacío si usó "Capturar desde SUNAT"' });
+    const estadoToken = h('div', { class: 'nota' });
 
     const btn = {
+      capturar: h('button', { class: 'b', onclick: () => (captura.activa ? detenerCaptura('usuario') : iniciarCaptura()) }, '🎯 Capturar desde SUNAT'),
       iniciar: h('button', { class: 'b', onclick: () => alIniciar() }, '▶ Iniciar'),
       pausar: h('button', { class: 'b s', onclick: () => pausar() }, '⏸ Pausar'),
       reanudar: h('button', { class: 'b s', onclick: () => reanudar() }, '⏵ Reanudar'),
       cancelar: h('button', { class: 'b r', onclick: () => cancelar() }, '■ Cancelar'),
       cargar: h('button', { class: 'b s', onclick: () => fileInput.click() }, '📂 Cargar JSON anterior'),
       limpiar: h('button', { class: 'b s', onclick: () => limpiarPrevios() }, 'Quitar JSON anterior'),
+      olvidar: h('button', {
+        class: 'b s', onclick: () => {
+          const n = [...estado.resultados.values()].filter((r) => r.ok).length;
+          if (!n || window.confirm(`Se olvidarán ${n} guía(s) ya obtenidas (descárguelas antes si las necesita). ¿Continuar?`)) olvidarResultados();
+        }
+      }, 'Empezar de cero'),
       todo: h('button', { class: 'b', onclick: () => descargar('todo') }, '⬇ Descargar todo'),
       guias: h('button', { class: 'b s', onclick: () => descargar('guias') }, 'Guías'),
       bienes: h('button', { class: 'b s', onclick: () => descargar('bienes') }, 'Bienes'),
@@ -1472,17 +1766,24 @@
     const stats = {};
     const stat = (k, etiqueta) => { stats[k] = h('b', { text: '0' }); return h('span', {}, `${etiqueta}: `, stats[k]); };
     const cuerpo = h('div', { class: 'bd' },
-      h('div', { class: 'g' }, ...campos, h('label', { class: 'full' }, 'Token Bearer (solo memoria, se borra al iniciar)', inputs.token)),
+      h('h4', { text: '1. Token y filtros' }),
+      h('div', { class: 'row' }, btn.capturar),
+      estadoToken,
+      h('h4', { text: '2. Revise los filtros' }),
+      h('div', { class: 'g' }, ...campos,
+        h('label', { class: 'full' }, 'Token Bearer manual (opcional; solo memoria, se borra al iniciar)', inputs.token)),
+      h('h4', { text: '3. Ejecutar' }),
       h('div', { class: 'row' }, btn.iniciar, btn.pausar, btn.reanudar, btn.cancelar),
       h('div', { class: 'bar' }, barra),
       h('div', { class: 'st' },
         stat('total', 'Total guías'), stat('actual', 'Guía actual'),
         stat('ok', 'Correctas'), stat('error', 'Con error'),
-        stat('pct', 'Avance'), stat('omitidas', 'Omitidas (JSON previo)'),
+        stat('pct', 'Avance'), stat('omitidas', 'Reutilizadas'),
         stat('trans', 'Transcurrido'), stat('eta', 'Restante estimado'),
         stat('previos', 'Guías en JSON previo'), stat('estado', 'Estado')),
       h('h4', { text: 'Reanudación' }),
-      h('div', { class: 'row' }, btn.cargar, btn.limpiar, fileInput),
+      h('div', { class: 'row' }, btn.cargar, btn.limpiar, btn.olvidar, fileInput),
+      h('div', { class: 'nota', text: 'Si el proceso se detiene, al pulsar Iniciar de nuevo continúa donde quedó (mientras no recargue la página).' }),
       h('h4', { text: 'Descargas' }),
       h('div', { class: 'row' }, btn.todo, btn.guias, btn.bienes, btn.errores, btn.json, btn.control, btn.adicionales),
       h('div', { class: 'nota', text: 'Si el navegador pregunta, permita "descargar varios archivos".' }),
@@ -1499,7 +1800,7 @@
     (document.body || document.documentElement).appendChild(host);
 
     habilitarArrastre(cabecera, panel);
-    ui = { host, inputs, btn, barra, stats, log: cuerpo.querySelector('.log') };
+    ui = { host, inputs, btn, barra, stats, estadoToken, log: cuerpo.querySelector('.log') };
     actualizarUI();
 
     function alIniciar() {
@@ -1548,12 +1849,16 @@
     const P = estado.progreso, E = estado;
     const hay = E.resultados.size > 0 || E.errores.length > 0;
     const b = ui.btn;
+    b.capturar.disabled = E.ejecutando;
+    b.capturar.textContent = captura.activa ? '⏹ Detener captura' : '🎯 Capturar desde SUNAT';
+    ui.estadoToken.textContent = textoEstadoToken();
     b.iniciar.disabled = E.ejecutando;
     b.pausar.disabled = !E.ejecutando || E.pausado;
     b.reanudar.disabled = !E.ejecutando || !E.pausado;
     b.cancelar.disabled = !E.ejecutando;
     b.cargar.disabled = E.ejecutando;
     b.limpiar.disabled = E.ejecutando || E.previos.size === 0;
+    b.olvidar.disabled = E.ejecutando || (E.resultados.size === 0 && E.previos.size === 0);
     for (const k of ['todo', 'guias', 'bienes', 'errores', 'json', 'control', 'adicionales']) b[k].disabled = !hay;
     for (const inp of Object.values(ui.inputs)) inp.disabled = E.ejecutando;
 
@@ -1585,22 +1890,30 @@
   /** Elimina completamente el panel, los datos en memoria y el objeto global. */
   function destruir() {
     if (estado.ejecutando && estado.controller) estado.controller.abort();
+    detenerCaptura('destruir');
+    tokenCapturado = null;
+    filtrosCapturados = null;
     clearInterval(refresco);
     cerrarPanel();
-    estado.resultados.clear(); estado.previos.clear(); estado.errores = []; estado.control = []; estado.controlDetalle = [];
+    estado.resultados.clear(); estado.previos.clear(); estado.memoria.clear();
+    estado.errores = []; estado.control = []; estado.controlDetalle = [];
     try { delete window.GREExtractor; } catch (_) { window.GREExtractor = undefined; }
     console.log('[GRE] Extractor eliminado de la página.');
   }
 
   /* ---------------------------------------------------------------
-   * 17. Objeto de control global (único)
+   * 18. Objeto de control global (único)
    * ------------------------------------------------------------- */
   window.GREExtractor = {
     version: VERSION,
     iniciarExtraccionGRE,
     iniciar: iniciarExtraccionGRE,
     pausar, reanudar, cancelar,
-    cargarJSONPrevio, seleccionarJSONPrevio, limpiarPrevios,
+    capturarDesdeSUNAT: iniciarCaptura,
+    detenerCaptura: () => detenerCaptura('usuario'),
+    get hayTokenCapturado() { return !!tokenCapturado; },
+    get filtrosCapturados() { return filtrosCapturados ? { ...filtrosCapturados } : null; },
+    cargarJSONPrevio, seleccionarJSONPrevio, limpiarPrevios, olvidarResultados,
     descargar, descargarTodo, exportar,
     flattenObject,
     mostrarPanel: crearPanel, cerrarPanel, destruir,
@@ -1614,6 +1927,7 @@
 
   crearPanel();
   log(`Extractor GRE v${VERSION} listo en ${location.origin}.`, 'ok');
+  log('Paso 1: pulse "Capturar desde SUNAT" y haga su búsqueda en la pantalla de SUNAT.');
   if (!/(^|\.)intranet\.sunat\.peru$/i.test(location.hostname)) {
     log('Aviso: este no parece el contexto "iframeApplication (intranet.sunat.peru)". Cámbielo en el selector de contexto de la consola.', 'warn');
   }
