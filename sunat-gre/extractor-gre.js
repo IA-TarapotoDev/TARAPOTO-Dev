@@ -1,14 +1,17 @@
 /* =====================================================================
  * EXTRACTOR GRE – Guías de Remisión Electrónica (SUNAT, uso autorizado)
- * Versión 1.1.0
+ * Versión 1.2.0
  *
  * Dónde ejecutarlo:
  *   Microsoft Edge > DevTools > Console > contexto
  *   "iframeApplication (resultado) – intranet.sunat.peru"
  *
  * Qué hace:
- *   0. (Opcional) Toma el token y los filtros de una búsqueda hecha en la
- *      propia pantalla de SUNAT ("Capturar desde SUNAT"), sin copiar nada a mano.
+ *   0. (Recomendado) Toma el token, las cabeceras y los filtros de una búsqueda
+ *      hecha en la propia pantalla de SUNAT ("Capturar desde SUNAT"), sin copiar
+ *      nada a mano, y repite esa búsqueda de forma idéntica (solo cambian los
+ *      valores del panel). Si la API rechaza la consulta, hace un diagnóstico
+ *      automático comparándola con la búsqueda que sí hizo SUNAT.
  *   1. Consulta el listado paginado de GRE del rango indicado.
  *   2. Elimina duplicados.
  *   3. Consulta el detalle de cada guía, de una en una, con pausas.
@@ -28,7 +31,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '1.1.0';
+  const VERSION = '1.2.0';
   const API_LISTADO = 'https://api-intranet.sunat.peru/v1/contribuyente/gre/comprobantes';
   const PANEL_ID = 'gre-extractor-host';
 
@@ -117,8 +120,12 @@
   let ui = null; // referencias del panel (si existe)
 
   // Captura desde la aplicación SUNAT. Solo en memoria (nunca global ni persistente).
-  let tokenCapturado = null;     // se consume al iniciar y se descarta al terminar
-  let filtrosCapturados = null;  // filtros de la última búsqueda hecha en la pantalla de SUNAT (sin token)
+  let tokenCapturado = null;       // se consume al iniciar y se descarta al terminar
+  let cabecerasCapturadas = null;  // otras cabeceras que envía la aplicación (se descartan junto con el token)
+  let filtrosCapturados = null;    // filtros de la última búsqueda hecha en la pantalla de SUNAT (sin token)
+  // Direcciones (sin token) de la última búsqueda y de la última guía abierta en SUNAT.
+  // La búsqueda se usa como plantilla exacta y ambas sirven para el diagnóstico automático.
+  const urlsCapturadas = { listado: '', detalle: '' };
   const captura = { activa: false, temporizador: null, restaurar: null };
 
   /* ---------------------------------------------------------------
@@ -335,7 +342,9 @@
       maxDiasRango: entero(op.maxDiasRango, 'Máximo de días del rango', 0, 3660, D.maxDiasRango),
       maxPaginas: entero(op.maxPaginas, 'Máximo de páginas', 1, 100000, D.maxPaginas),
       timeoutMs: entero(op.timeoutMs, 'Tiempo máximo por solicitud', 5000, 300000, D.timeoutMs),
-      maxErroresConsecutivos: entero(op.maxErroresConsecutivos, 'Máximo de errores consecutivos', 1, 1000, D.maxErroresConsecutivos)
+      maxErroresConsecutivos: entero(op.maxErroresConsecutivos, 'Máximo de errores consecutivos', 1, 1000, D.maxErroresConsecutivos),
+      // Búsqueda capturada de SUNAT: se usa como plantilla para que la consulta sea idéntica a la de la aplicación.
+      plantillaListado: urlsCapturadas.listado || ''
     };
 
     // Pausa: "pausaMs" fija, o rango mínimo/máximo.
@@ -382,28 +391,46 @@
     if (!t.trim() && tokenCapturado) { t = tokenCapturado; origen = 'capturado de la aplicación'; }
     tokenCapturado = null; // se consume una sola vez
     if (!t.trim()) t = window.prompt('Pegue el token Bearer (solo se usa en memoria y se descarta al terminar):', '') || '';
-    t = t.trim().replace(/^bearer\s+/i, '').trim();
+    t = limpiarToken(t);
     if (!t) throw new ErrorValidacion('No se ingresó el token Bearer. Pulse "Capturar desde SUNAT" o péguelo en el campo del token.');
+    if (/…|\.\.\./.test(t)) {
+      throw new ErrorValidacion('El token está cortado (contiene "…"): DevTools solo mostró una parte. ' +
+        'Use "Capturar desde SUNAT" o, en Network, clic derecho sobre la cabecera authorization > "Copy value".');
+    }
     if (/\s/.test(t)) throw new ErrorValidacion('El token contiene espacios o saltos de línea. Cópielo nuevamente.');
     return { token: t, origen };
   }
 
+  /** Quita lo que suele colarse al copiar: comillas, comas, punto y coma y la palabra "Bearer". */
+  function limpiarToken(valor) {
+    const bordes = /^["'`]+|["'`,;]+$/g;
+    return String(valor || '').trim().replace(bordes, '').trim()
+      .replace(/^bearer\s+/i, '').trim().replace(bordes, '').trim();
+  }
+
   /**
-   * Lee, solo localmente, la fecha de vencimiento de un token JWT.
+   * Lee, solo localmente, la fecha de vencimiento (y de emisión) de un token JWT.
    * No registra ni exporta ningún otro dato del token.
    */
   function analizarToken(token) {
     const partes = String(token || '').split('.');
-    if (partes.length !== 3) return { tipo: 'opaco', exp: null };
+    if (partes.length !== 3) return { tipo: 'opaco', exp: null, iat: null };
     try {
+      if (!partes.every((p) => /^[A-Za-z0-9_-]*$/.test(p))) throw new Error('caracteres no válidos');
       let b64 = partes[1].replace(/-/g, '+').replace(/_/g, '/');
       b64 += '='.repeat((4 - (b64.length % 4)) % 4);
       const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
       const carga = JSON.parse(new TextDecoder().decode(bytes));
       const exp = Number(carga && carga.exp);
-      return { tipo: 'jwt', exp: Number.isFinite(exp) && exp > 0 ? exp * 1000 : null, sinFirma: !partes[2] };
+      const iat = Number(carga && carga.iat);
+      return {
+        tipo: 'jwt',
+        exp: Number.isFinite(exp) && exp > 0 ? exp * 1000 : null,
+        iat: Number.isFinite(iat) && iat > 0 ? iat * 1000 : null,
+        sinFirma: !partes[2]
+      };
     } catch (_) {
-      return { tipo: 'ilegible', exp: null };
+      return { tipo: 'ilegible', exp: null, iat: null };
     }
   }
 
@@ -411,7 +438,7 @@
   function validarVencimientoToken(token, origen) {
     const info = analizarToken(token);
     if (info.tipo === 'ilegible' || info.sinFirma) {
-      log('Aviso: el token no se pudo leer completo; puede estar cortado. Si falla, use "Capturar desde SUNAT" o cópielo de nuevo.', 'warn');
+      log('Aviso: el token no se pudo leer completo; puede estar cortado o tener caracteres de más. Si falla, use "Capturar desde SUNAT".', 'warn');
       return null;
     }
     if (!info.exp) {
@@ -423,7 +450,8 @@
       throw new ErrorValidacion(`El token venció a las ${horaDe(info.exp)} (hace ${Math.max(1, Math.round(-restante / 60000))} min). ` +
         'Obtenga uno nuevo: pulse "Capturar desde SUNAT" y haga una búsqueda o abra una guía con "Ver".');
     }
-    log(`Token ${origen}, válido hasta las ${horaDe(info.exp)} (quedan ${Math.floor(restante / 60000)} min).`, restante < 3 * 60000 ? 'warn' : 'ok');
+    const vida = info.iat && info.exp > info.iat ? `; dura ${Math.max(1, Math.round((info.exp - info.iat) / 60000))} min en total` : '';
+    log(`Token ${origen}, válido hasta las ${horaDe(info.exp)} (quedan ${Math.floor(restante / 60000)} min${vida}).`, restante < 3 * 60000 ? 'warn' : 'ok');
     return info.exp;
   }
 
@@ -522,6 +550,7 @@
           credentials: 'omit',
           headers: {
             accept: 'application/json, text/plain, */*',
+            ...(ctx.cabecerasExtra || {}),   // las mismas cabeceras que usa la aplicación (si se capturaron)
             authorization: 'Bearer ' + ctx.token
           },
           signal: ctrl.signal
@@ -592,14 +621,21 @@
    * 7. Listado paginado
    * ------------------------------------------------------------- */
   function construirUrlListado(cfg, page) {
-    const p = new URLSearchParams();
+    // Si hay una búsqueda capturada de SUNAT, se usa como plantilla: conserva el orden, el formato
+    // de las fechas y cualquier parámetro adicional que envíe la aplicación. Solo cambian los valores.
+    let p = new URLSearchParams();
+    if (cfg.plantillaListado) {
+      try { p = new URL(cfg.plantillaListado).searchParams; } catch (_) { p = new URLSearchParams(); }
+    }
+    const fechaDMY = /^\d{2}\/\d{2}\/\d{4}$/.test(p.get('fecEmisionIni') || '');
+    const fecha = (iso) => (fechaDMY && iso ? iso.split('-').reverse().join('/') : iso);
     p.set('numRucEmisor', cfg.rucEmisor);
     p.set('numRucReceptor', cfg.rucReceptor);
     p.set('codCpe', cfg.codCpe);
     p.set('numSerie', cfg.numSerie);
     p.set('numCpe', cfg.numCpe);
-    p.set('fecEmisionIni', cfg.fechaInicio);
-    p.set('fecEmisionFin', cfg.fechaFin);
+    p.set('fecEmisionIni', fecha(cfg.fechaInicio));
+    p.set('fecEmisionFin', fecha(cfg.fechaFin));
     p.set('codEstado', cfg.codEstado);
     p.set('codSubEstado', cfg.codSubEstado);
     p.set('rangoHoras', cfg.rangoHoras);
@@ -607,6 +643,65 @@
     p.set('per_page', String(cfg.perPage));
     p.set('tipBusqueda', cfg.tipBusqueda);
     return `${API_LISTADO}?${p.toString()}`;
+  }
+
+  const NOMBRES_PARAMETROS = {
+    numRucEmisor: 'RUC emisor', numRucReceptor: 'RUC receptor', codCpe: 'Código CPE', numSerie: 'Serie',
+    numCpe: 'Número', fecEmisionIni: 'Fecha inicial', fecEmisionFin: 'Fecha final', codEstado: 'Código estado',
+    codSubEstado: 'Código subestado', rangoHoras: 'Rango de horas', per_page: 'Registros por página', tipBusqueda: 'Tipo de búsqueda'
+  };
+
+  /** Lista, en lenguaje simple, qué cambió entre la búsqueda de SUNAT y la del extractor. */
+  function diferenciasConBusqueda(urlSunat, urlExtractor) {
+    let a, b;
+    try { a = new URL(urlSunat).searchParams; b = new URL(urlExtractor).searchParams; } catch (_) { return []; }
+    const nombres = new Set([...a.keys(), ...b.keys()]);
+    nombres.delete('page');
+    const difs = [];
+    for (const n of nombres) {
+      const va = a.has(n) ? a.get(n) : null, vb = b.has(n) ? b.get(n) : null;
+      if (va === vb) continue;
+      const mostrar = (v) => (v === null ? '(no lo envía)' : v === '' ? '(vacío)' : `"${v}"`);
+      difs.push(`${NOMBRES_PARAMETROS[n] || n}: SUNAT usó ${mostrar(va)}, el extractor ${mostrar(vb)}`);
+    }
+    return difs;
+  }
+
+  /**
+   * Cuando la primera página falla sin respuesta legible ("Failed to fetch"), repite una sola vez
+   * una consulta que la propia pantalla de SUNAT acaba de hacer, para separar las causas:
+   * si esa funciona, el token y la conexión están bien y el problema son los filtros; si no, es el token.
+   */
+  async function diagnosticarFalloListado(ctx, urlFallida) {
+    const urlPrueba = urlsCapturadas.listado || urlsCapturadas.detalle;
+    if (!urlPrueba) return AYUDA_FALLO_CONEXION.slice();
+    const esBusqueda = urlPrueba === urlsCapturadas.listado;
+    const queEs = esBusqueda ? 'la misma búsqueda que hizo la pantalla de SUNAT' : 'la consulta de la guía que abrió en SUNAT';
+    log(`Diagnóstico: se repetirá una sola vez ${queEs}...`, 'warn');
+    let r;
+    try {
+      r = await pedirJSON(urlPrueba, { ...ctx, cfg: { ...ctx.cfg, maxReintentos: 0 } }, 'DIAGNÓSTICO');
+    } catch (e) {
+      if (e instanceof ErrorAutenticacion || esAbort(e)) throw e;
+      r = { ok: false, mensaje: (e && e.message) || String(e) };
+    }
+    const lineas = ['Diagnóstico automático:'];
+    if (r.ok) {
+      lineas.push(`• ${queEs[0].toUpperCase()}${queEs.slice(1)} SÍ funciona desde el extractor: el token y la conexión están bien.`);
+      const difs = esBusqueda ? diferenciasConBusqueda(urlPrueba, urlFallida) : [];
+      if (difs.length) {
+        lineas.push('• SUNAT rechaza la consulta por lo que cambió respecto de esa búsqueda:');
+        for (const d of difs) lineas.push(`   – ${d}`);
+      } else if (esBusqueda) {
+        lineas.push('• No hay diferencias con esa búsqueda; pudo ser un fallo momentáneo. Vuelva a pulsar Iniciar.');
+      }
+      lineas.push('• Solución: pulse "Capturar desde SUNAT", haga en la pantalla de SUNAT la búsqueda con el periodo y filtros que quiere, y pulse Iniciar sin cambiar nada.');
+    } else {
+      lineas.push(`• Incluso ${queEs} falla desde el extractor.`);
+      lineas.push('• Esto indica que SUNAT no acepta ese token fuera de su pantalla (por ejemplo, si cambia en cada consulta o ya no es válido), o que exige algo más que el extractor no envía.');
+      lineas.push('• Para confirmarlo: pestaña Network > clic en la solicitud "comprobantes?..." en rojo > Headers > "Status Code". Envíe esa captura sin mostrar el token.');
+    }
+    return lineas;
   }
 
   async function obtenerListado(ctx) {
@@ -623,8 +718,8 @@
 
       if (!r.ok) {
         if (page === 1) {
-          throw new ErrorDetencion(`No se pudo obtener la primera página del listado: ${r.mensaje}.`,
-            r.status === 0 ? AYUDA_FALLO_CONEXION : []);
+          const ayuda = r.status === 0 ? await diagnosticarFalloListado(ctx, url) : [];
+          throw new ErrorDetencion(`No se pudo obtener la primera página del listado: ${r.mensaje}.`, ayuda);
         }
         L.paginas.push({ page, esperados: esperadosEnPagina(L, page), recibidos: 0, ok: false, mensaje: r.mensaje, pageApi: '' });
         log(`Página ${page} del listado falló: ${r.mensaje}. Se continúa con la siguiente.`, 'error');
@@ -840,7 +935,7 @@
     }
     estado.ejecutando = true;
     let iniciado = false;
-    const ctx = { token: null, tokenExp: null, signal: null, cfg: null };
+    const ctx = { token: null, tokenExp: null, cabecerasExtra: null, signal: null, cfg: null };
 
     try {
       const cfg = normalizarConfig(opciones);
@@ -848,6 +943,9 @@
       const datosToken = obtenerToken(opciones);
       ctx.token = datosToken.token;
       datosToken.token = null;
+      // Las demás cabeceras que usa la aplicación (si se capturaron) se envían igual que ella.
+      ctx.cabecerasExtra = cabecerasCapturadas ? { ...cabecerasCapturadas } : {};
+      cabecerasCapturadas = null;
       // Borrar el token del objeto recibido para que no quede referenciado.
       if (opciones && typeof opciones === 'object' && 'token' in opciones) { try { opciones.token = ''; } catch (_) { /* objeto congelado */ } }
       ctx.tokenExp = validarVencimientoToken(ctx.token, datosToken.origen);
@@ -869,6 +967,9 @@
         log(`Aviso: el contexto actual es ${location.origin}. Se esperaba intranet.sunat.peru (iframeApplication).`, 'warn');
       }
       log(`Inicio: ${cfg.fechaInicio} a ${cfg.fechaFin} (${cfg.diasRango} día(s)), CPE ${cfg.codCpe}.`);
+      if (cfg.plantillaListado) log('Se usa como base la búsqueda copiada de SUNAT (mismos parámetros y formato; solo cambian los valores del panel).');
+      const nombresExtra = Object.keys(ctx.cabecerasExtra);
+      if (nombresExtra.length) log(`Se envían también las cabeceras que usa la aplicación: ${nombresExtra.join(', ')}.`);
 
       // 1) Listado
       const items = await obtenerListado(ctx);
@@ -906,10 +1007,11 @@
         console.error(e);
       }
     } finally {
-      // Descartar el token
+      // Descartar el token y las cabeceras usadas (el token capturado ya se consumió al iniciar;
+      // si la ejecución no llegó a usarlo, por ejemplo por una fecha mal escrita, se conserva para reintentar).
       ctx.token = null;
       ctx.tokenExp = null;
-      tokenCapturado = null;
+      ctx.cabecerasExtra = null;
       estado.ejecutando = false;
       estado.pausado = false;
       estado.controller = null;
@@ -1517,11 +1619,14 @@
   const RUTA_API_GRE = '/v1/contribuyente/gre/';
   const RUTA_LISTADO = '/v1/contribuyente/gre/comprobantes';
   const CAPTURA_MAX_MS = 5 * 60 * 1000;
+  const RE_RUTA_DETALLE = /^\/v1\/contribuyente\/gre\/comprobantes\/[^/]+$/;
   const PARAMETROS_A_CAMPOS = {
     numRucEmisor: 'rucEmisor', numRucReceptor: 'rucReceptor', codCpe: 'codCpe', numSerie: 'numSerie',
     numCpe: 'numCpe', fecEmisionIni: 'fechaInicio', fecEmisionFin: 'fechaFin', codEstado: 'codEstado',
-    codSubEstado: 'codSubEstado', rangoHoras: 'rangoHoras', tipBusqueda: 'tipBusqueda'
+    codSubEstado: 'codSubEstado', rangoHoras: 'rangoHoras', tipBusqueda: 'tipBusqueda', per_page: 'perPage'
   };
+  // Cabeceras que no se copian: el token va aparte y las demás las pone el propio navegador.
+  const CABECERAS_NO_COPIABLES = /^(authorization|cookie2?|content-length|host|origin|referer|connection|keep-alive|te|trailer|transfer-encoding|upgrade|via|expect|date|dnt|accept-charset|accept-encoding|set-cookie|proxy-.*|sec-.*|access-control-request-.*)$/i;
 
   /** Convierte dd/mm/aaaa a aaaa-mm-dd si la aplicación usara ese formato. */
   function normalizarFechaCapturada(valor) {
@@ -1529,15 +1634,19 @@
     return m ? `${m[3]}-${m[2]}-${m[1]}` : valor;
   }
 
-  /** Lee la cabecera Authorization de una llamada fetch(input, init). */
-  function autorizacionDeFetch(input, init) {
-    const fuentes = [];
-    if (init && init.headers) fuentes.push(init.headers);
-    if (typeof Request !== 'undefined' && input instanceof Request) fuentes.push(input.headers);
-    for (const cabeceras of fuentes) {
-      try { const v = new Headers(cabeceras).get('authorization'); if (v) return v; } catch (_) { /* formato no estándar */ }
-    }
-    return '';
+  /** Convierte cualquier forma de cabeceras (objeto, arreglo o Headers) en { nombre en minúsculas: valor }. */
+  function cabecerasComoObjeto(fuente) {
+    const r = {};
+    try { new Headers(fuente).forEach((v, k) => { r[k.toLowerCase()] = v; }); } catch (_) { /* formato no estándar */ }
+    return r;
+  }
+
+  /** Cabeceras de una llamada fetch(input, init). */
+  function cabecerasDeFetch(input, init) {
+    const r = {};
+    if (typeof Request !== 'undefined' && input instanceof Request) Object.assign(r, cabecerasComoObjeto(input.headers));
+    if (init && init.headers) Object.assign(r, cabecerasComoObjeto(init.headers));
+    return r;
   }
 
   function textoVence(token) {
@@ -1545,21 +1654,32 @@
     return info.exp ? ` (vence a las ${horaDe(info.exp)})` : '';
   }
 
-  /** Revisa una solicitud de la aplicación: si va a la API de GRE, toma el token y, si es el listado, los filtros. */
-  function procesarSolicitudApp(url, autorizacion) {
+  /**
+   * Revisa una solicitud de la aplicación: si va a la API de GRE, toma el token y las demás
+   * cabeceras; si es una búsqueda (listado), copia además sus filtros y la guarda como plantilla.
+   */
+  function procesarSolicitudApp(metodo, url, cabeceras) {
     if (!captura.activa || !url) return;
     let u;
     try { u = new URL(String(url), location.href); } catch (_) { return; }
     if (u.hostname !== HOST_API || !u.pathname.startsWith(RUTA_API_GRE)) return;
-    const m = /^bearer\s+(\S+)$/i.exec(String(autorizacion || '').trim());
+    const m = /^bearer\s+(\S+)$/i.exec(String((cabeceras && cabeceras.authorization) || '').trim());
     if (!m || /^(null|undefined)$/i.test(m[1])) return;
 
+    const extra = {};
+    for (const [k, v] of Object.entries(cabeceras || {})) if (!CABECERAS_NO_COPIABLES.test(k)) extra[k] = v;
+    cabecerasCapturadas = extra;
     if (m[1] !== tokenCapturado) {
       tokenCapturado = m[1];
       log(`Token capturado de la aplicación${textoVence(tokenCapturado)}.`, 'ok');
     }
 
-    if (u.pathname.replace(/\/+$/, '') === RUTA_LISTADO) {
+    const ruta = u.pathname.replace(/\/+$/, '');
+    const esGet = String(metodo || 'GET').toUpperCase() === 'GET';
+    if (esGet && RE_RUTA_DETALLE.test(ruta)) urlsCapturadas.detalle = u.href;
+
+    if (esGet && ruta === RUTA_LISTADO) {
+      urlsCapturadas.listado = u.href; // solo la dirección con los filtros (sin token)
       const filtros = {};
       for (const [param, campo] of Object.entries(PARAMETROS_A_CAMPOS)) {
         if (u.searchParams.has(param)) filtros[campo] = normalizarFechaCapturada(u.searchParams.get(param).trim());
@@ -1585,25 +1705,39 @@
     if (captura.activa) return;
     const restauradores = [];
 
-    // Solicitudes XMLHttpRequest (las que usa normalmente la aplicación)
+    // Solicitudes XMLHttpRequest (las que usa normalmente la aplicación).
+    // Se anotan método, dirección y cabeceras, y se revisan al momento de enviarse.
     const protoXHR = window.XMLHttpRequest && window.XMLHttpRequest.prototype;
     if (protoXHR) {
-      const urls = new WeakMap();
+      const datos = new WeakMap(); // xhr -> { metodo, url, cabeceras }
       const openOriginal = protoXHR.open;
       const cabeceraOriginal = protoXHR.setRequestHeader;
+      const sendOriginal = protoXHR.send;
       const openEnvuelto = function (metodo, url) {
-        try { urls.set(this, String(url)); } catch (_) { /* ignorar */ }
+        try { datos.set(this, { metodo: String(metodo), url: String(url), cabeceras: {} }); } catch (_) { /* ignorar */ }
         return openOriginal.apply(this, arguments);
       };
       const cabeceraEnvuelta = function (nombre, valor) {
-        try { if (/^authorization$/i.test(String(nombre))) procesarSolicitudApp(urls.get(this), valor); } catch (_) { /* nunca romper la aplicación */ }
+        try {
+          const d = datos.get(this);
+          if (d) {
+            const k = String(nombre).toLowerCase();
+            d.cabeceras[k] = d.cabeceras[k] ? `${d.cabeceras[k]}, ${valor}` : String(valor);
+          }
+        } catch (_) { /* nunca romper la aplicación */ }
         return cabeceraOriginal.apply(this, arguments);
+      };
+      const sendEnvuelto = function () {
+        try { const d = datos.get(this); if (d) procesarSolicitudApp(d.metodo, d.url, d.cabeceras); } catch (_) { /* nunca romper la aplicación */ }
+        return sendOriginal.apply(this, arguments);
       };
       protoXHR.open = openEnvuelto;
       protoXHR.setRequestHeader = cabeceraEnvuelta;
+      protoXHR.send = sendEnvuelto;
       restauradores.push(() => {
         if (protoXHR.open === openEnvuelto) protoXHR.open = openOriginal;
         if (protoXHR.setRequestHeader === cabeceraEnvuelta) protoXHR.setRequestHeader = cabeceraOriginal;
+        if (protoXHR.send === sendEnvuelto) protoXHR.send = sendOriginal;
       });
     }
 
@@ -1612,8 +1746,10 @@
     if (typeof fetchOriginal === 'function') {
       const fetchEnvuelto = function (input, init) {
         try {
-          const url = (typeof Request !== 'undefined' && input instanceof Request) ? input.url : String(input);
-          procesarSolicitudApp(url, autorizacionDeFetch(input, init));
+          const esRequest = typeof Request !== 'undefined' && input instanceof Request;
+          const url = esRequest ? input.url : String(input);
+          const metodo = (init && init.method) || (esRequest ? input.method : 'GET');
+          procesarSolicitudApp(metodo, url, cabecerasDeFetch(input, init));
         } catch (_) { /* nunca romper la aplicación */ }
         return fetchOriginal.apply(window, arguments);
       };
@@ -1645,13 +1781,14 @@
   }
 
   function textoEstadoToken() {
+    const base = urlsCapturadas.listado ? ' Búsqueda de SUNAT copiada: se usará como base.' : '';
     if (captura.activa) {
       return tokenCapturado
         ? `Token capturado${textoVence(tokenCapturado)}. Si quiere copiar también los filtros, pulse "Buscar" en SUNAT; si no, pulse Iniciar.`
         : 'Esperando… En la pantalla de SUNAT pulse "Buscar" (copia token y filtros) o abra una guía con "Ver" (solo token).';
     }
-    if (tokenCapturado) return `Token capturado de la aplicación${textoVence(tokenCapturado)}. Listo para Iniciar.`;
-    return 'Sin token capturado. Pulse el botón, o pegue el token abajo (si no, se pedirá al iniciar).';
+    if (tokenCapturado) return `Token capturado de la aplicación${textoVence(tokenCapturado)}.${base} Listo para Iniciar.`;
+    return `Sin token capturado.${base} Pulse "Capturar desde SUNAT", o pegue el token abajo (si no, se pedirá al iniciar).`;
   }
 
   /* ---------------------------------------------------------------
@@ -1892,7 +2029,9 @@
     if (estado.ejecutando && estado.controller) estado.controller.abort();
     detenerCaptura('destruir');
     tokenCapturado = null;
+    cabecerasCapturadas = null;
     filtrosCapturados = null;
+    urlsCapturadas.listado = ''; urlsCapturadas.detalle = '';
     clearInterval(refresco);
     cerrarPanel();
     estado.resultados.clear(); estado.previos.clear(); estado.memoria.clear();
@@ -1913,6 +2052,7 @@
     detenerCaptura: () => detenerCaptura('usuario'),
     get hayTokenCapturado() { return !!tokenCapturado; },
     get filtrosCapturados() { return filtrosCapturados ? { ...filtrosCapturados } : null; },
+    get busquedaCapturada() { return urlsCapturadas.listado || null; }, // solo la dirección, sin token
     cargarJSONPrevio, seleccionarJSONPrevio, limpiarPrevios, olvidarResultados,
     descargar, descargarTodo, exportar,
     flattenObject,
