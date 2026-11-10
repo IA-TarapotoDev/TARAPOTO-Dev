@@ -219,6 +219,11 @@
   .bloque.ancho { grid-column: 1 / -1; }
   .paso-c { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }
   .paso-c .fl { color: var(--mudo); }
+  .guias { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 330px), 1fr)); gap: 10px; }
+  .guia { border: 1px solid var(--borde); border-radius: 10px; padding: 8px 10px; display: grid; gap: 3px; min-width: 0; overflow-wrap: anywhere; }
+  .guia.baja { opacity: .78; border-style: dashed; }
+  .bloque .mudo { color: var(--suave); font-size: 12.5px; }
+  .guia .bienes { font-size: 12.5px; background: color-mix(in srgb, var(--mudo) 8%, transparent); border-radius: 6px; padding: 4px 6px; }
 
   /* ---------- tablas ---------- */
   .barra-tabla { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 10px; }
@@ -430,6 +435,7 @@ const ICONOS = {
   lupax: '<circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5.5 5.5M8.3 8.3l4.4 4.4M12.7 8.3l-4.4 4.4"/>',
   devol: '<path d="M9 14L4.5 9.5 9 5"/><path d="M4.5 9.5H15a5 5 0 0 1 0 10h-3"/>',
   camion: '<path d="M2.5 6.5h11v9h-11z"/><path d="M13.5 9.5h4l3 3.2v2.8h-7z"/><path d="M16 4l3 2.5-3 2.5"/>',
+  ruta: '<circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="6" r="2.2"/><path d="M8.2 18h6.3a3 3 0 0 0 0-6h-5a3 3 0 0 1 0-6h6.3"/>',
   almacen: '<path d="M3 20.5V9l9-5.5L21 9v11.5"/><path d="M7 20.5v-8h10v8M7 16h10"/>',
   nuevo: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M18.5 16v4M16.5 18h4"/>',
   abrir: '<path d="M14 4.5h5.5V10"/><path d="M19.5 4.5L11 13"/><path d="M18 14v4.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 4 18.5v-11A1.5 1.5 0 0 1 5.5 6H10"/>',
@@ -663,8 +669,12 @@ const MARCAS = {
   venta: { t: "Venta enlazada por número de serie", ic: "ventas", c: "var(--texto)" },
   post: { t: "Beneficio concluido después de la venta (reconocimiento físico o NCN)", ic: "calendario", c: "var(--critico)" },
   mudo: { t: "Al comprar figuraba en la ZTE; hoy está domiciliado fuera", ic: "mudanza", c: "var(--serio)" },
+  gre_ztc: { t: "Guía de remisión con llegada fuera de la ZTE", ic: "ruta", c: "var(--critico)" },
+  gre_cambio: { t: "Guía a la ZTC dada de baja y cambiada por otra a la ZTE", ic: "ruta", c: "var(--serio)" },
+  gre_zte: { t: "Guía de remisión con llegada en la ZTE", ic: "ruta", c: "var(--ok)" },
+  gre: { t: "Con guía de remisión de la máquina", ic: "ruta", c: "var(--texto)", oculta: 1 },
 };
-const marcasH = mk => `<span class="mks">${(mk || []).map(k => MARCAS[k] ? `<span class="mk" title="${esc(MARCAS[k].t)}" role="img" aria-label="${esc(MARCAS[k].t)}" style="color:${MARCAS[k].c}">${ic(MARCAS[k].ic)}</span>` : "").join("")}</span>`;
+const marcasH = mk => `<span class="mks">${(mk || []).map(k => MARCAS[k] && !MARCAS[k].oculta ? `<span class="mk" title="${esc(MARCAS[k].t)}" role="img" aria-label="${esc(MARCAS[k].t)}" style="color:${MARCAS[k].c}">${ic(MARCAS[k].ic)}</span>` : "").join("")}</span>`;
 const marcasT = mk => (mk || []).map(k => MARCAS[k] ? MARCAS[k].t : k);
 function leyendaMarcas(claves) {
   return el("details", { class: "leyenda-mk" }, el("summary", {}, "Qué significa cada ícono"),
@@ -757,6 +767,36 @@ function bloqueComprador(cl, extra = []) {
     ["Estado del RUC", [cl.eruc, cl.condicion].filter(Boolean).map(esc).join(" · ") + (cl.no_habido ? ` <span class="etq alerta">revisar</span>` : "")],
     ...extra,
   ]);
+}
+
+/* Guías de remisión enlazadas: partida y llegada con su zona, bienes, estado y cómo se enlazó */
+const POR_GRE = { "factura citada en la guía": "la guía cita la factura", "serie de la máquina": "la serie o el motor de la máquina está en los bienes",
+  "guía del transportista": "guía del transportista que sigue a la del remitente", "guía citada en la factura": "la factura cita la guía",
+  "tipo de máquina, comprador y fecha": "probable: mismo tipo de máquina, comprador y fechas cercanas" };
+const persG = x => x && (x.nombre || x.ruc) ? `${esc(x.nombre || x.ruc)}${x.nombre && x.ruc ? ` <span class="etq">${esc(x.ruc)}</span>` : ""}` : "s/d";
+function guiaH(g, por, fVenta) {
+  const d = fVenta && g.f ? Math.round((new Date(g.f) - new Date(fVenta)) / 864e5) : null;
+  const est = g.estado === "Baja" ? ` <span class="etq alerta" title="${esc(g.baja || "")}">dada de baja</span>` : !g.vig ? ` <span class="etq pend">sustentada en una guía dada de baja</span>` : "";
+  const lleg = g.vig && g.l.zona === "ZTC" ? "alerta" : g.vig && g.l.zona === "ZTE" ? "ok" : "";
+  const bienes = (g.bienes || []).slice(0, 3).map(esc).join("<br>") + ((g.nb || 0) > 3 ? `<br><span class="etq">y ${f0(g.nb - 3)} más</span>` : "");
+  return `<div class="guia${g.vig ? "" : " baja"}">` +
+    `<div class="paso-c"><b>${copiable(g.num)}</b> <span class="etq">${esc(g.tipo)}</span> ${fecha(g.f)}` +
+    (d != null ? ` <span class="etq">${d === 0 ? "el día de la venta" : Math.abs(d) + (Math.abs(d) === 1 ? " día " : " días ") + (d > 0 ? "después" : "antes")}</span>` : "") + est + `</div>` +
+    `<div class="paso-c">${esc(g.p.lugar || "s/d")} ${zonaH(g.p.zona)} <span class="fl">→</span> <b>${esc(g.l.lugar || "s/d")}</b> <span class="etq ${lleg}">${esc(zonaT(g.l.zona))}</span></div>` +
+    (g.l.dir ? `<div class="mudo">Llegada: ${esc(g.l.dir)}</div>` : "") +
+    `<div class="mudo">Emisor: ${persG(g.em)} · Destinatario: ${persG(g.de)}${g.rem ? " · Remitente: " + persG(g.rem) : ""}</div>` +
+    `<div class="mudo">${g.motivo ? "Motivo: " + esc(g.motivo) + " · " : ""}${g.fi ? "Inicio del traslado: " + fecha(g.fi) + " · " : ""}${(g.placas || []).length ? "Placas: " + g.placas.map(esc).join(", ") + " · " : ""}${g.peso ? "Peso: " + esc(g.peso) : ""}</div>` +
+    (bienes ? `<div class="bienes">${bienes}</div>` : `<div class="mudo">La guía no detalla los bienes.</div>`) +
+    (por ? `<div class="mudo">Enlace: ${esc(POR_GRE[por] || por)}</div>` : "") + `</div>`;
+}
+function bloqueGuias(c) {
+  const gs = (c.gre || []).map(x => [D.guias[x.i], x.por]).filter(x => x[0]);
+  const b = c.gre_bus;
+  const busq = b ? `<p class="mudo">Búsqueda del equipo: guías del comprador del ${fecha(b.desde)} al ${fecha(b.hasta)} (${f0(b.n)} ${b.n === 1 ? "guía" : "guías"})${b.incompleta ? " · <b>búsqueda incompleta</b>" : ""}.</p>` : "";
+  if (!gs.length) return b ? bloque("Guías de remisión", "ruta", [], { clase: "pend", html: `<p>Ninguna guía consultada lleva esta máquina.</p>` + busq }) : null;
+  const mot = c.mot || [];
+  return bloque(`Guías de remisión (${gs.length})`, "ruta", [], { clase: "ancho " + (mot.includes("gre_ztc") || mot.includes("gre_cambio") ? "alerta" : mot.includes("gre_zte") ? "ok" : "pend"),
+    html: `<div class="guias">${gs.map(([g, por]) => guiaH(g, por, c.f)).join("")}</div>` + busq });
 }
 
 /* ---------- ver la factura (representación desde el XML) ---------- */
@@ -1144,11 +1184,14 @@ function cronologia(c) {
     if (p.nc) ev.push([p.nc_f, `Nota de crédito ${folio(p.nc)}`]);
   }
   ev.push([venta, `Venta: factura ${folio(c.cpe)} a ${c.cli}`, "venta"]);
+  const gs = (c.gre || []).map(x => D.guias[x.i]).filter(Boolean);
+  const rem = gs.filter(g => g.tipo !== "Transportista");
+  for (const g of rem.length ? rem : gs) if (g.f) ev.push([g.f, `Guía ${g.num}: ${g.p.lugar || "s/d"} → ${g.l.lugar || "s/d"} (${zonaT(g.l.zona)})${g.estado === "Baja" ? ", dada de baja" : ""}`, g.vig && g.l.zona === "ZTC" ? "guia_ztc" : "guia"]);
   if (ev.length < 3) return null;
   ev.sort((a, b) => a[0].localeCompare(b[0]));
   const dias = f => Math.round((new Date(f) - new Date(venta)) / 864e5);
   const filas = ev.map(([f, t, tipo]) => {
-    const d = dias(f), tarde = tipo === "control" && d > 0 && c.nivel === "Alta";
+    const d = dias(f), tarde = (tipo === "control" && d > 0 && c.nivel === "Alta") || tipo === "guia_ztc";
     return `<li>${fecha(f)} · ${tipo === "venta" ? "<b>" + esc(t) + "</b>" : esc(t)}` + (tipo === "venta" ? "" : ` <span class="etq ${tarde ? "alerta" : ""}">${d === 0 ? "el día de la venta" : Math.abs(d) + (Math.abs(d) === 1 ? " día " : " días ") + (d > 0 ? "después" : "antes")}</span>`) + `</li>`;
   });
   return bloque("Cronología", "calendario", [], { html: `<ul>${filas.join("")}</ul>`, clase: (c.post || []).some(p => p.t !== "dil") ? "alerta" : "" });
@@ -1186,6 +1229,7 @@ function fichaCaso(c) {
         `${c.dam_ext.obs ? ". " + esc(c.dam_ext.obs) : ""}.</p>` : s ? `<p>La serie no está en las DAM de ${esc(mesLargo(D.meta.desde))} a ${esc(mesLargo(D.meta.hasta))}: la máquina se importó antes. Búsquela en el sistema aduanero por la serie y el motor.</p>`
         : `<p>Sin el XML no se conoce la serie de la máquina. Descárguelo del portal (datos arriba) y súbalo: la máquina se enlazará con su DAM y su control.</p>` }));
   }
+  const bg = bloqueGuias(c); if (bg) b.append(bg);
   const cr = cronologia(c); if (cr) b.append(cr);
   for (const i of c.tras || []) b.append(bloqueTraslado(i, true, v));
   for (const i of c.tras_prob || []) b.append(bloqueTraslado(i, false, v));
@@ -1215,7 +1259,8 @@ function vistaAlertas(sec) {
     el("ul", { class: "nota" },
       el("li", {}, `Lista del día (ayer y hoy): ${f0(nReinc)} ${nReinc === 1 ? "comprador reincidente" : "compradores reincidentes"} (con casos altos o medios) como remitentes y destinatarios, el importador (RUC ${D.meta.ruc}) y ` +
         (transp.length ? `${f0(transp.length)} ${transp.length === 1 ? "transportista" : "transportistas"}: ${transp.map(x => x.nombre ? `${x.nombre} (${x.ruc})` : x.ruc).join(", ")}.` : "ningún transportista (la lista se agrega al generar el tablero).")),
-      el("li", {}, `Casos: «Buscar guías» en cada caso, o todos los altos a la vez. Busca las guías del comprador desde ${VENTANA_CASO.antes} días antes hasta ${VENTANA_CASO.despues} días después de la venta, y las guías citadas en la factura.`)),
+      el("li", {}, `Casos: «Buscar guías» en cada caso, o todos los altos a la vez. Busca las guías del comprador desde ${VENTANA_CASO.antes} días antes hasta ${VENTANA_CASO.despues} días después de la venta, y las guías citadas en la factura.`),
+      ...(((D.gre || {}).claves || []).length ? [el("li", {}, `Integradas al tablero: ${f0(D.gre.claves.length)} guías (${(D.gre.archivos || []).map(x => `${x.titulo}, ${fecha(x.generado)}`).join("; ")}); ${f0((D.guias || []).length)} se enlazan con una venta o una máquina y se ven en su ficha. Las listas nuevas las marcan como conocidas para no descargarlas otra vez.`)] : [])),
     notaG);
   sec.append(tg);
 
@@ -1234,12 +1279,12 @@ function vistaAlertas(sec) {
   }
 
   const t = tarjeta(); sec.append(t);
-  t.append(leyendaMarcas(["post", "mudo", "igv", "ztc", "zte", "ext", "pub", "pn", "rev", "anul", "xml", "traza", "usada", "pend", "dnc", "ncn", "tras", "trasp", "exp"]));
+  t.append(leyendaMarcas(["post", "mudo", "gre_ztc", "gre_cambio", "gre_zte", "igv", "ztc", "zte", "ext", "pub", "pn", "rev", "anul", "xml", "traza", "usada", "pend", "dnc", "ncn", "tras", "trasp", "exp"]));
   t.append(el("p", { class: "nota" }, "En comprobantes con IGV el monto es el valor de venta más el 18 % calculado, sin redondear; pase el cursor sobre la etiqueta IGV para ver el valor de venta."));
   const textoMot = k => (D.meta.texto || {})[k] || k;
   t.append(el("p", { class: "nota" }, "Use «Agrupar por» para ver los casos por comprador, máquina, DAM, tipo de mercancía, departamento o traslado; cada grupo se abre con un clic. La elección se recuerda en este navegador."));
   tablaAlertas = tabla(t, { id: "casos", grupos: GRUPOS_CASOS, ph: "Buscar factura, comprador, RUC, serie…", porPag: 25, archivo: "casos.csv", filas: D.casos, detalle: fichaCaso,
-    extraBusqueda: r => (r.series || []).map(s => s.serie + " " + s.motor).join(" ") + " " + r.maqs.join(" ") + " " + r.dams.join(" "),
+    extraBusqueda: r => (r.series || []).map(s => s.serie + " " + s.motor).join(" ") + " " + r.maqs.join(" ") + " " + r.dams.join(" ") + " " + (r.gre || []).map(x => (D.guias[x.i] || {}).num || "").join(" "),
     cols: [{ k: "nivel", t: "Nivel", h: r => NIVEL(r.nivel), v: r => ORDEN_N[r.nivel], csv: r => r.nivel },
       { t: "Indicadores", v: r => marcasT(r.mk).join("; "), h: r => marcasH(r.mk) },
       { t: "Factura", v: r => folio(r.cpe), c: 1 }, { k: "f", t: "Fecha", f: fecha, c: 1 },
@@ -1264,6 +1309,8 @@ function fichaMaquina(m) {
     b.append(bloque("Venta enlazada", "ventas", [["Factura", `<a href="#alertas" data-caso="${esc(cpe)}">${esc(folio(cpe))}</a> · ${fecha(v ? v.f : "")}`],
       ["Comprador", esc(v ? v.cli : "")], ["Monto", v ? montoH(v) : ""], ["Caso", c ? NIVEL(c.nivel) + " " + esc(c.estado) : "Sin indicios"]], { clase: c && c.nivel === "Alta" ? "alerta" : "" }));
   }
+  if ((m.gre || []).length) b.append(bloque(`Guías de remisión con esta máquina (${m.gre.length})`, "ruta", [], { clase: "ancho",
+    html: `<div class="guias">${m.gre.map(i => D.guias[i]).filter(Boolean).map(g => guiaH(g, "", (IDX.venta.get((m.ventas || [])[0]) || {}).f)).join("")}</div>` }));
   const md = bloqueMismaDam(m.dam, m.k); if (md) b.append(md);
   return f;
 }

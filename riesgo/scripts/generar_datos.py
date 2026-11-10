@@ -15,6 +15,9 @@ Fuentes opcionales:
                   ubicacion_entrega, direccion_entrega, fuente, nota)
   --transportistas lista simple de transportistas vigilados (TXT: un RUC por línea, opcionalmente
                   seguido del nombre). Entran en la «Lista del día» de guías de remisión.
+  --guias        JSON que descarga el extractor de GRE (uno o más). Cada guía se enlaza con su venta
+                  (factura citada, serie de la máquina, o tipo de máquina, comprador y fecha) y su
+                  punto de llegada (ZTE o ZTC) entra al caso.
 
 Uso:
   python3 -I generar_datos.py DAMS.csv CPE_EMITIDOS.txt CPE_DETALLE.txt salida.json [opciones]
@@ -36,6 +39,7 @@ import sys
 import unicodedata
 import zipfile
 from datetime import date
+from html import unescape as html_unescape
 from collections import Counter
 from itertools import combinations
 
@@ -524,6 +528,110 @@ def leer_transportistas(ruta):
     return out
 
 
+TIPO_GRE = {"09": "Remitente", "31": "Transportista"}
+POR_GRE = {"factura citada en la guía": "por la factura citada en la guía", "serie de la máquina": "por la serie o el motor de la máquina",
+           "guía del transportista": "de guías del transportista que siguen a otra guía", "guía citada en la factura": "por la guía citada en la factura",
+           "tipo de máquina, comprador y fecha": "por tipo de máquina, comprador y fecha (probables)"}
+
+
+def leer_guias(rutas, r_ubi):
+    """Guías de remisión electrónicas (GRE) que descarga el extractor de GRE (JSON «GRE_EXTRACTOR_JSON»).
+    Admite varias descargas: una guía repetida (misma clave) se lee una sola vez, con las búsquedas de todas.
+    La zona (ZTE o ZTC) de la partida y de la llegada sale del ubigeo de cada dirección.
+    Devuelve (guías, meta); meta trae los archivos leídos y, por caso, el periodo consultado."""
+    if not rutas:
+        return [], None
+    u = pd.read_csv(r_ubi, dtype=str).fillna("")
+    zona_u = dict(zip(u.ubigeo, u.zona))
+    limpio = lambda x: re.sub(r"\s+", " ", html_unescape(str(x or ""))).strip()
+
+    def persona(d):
+        d = d or {}
+        return {"ruc": str(d.get("numDocIdentidad") or d.get("numRuc") or "").strip(), "nombre": limpio(d.get("desNombre") or d.get("desRuc"))}
+
+    def lugar(p):
+        d = (p or {}).get("direccion") or {}
+        ub = str(d.get("codUbigeo") or "").strip()
+        partes = []
+        for x in (d.get("desDistrito"), d.get("desProvincia"), d.get("desDepartamento")):
+            x = re.sub(r"^PROV\. CONST\. DEL ", "", limpio(x).upper())
+            if x and (not partes or partes[-1] != x):
+                partes.append(x)
+        return {"u": ub, "lugar": ", ".join(partes),
+                "zona": zona_u.get(ub, "Sin dato"), "dir": limpio(d.get("desDireccion"))[:140],
+                "ruc": str(((d.get("contribuyente") or {}).get("numRuc")) or "").strip()}
+
+    def fecha_listado(x):
+        m = re.match(r"(\d{2})/(\d{2})/(\d{4})", str(x or ""))
+        return f"{m.group(3)}-{m.group(2)}-{m.group(1)}" if m else ""
+    por, meta = {}, {"archivos": [], "busquedas": {}}
+    for ruta in rutas:
+        with open(ruta, encoding="utf-8-sig") as f:
+            d = json.load(f)
+        if not isinstance(d, dict) or d.get("formato") != "GRE_EXTRACTOR_JSON":
+            print(f"AVISO guías: {os.path.basename(ruta)} no es una descarga del extractor de GRE; se omite")
+            continue
+        p = d.get("pedido") or {}
+        meta["archivos"].append({"titulo": limpio(p.get("titulo")), "generado": str(p.get("generado") or "")[:10],
+                                 "version": str(d.get("version") or ""), "guias": len(d.get("guias") or [])})
+        for b in d.get("busquedas") or []:
+            caso = str(b.get("caso") or "").strip()
+            if not caso or b.get("grupo") not in ("caso", "citada"):
+                continue
+            x = meta["busquedas"].setdefault(caso, {"desde": "", "hasta": "", "incompleta": False, "n": 0})
+            for k, fn in (("desde", min), ("hasta", max)):
+                v = str(b.get(k) or "")[:10]
+                if re.fullmatch(r"\d{4}-\d{2}-\d{2}", v):
+                    x[k] = fn(x[k], v) if x[k] else v
+            x["incompleta"] |= bool(b.get("incompleta")) or (b.get("tipo") != "dividida" and b.get("estadoHttp") not in (200, None))
+        for g in d.get("guias") or []:
+            clave = str(g.get("clave") or "").strip()
+            if not clave:
+                continue
+            casos = {str(b.get("caso")).strip() for b in g.get("busquedas") or [] if b.get("caso")}
+            de = g.get("detalle") or {}
+            if clave in por and (por[clave]["_det"] or not de):
+                por[clave]["casos"] |= casos
+                continue
+            lst = g.get("listado") or {}
+            t = de.get("traslado") or {}
+            mot = limpio(t.get("desMotivoTraslado"))
+            otros = limpio(t.get("desMotivoTrasladoOtros"))
+            if otros and (not mot or mot.startswith("Otros")):
+                mot = f"Otros: {otros.lower()}" if mot else otros
+            bienes = [limpio(b.get("desBien"))[:220] for b in t.get("bien") or [] if limpio(b.get("desBien"))]
+            if not bienes and limpio(t.get("desBien")):
+                bienes = [limpio(t.get("desBien"))[:220]]
+            docs = []
+            for x in de.get("docRelacionado") or []:
+                num = str(x.get("numDocumento") or "").strip()
+                if x.get("numSerie") and num.isdigit():
+                    num = f"{str(x['numSerie']).strip()}-{int(num)}"
+                docs.append({"t": str(x.get("codTipoDocumento") or ""), "nombre": limpio(x.get("desTipoDocumento")),
+                             "ruc": str(x.get("numRuc") or "").strip(), "num": num})
+            cod = str(de.get("codCpe") or lst.get("codCpe") or (clave.split("-")[1] if "-" in clave else ""))
+            serie, num = (de.get("numSerie") or lst.get("numSerie") or ""), (de.get("numCpe") or lst.get("numCpe") or "")
+            peso = t.get("numPesoBruto")
+            por[clave] = {
+                "clave": clave, "num": f"{serie}-{num}" if serie else clave.split("-", 2)[-1], "tipo": TIPO_GRE.get(cod, limpio(lst.get("desCortaCpe")) or cod),
+                "f": str((de.get("emision") or {}).get("fecEmision") or "")[:10] or fecha_listado(lst.get("fecEmision")),
+                "fi": str(t.get("fecInicioTraslado") or "")[:10], "estado": limpio(de.get("desEstado") or lst.get("desEstado")),
+                "baja": limpio((de.get("baja") or {}).get("desMotivo")), "motivo": mot,
+                "em": {"ruc": str(de.get("numRuc") or lst.get("rucEmisor") or clave.split("-")[0]), "nombre": limpio((de.get("emisor") or {}).get("desNombre"))},
+                "de": persona(de.get("receptor")) if de.get("receptor") else {"ruc": str(lst.get("rucReceptor") or ""), "nombre": ""},
+                "rem": persona(de.get("remitente")) if cod == "31" and de.get("remitente") else None,
+                "p": lugar(t.get("partida")), "l": lugar(t.get("llegada")), "bienes": bienes[:10], "nb": len(t.get("bien") or []),
+                "docs": docs, "placas": [str(v.get("numPlaca")) for v in t.get("vehiculo") or [] if v.get("numPlaca")],
+                "peso": f"{peso:g} {t.get('codUnidadMedidaPb') or ''}".strip() if isinstance(peso, (int, float)) else "",
+                "casos": casos, "_det": bool(de)}
+    guias = sorted(por.values(), key=lambda g: (g["f"], g["clave"]))
+    for g in guias:
+        for c in g["casos"]:
+            if c in meta["busquedas"]:
+                meta["busquedas"][c]["n"] += 1
+    return guias, meta
+
+
 def leer_consulta_ruc(rutas):
     """Resultados de la consulta múltiple de RUC de SUNAT (ZIP o TXT separados por «|»)."""
     partes = []
@@ -853,6 +961,38 @@ def main(a):
             sedes.setdefault(d_["id"].split("-")[0], Counter())[d_["emisor"]["sede"]] += 1
     sede_de = {k: v.most_common(1)[0][0] for k, v in sedes.items()}
     lugar_sede = lambda x: (", ".join(y.strip().title() for y in x.split(" - ")[-2:]) if " - " in x else x).replace(" De ", " de ")
+
+    # ---------- Guías de remisión: máquinas que aparecen en los bienes de cada guía ----------
+    # Por la serie (los 8 últimos caracteres del PIN) o el motor. Si la factura no trae la serie, la guía del
+    # importador o del comprador con esa máquina, del mismo tipo y cercana a la venta, la identifica.
+    guias, gre_meta = leer_guias(a.guias, a.ubigeos)
+    codigo = lambda x: re.sub(r"[^A-Z0-9]", "", norm(x))
+    g_txt = [codigo(" ".join(g["bienes"])) for g in guias]
+    g_f = [pd.Timestamp(g["f"]) if g["f"] else None for g in guias]
+    maq_gre = {}
+    if guias:
+        for k, pin, motor in zip(mq.key, mq.id, mq.motor):
+            cods = {c for c in (k8(pin), motor if len(motor) >= 8 else "") if c}
+            for i, t in enumerate(g_txt):
+                if cods and any(c in t for c in cods):
+                    maq_gre.setdefault(k, []).append(i)
+        sin_serie = vend[~vend.cpe.isin(list(seriales))]
+        for k, idx in maq_gre.items():
+            s = mq[mq.key == k].iloc[0]
+            for i in sorted(idx, key=lambda i: guias[i]["estado"] == "Baja"):
+                g = guias[i]
+                rucs = {g["de"]["ruc"], g["em"]["ruc"]} - {ruc_imp, ""}
+                c = sin_serie[sin_serie.doc.isin(list(rucs)) & (sin_serie["cat"] == s["cat"])]
+                if g_f[i] is None or not len(c):
+                    continue
+                c = c.assign(d=(g_f[i] - c.f).dt.days)
+                c = c[c.d.between(-5, 30)]
+                if len(c):
+                    cpe = c.loc[c.d.abs().idxmin()].cpe
+                    seriales[cpe] = [{"serie": s.id, "motor": s.motor, "modelo": s.modelo, "anio": s.anio, "horas": "", "afect": "",
+                                      "fuente": f"Guía de remisión {g['num']}"}]
+                    sin_serie = sin_serie[sin_serie.cpe != cpe]
+                    break
     venta_maq, maq_venta = {}, {}
     for cpe, lista in seriales.items():
         for s in lista:
@@ -863,6 +1003,82 @@ def main(a):
             if s["maq"]:
                 venta_maq.setdefault(cpe, []).append(s["maq"])
                 maq_venta.setdefault(s["maq"], []).append(cpe)
+
+    # ---------- Guías de remisión → venta ----------
+    # Enlace firme: la guía cita la factura (o la factura cita la guía), o sus bienes llevan la serie o el motor de la
+    # máquina vendida. Enlace por tipo: guía del importador o del comprador con el mismo tipo de máquina, de 3 días antes
+    # a 30 después de la venta, cuando solo una venta encaja. Las guías del transportista siguen a la guía que sustentan.
+    gre_venta = {}
+    enlazar = lambda cpe, i, por: gre_venta.setdefault(cpe, {}).setdefault(i, por)
+    if guias:
+        final_de = {c["orig"]: c["reem"] for c in cadenas if c["reem"]}
+
+        def venta_final(cpe):
+            vistos = set()
+            while cpe in final_de and cpe not in vistos:
+                vistos.add(cpe)
+                cpe = final_de[cpe]
+            return anticipo_de.get(cpe, cpe)
+        vend_set = set(vend.cpe)
+        por_clave = {g["clave"]: i for i, g in enumerate(guias)}
+        for i, g in enumerate(guias):
+            for d in g["docs"]:
+                s_, _, n_ = d["num"].partition("-")
+                if d["t"] == "01" and d["ruc"] == ruc_imp and n_.isdigit():
+                    cpe = venta_final(f"01-{s_}-{int(n_)}")
+                    if cpe in vend_set:
+                        enlazar(cpe, i, "factura citada en la guía")
+        for cpe, d_ in facturas.items():
+            for gn in d_.get("guias", []):
+                m_ = re.fullmatch(r"([A-Z][A-Z0-9]{3})-0*(\d{1,8})", gn.upper().replace(" ", ""))
+                i = por_clave.get(f"{ruc_imp}-09-{m_.group(1)}-{m_.group(2)}") if m_ else None
+                if i is not None and venta_final(cpe) in vend_set:
+                    enlazar(venta_final(cpe), i, "guía citada en la factura")
+        for cpe in vend_set:
+            for k in venta_maq.get(cpe, []):
+                for i in maq_gre.get(k, []):
+                    enlazar(cpe, i, "serie de la máquina")
+            cods = {codigo(s.get(x, "")) for s in seriales.get(cpe, []) for x in ("serie", "motor")}
+            cods = {c for c in cods if len(c) >= 6}
+            if cods:
+                for i, t in enumerate(g_txt):
+                    if any(c in t for c in cods):
+                        enlazar(cpe, i, "serie de la máquina")
+        ya = {i for d_ in gre_venta.values() for i in d_} | {i for idx in maq_gre.values() for i in idx}
+        for i, g in enumerate(guias):
+            if i in ya or g_f[i] is None:
+                continue
+            cats = {cat_maquina(" ".join(norm(b).split()[:2])) for b in g["bienes"]} - {"Otros"}
+            rucs = {g["de"]["ruc"], g["em"]["ruc"]} - {ruc_imp, ""}
+            if not cats or not (g["em"]["ruc"] == ruc_imp or g["em"]["ruc"] in set(vend.doc)):
+                continue
+            x = vend[vend.doc.isin(list(rucs)) & vend["cat"].isin(list(cats))]
+            x = x[(g_f[i] - x.f).dt.days.between(-3, 30)]
+            if len(x) == 1:
+                enlazar(x.cpe.iloc[0], i, "tipo de máquina, comprador y fecha")
+        for i, g in enumerate(guias):
+            for d in g["docs"]:
+                s_, _, n_ = d["num"].partition("-")
+                j = por_clave.get(f"{d['ruc']}-09-{s_}-{int(n_)}") if d["t"] == "09" and n_.isdigit() else None
+                if j is None:
+                    continue
+                g["sustenta"] = j
+                for d_ in gre_venta.values():
+                    if j in d_:
+                        d_.setdefault(i, "guía del transportista")
+        for g in guias:
+            g["vig"] = g["estado"] != "Baja" and ("sustenta" not in g or guias[g["sustenta"]]["estado"] != "Baja")
+
+    def resumen_gre(cpe):
+        gs = [guias[i] for i in gre_venta.get(cpe, {})]
+        vig = [g for g in gs if g["vig"]]
+        zl = {g["l"]["zona"] for g in vig}
+        ztc = "ZTC" in zl
+        return {"gs": gs, "vig": vig, "ztc": ztc, "zte": zl == {"ZTE"},
+                "cambio": not ztc and any(not g["vig"] and g["l"]["zona"] == "ZTC" for g in gs),
+                "desde_ztc": [g for g in vig if g["p"]["zona"] == "ZTC"]}
+    gre_res = {cpe: resumen_gre(cpe) for cpe in gre_venta}
+    sin_gre = {"gs": [], "vig": [], "ztc": False, "zte": False, "cambio": False, "desde_ztc": []}
 
     # ---------- Exportación de lo vendido a no domiciliados ----------
     exp_venta = {}
@@ -938,7 +1154,9 @@ def main(a):
              "exp": "Vendida a no domiciliado, con DAM de exportación", "nuevo": "Comprador con RUC reciente",
              "no_habido": "Comprador no habido o con RUC no activo", "anul_tras": "Anulación o reemisión el día de un traslado de maquinaria",
              "dom_ztc": "Al comprar figuraba en la ZTE; hoy está domiciliado fuera",
-             "ncn_post": "Tributos devueltos con NCN después de la venta", "rf_post": "Reconocimiento físico conforme después de la venta"}
+             "ncn_post": "Tributos devueltos con NCN después de la venta", "rf_post": "Reconocimiento físico conforme después de la venta",
+             "gre_ztc": "Guía de remisión con llegada fuera de la ZTE", "gre_cambio": "Guía a la ZTC dada de baja y cambiada por otra a la ZTE",
+             "gre_zte": "Guía de remisión con llegada en la ZTE"}
     casos = []
     for _, v in vend.sort_values("f").iterrows():
         c_ = cli.get(v.doc, {})
@@ -948,11 +1166,12 @@ def main(a):
         ch = cadena_de(v.cpe)
         ent = entrega.get(v.cpe)
         ex = exp_venta.get(v.cpe)
+        gz = gre_res.get(v.cpe, sin_gre)
         mot = [k for k, ok in (
             ("ztc", z == "ZTC"), ("dom_ztc", z == "ZTE" and z_hoy == "ZTC"), ("igv", v.igv > 0), ("cambio", any(x["cambio"] == "con→sin" for x in ch)),
             ("entrega", bool(ent and ent["zona"] == "ZTC")), ("nodom", v.tdoc == "0" and not ex), ("exp", v.tdoc == "0" and bool(ex)),
             ("nuevo", bool(c_.get("nuevo")) and (v.f - pd.Timestamp(c_["finsc"])).days <= 180),
-            ("no_habido", bool(c_.get("no_habido"))), ("anul_tras", any(x["tras"] for x in ch))) if ok]
+            ("no_habido", bool(c_.get("no_habido"))), ("anul_tras", any(x["tras"] for x in ch)), ("gre_ztc", gz["ztc"])) if ok]
         if not mot:
             continue
         maqs = venta_maq.get(v.cpe, [])
@@ -966,7 +1185,7 @@ def main(a):
         t_prob = [] if maqs or v.cpe not in prob_venta else [prob_venta[v.cpe]]
         dests = sorted({k.split("#")[0] for k in maqs})
         dest_m = sorted({mq.loc[mq.key == k, "dest"].iloc[0] for k in maqs})
-        salida = bool({"ztc", "igv", "cambio", "entrega", "nodom"} & set(mot))
+        salida = bool({"ztc", "igv", "cambio", "entrega", "nodom", "gre_ztc"} & set(mot))
         menor = v.vv < MENOR.get(v.moneda, 0) and not {"cambio", "nodom"} & set(mot)
         post = []
         if salida and not sin_benef:
@@ -982,7 +1201,8 @@ def main(a):
                 for n in cd["ncn"]:
                     if n["f"] and dias(n["f"]) > 0:
                         post.append({"t": "ncn", "f": n["f"], "dias": dias(n["f"]), "total": n["total"], "ncn": n["ncn"]})
-        mot += [k for k, ok in (("ncn_post", any(p["t"] == "ncn" for p in post)), ("rf_post", any(p["t"] == "rf" for p in post))) if ok]
+        mot += [k for k, ok in (("ncn_post", any(p["t"] == "ncn" for p in post)), ("rf_post", any(p["t"] == "rf" for p in post)),
+                                ("gre_cambio", gz["cambio"]), ("gre_zte", gz["zte"] and not gz["cambio"])) if ok]
         if menor:
             continue
         xml = v.cpe in facturas
@@ -994,6 +1214,7 @@ def main(a):
         elif salida and maqs and (all(d == "271" for d in dest_m) or sin_tras_inf):
             nivel, estado = "Alta", ("Confirmada: tributos devueltos después de la venta" if "ncn_post" in mot else
                                      "Confirmada: reconocimiento físico después de la venta" if "rf_post" in mot else
+                                     "Confirmada: guía de remisión con llegada fuera de la ZTE" if "gre_ztc" in mot else
                                      "Confirmada: solo tiene un traslado de tránsito" if t_trans else "Confirmada: sin traslado autorizado")
         elif salida and maqs:
             nivel, estado = "Alta", f"DAM con destino {', '.join(DESTINOS.get(d, d) for d in dest_m)}: verificar con esa intendencia"
@@ -1018,12 +1239,18 @@ def main(a):
         else:
             nivel, estado = "Baja", ("Coherente: traslado y exportación, confirmados por serie" if t_conf and "exp" in mot else
                                      "Coherente: traslado y exportación" if t_prob else "Coherente: exportada" if "exp" in mot else "Seguimiento")
+        # La guía de remisión lleva la máquina a la ZTE (sin otra guía a la ZTC ni cambio de destino): baja a nivel medio
+        if ("gre_zte" in mot and "gre_cambio" not in mot and not {"cambio", "nodom", "entrega"} & set(mot) and not t_conf and not sin_benef
+                and (nivel == "Alta" or estado.startswith(("Domicilio actual", "Traslado probable")))):
+            nivel, estado = "Media", "Guía de remisión a la ZTE: verificar que la máquina siga ahí"
         casos.append({"cpe": v.cpe, "f": fstr(v.f), "ruc": v.doc, "cli": v.nombre, "nivel": nivel, "estado": estado, "mot": mot,
                       "motivo": " · ".join(TEXTO[k] for k in mot), "mon": v.moneda, "vv": r2(v.vv), "igv": r2(v.igv), "tot": r2(v.total),
                       "zona": z, "zona_hoy": z_hoy, "lugar_fac": lug["lugar"] if lug else "", "zona_fac": lug["zona"] if lug else "",
                       "sede": lugar_sede((facturas.get(v.cpe) or {}).get("emisor", {}).get("sede") or sede_de.get(v.serie, "")),
                       "desc": v.desc, "cat": v["cat"], "merc": MERCANCIA.get(v["cat"], "Otros"), "maqs": maqs, "dams": dests, "series": seriales.get(v.cpe, []),
-                      "cadena": ch, "anticipos": anticipos.get(v.cpe, []), "tras": t_conf, "transito": t_trans, "dam_ext": ext, "post": post if nivel == "Alta" else [], "tras_prob": t_prob, "exp": ex["dam"] if ex else "", "entrega": ent, "xml": xml})
+                      "cadena": ch, "anticipos": anticipos.get(v.cpe, []), "tras": t_conf, "transito": t_trans, "dam_ext": ext, "post": post if nivel == "Alta" else [], "tras_prob": t_prob, "exp": ex["dam"] if ex else "", "entrega": ent, "xml": xml,
+                      "gre": [{"i": i, "por": por} for i, por in sorted(gre_venta.get(v.cpe, {}).items(), key=lambda x: (guias[x[0]]["f"], guias[x[0]]["tipo"] != "Remitente", x[0]))],
+                      "gre_bus": (gre_meta or {}).get("busquedas", {}).get(v.cpe[3:])})
 
     # ---------- Indicadores de cada máquina y de cada caso ----------
     maquinas = []
@@ -1036,13 +1263,70 @@ def main(a):
         mk = [k for k, ok in (("usada", s.usada), ("dep", s.k8 in dep_k8), ("exp", bool(ex)),
                               ("tras", any(tr[i]["salida"] for i in t_)), ("pend", bool(c and c["reg"] == "Pendiente de regularización")),
                               ("dnc", bool(c and c["res"] == "No conforme")), ("ncn", bool(c and c["ncn"])),
-                              ("venta", s.key in maq_venta)) if ok]
+                              ("venta", s.key in maq_venta), ("gre", s.key in maq_gre)) if ok]
         maquinas.append({"k": s.key, "dam": s.dam, "s": int(s.s), "f": fstr(s.f), "dest": s.dest, "canal": s.CANAL, "conv": s.conv,
                          "cat": s["cat"], "merc": MERCANCIA.get(s["cat"], "Otros"), "marca": s.marca, "modelo": s.modelo, "anio": s.anio, "pin": s.id, "motor": s.motor,
                          "usada": bool(s.usada), "horas": s.horas, "cant": r2(s.CNT_COMER), "cif": r2(s.MTO_VALORADU), "hs": s.NUM_PARTNANDI,
                          "dep": dep_k8.get(s.k8), "exp": {"dam": ex["dam"], "f": ex["f"], "ad": ex["ad"]} if ex else None,
                          "tras": t_, "ventas": maq_venta.get(s.key, []), "mk": mk})
     maq_por_k = {x["k"]: x for x in maquinas}
+    ftx = lambda x: f"{x[8:10]}/{x[5:7]}/{x[:4]}" if x else "s/f"
+    def nom(p_):
+        n_ = (p_["nombre"] or p_["ruc"]).split(" - ")[-1].strip()
+        return n_ if len(n_) <= 50 else n_[:50].rsplit(" ", 1)[0]
+    num_g = lambda gs: " y ".join(", ".join(g["num"] for g in gs).rsplit(", ", 1))
+
+    def acciones_gre(c):
+        """Acciones que salen de las guías de remisión enlazadas con la venta (van primero)."""
+        out, gz = [], gre_res.get(c["cpe"], sin_gre)
+        pl_ = lambda n, uno, varios: f"{n} {uno if n == 1 else varios}"
+        fuente = next((s_["fuente"] for s_ in c["series"] if s_["fuente"].startswith("Guía de remisión")), "")
+        if fuente:
+            out.append(f"La serie de la máquina se tomó de la {fuente[0].lower() + fuente[1:]}: la factura no la trae.")
+        for g in [g for g in gz["vig"] if g["l"]["zona"] == "ZTC"]:
+            base = (f"La guía {g['num']} del {ftx(g['f'])} ({g['tipo'].lower()}: {nom(g['em'])}) lleva la máquina de {g['p']['lugar'] or 's/d'} a "
+                    f"{g['l']['lugar'] or 's/d'} (ZTC)")
+            if c["nivel"] != "Alta":
+                out.append(base + ".")
+            elif g["p"]["zona"] == "ZTC":
+                out.append(base + ": la máquina no pasó por la ZTE. " + ("Ubicar su DAM y verificar si se importó con el beneficio." if not c["maqs"]
+                                                                          else "Requerir el sustento del beneficio aplicado a la DAM."))
+            else:
+                out.append(base + ": requerir el sustento de la salida de la ZTE.")
+        if gz["cambio"]:
+            bajas = [g for g in gz["gs"] if not g["vig"] and g["l"]["zona"] == "ZTC"]
+            rem = [g for g in bajas if g["estado"] == "Baja"]
+            sig = [g for g in bajas if g["estado"] != "Baja"]
+            vig = [g for g in gz["vig"] if g["tipo"] == "Remitente"] or gz["vig"]
+            b0 = rem or bajas
+            out.append(f"{'La guía' if len(b0) == 1 else 'Las guías'} {num_g(b0)} a {bajas[0]['l']['lugar']} (ZTC) {'se dio' if len(b0) == 1 else 'se dieron'} de baja"
+                       + (f" ({rem[0]['baja'].lower()})" if rem and rem[0]["baja"] else "") + f" y la {num_g(vig[:2])} lleva la máquina a "
+                       f"{vig[0]['l']['lugar']} ({vig[0]['l']['zona']}). "
+                       + (f"Las guías del transportista {num_g(sig)} a {sig[0]['l']['lugar']} siguen emitidas. " if sig else "")
+                       + "Verificar a dónde llegó la máquina: transportista, placas " + ", ".join(sorted({p_ for g in gz["gs"] for p_ in g["placas"]})[:4] or ["s/d"])
+                       + ", peajes o visita.")
+        if gz["gs"] and not gz["vig"]:
+            bj = [g for g in gz["gs"] if g["estado"] == "Baja"] or gz["gs"]
+            reemp = [g for g in guias if g["vig"] and g["em"]["ruc"] == bj[0]["em"]["ruc"] and g not in gz["gs"] and g["f"] and bj[0]["f"]
+                     and abs((pd.Timestamp(g["f"]) - pd.Timestamp(bj[0]["f"])).days) <= 2 and g["l"]["u"] == bj[0]["l"]["u"]]
+            out.append(f"{'La guía' if len(bj) == 1 else 'Las guías'} {num_g(bj)} con esta máquina {'se dio' if len(bj) == 1 else 'se dieron'} de baja"
+                       + (f" y la {num_g(reemp[:2])}, que la reemplaza, ya no la incluye" if reemp else "")
+                       + ": la máquina no viajó con esa guía. Pedir al comprador la guía con la que la recibió y ubicar la máquina.")
+        if gz["zte"] and not gz["cambio"]:
+            g = max(gz["vig"], key=lambda g: (g["tipo"] == "Remitente", g["f"]))
+            otro = g["de"]["ruc"] not in ("", c["ruc"], g["em"]["ruc"])
+            out.append(f"La guía {g['num']} del {ftx(g['f'])} ({nom(g['em'])}) lleva la máquina a {g['l']['lugar'] or 's/d'} (ZTE)"
+                       + (f" para {nom(g['de'])}" if otro else "") + ": verificar en campo que siga ahí antes de cerrar el caso.")
+        for g in [g for g in gz["desde_ztc"] if g["l"]["zona"] == "ZTE"][:1]:
+            d_ = (pd.Timestamp(g["f"]) - pd.Timestamp(c["f"])).days
+            out.append(f"Según la guía {g['num']}, la máquina partió de {g['p']['lugar']} (ZTC) {pl_(abs(d_), 'día', 'días') if d_ else 'el día'} "
+                       f"{'después de la venta' if d_ > 0 else 'de la venta' if d_ == 0 else 'antes de la venta'}: al venderse no estaba en la ZTE"
+                       + (". Buscar la DAM con la que ingresó la máquina." if not c["maqs"] else "."))
+        b_ = c.get("gre_bus")
+        if b_ and not c["gre"]:
+            out.append(f"Se consultaron las guías del comprador del {ftx(b_['desde'])} al {ftx(b_['hasta'])} ({pl_(b_['n'], 'guía', 'guías')}): ninguna lleva "
+                       "esta máquina. Pedir al comprador la guía con la que la recibió y dónde opera.")
+        return out
     for c in casos:
         cl_ = cli.get(c["ruc"], {})
         mm = [maq_por_k[k] for k in c["maqs"]]
@@ -1053,7 +1337,8 @@ def main(a):
             ("pub", cl_.get("tipo") == "Entidad pública"), ("pn", cl_.get("tipo") == "Persona natural"), ("rev", bool(cl_.get("rev"))),
             ("anul", bool(c["cadena"])), ("xml", c["xml"]), ("traza", bool(mm)), ("usada", any(x["usada"] for x in mm)),
             ("pend", any(x and x["reg"] == "Pendiente de regularización" for x in cc)), ("dnc", any(x and x["res"] == "No conforme" for x in cc)),
-            ("ncn", any(x and x["ncn"] for x in cc)), ("post", any(p["t"] in ("rf", "ncn") for p in c["post"])), ("tras", bool(c["tras"])), ("trasp", bool(c["tras_prob"])), ("exp", bool(c["exp"]))) if ok]
+            ("ncn", any(x and x["ncn"] for x in cc)), ("post", any(p["t"] in ("rf", "ncn") for p in c["post"])), ("tras", bool(c["tras"])), ("trasp", bool(c["tras_prob"])), ("exp", bool(c["exp"])),
+            ("gre_ztc", "gre_ztc" in c["mot"]), ("gre_cambio", "gre_cambio" in c["mot"]), ("gre_zte", "gre_zte" in c["mot"]), ("gre", bool(c["gre"]))) if ok]
         acc = []
         if not c["xml"] and not c["series"]:
             acc.append("Descargar el XML de la factura del portal del emisor para obtener la serie de la máquina y del motor.")
@@ -1085,18 +1370,19 @@ def main(a):
             if c["nivel"] == "Alta" and x["dest"] == "271" and not c.get("transito"):
                 acc.append(f"Requerir el sustento de la salida de la ZTE de la máquina {x['pin'] or x['k']} (DAM {x['dam']} serie {x['s']}): no tiene traslado "
                            f"autorizado. Tributos estimados de la serie: USD {x['cif'] * TASA_IMP:,.0f} (18 % del CIF).")
-            elif c["nivel"] == "Alta":
+            elif c["nivel"] == "Alta" or (c["estado"].startswith("Guía de remisión a la ZTE") and x["dest"] not in ("271", "")):
                 acc.append(f"La DAM {x['dam']} tiene destino {DESTINOS.get(x['dest'], x['dest'])}: consultar en el sistema su control en destino y "
                            "sus traslados (está en el Excel de consultas a otras intendencias, en Resumen).")
         if "cambio" in c["mot"]:
             x = next(p for p in c["cadena"] if p["cambio"] == "con→sin")
             acc.append(f"Pedir el sustento de la {'baja' if x['via'] == 'Baja' else 'nota de crédito ' + x['nc']} de {x['orig']} (con IGV) y de su reemisión sin IGV.")
-        if {"ztc", "entrega"} & set(c["mot"]):
+        if {"ztc", "entrega"} & set(c["mot"]) and not c["gre"]:
             acc.append("Verificar dónde opera la máquina: visita, guías de remisión de la venta o información de terceros.")
         if c["tras_prob"]:
             acc.append("Confirmar con el XML si la máquina vendida es la del traslado probable (misma DAM y serie).")
         if "nuevo" in c["mot"] or "no_habido" in c["mot"]:
             acc.append("Verificar la existencia y la actividad del comprador (RUC reciente o no habido).")
+        acc[:0] = acciones_gre(c)
         c["acc"] = acc
     orden = {"Alta": 0, "Media": 1, "Baja": 2}
     prio_estado = lambda s: (0 if s.startswith("Confirmada: tributos") else 1 if s.startswith("Confirmada: reconocimiento") else
@@ -1145,6 +1431,44 @@ def main(a):
                                         + (f"; se devolvieron S/ {total_ncn:,.0f} con NCN emitidas después de vender" if total_ncn else "")
                                         + ". Revise cómo se verificó cada máquina y evalúe dejar sin efecto la conclusión, la liberación de la garantía o la NCN.",
                     "filtro": {"mk": "post"}})
+    if guias:
+        con_gre = [c for c in casos if c["gre"]]
+
+        def linea_g(g):
+            return (f"{g['num']} del {fecha_txt(g['f'])} ({(g['em']['nombre'] or g['em']['ruc'])[:30].strip()}): {g['p']['lugar'] or 's/d'} → "
+                    f"{g['l']['lugar'] or 's/d'} ({g['l']['zona']})" + (" — dada de baja" if g["estado"] == "Baja" else " — sustentada en una guía dada de baja" if not g["vig"] else ""))
+        it = []
+        for k, t_ in (("gre_ztc", "Llegada fuera de la ZTE"), ("gre_cambio", "Destino cambiado"), ("baja", "Guía dada de baja sin reemplazo"),
+                      ("gre_zte", "Llegada en la ZTE")):
+            for c in con_gre:
+                gz = gre_res[c["cpe"]]
+                if k in c["mot"] or (k == "baja" and gz["gs"] and not gz["vig"]):
+                    gs = [guias[x["i"]] for x in c["gre"]]
+                    gs = [g for g in gs if g["tipo"] == "Remitente"] or gs
+                    e_ = c["estado"][11:]
+                    it.append(f"{t_} · {c['cpe'][3:]} ({c['cli'][:30].strip()}, nivel {c['nivel'].lower()}"
+                              + (f": {e_[:1].lower() + e_[1:]}" if c["estado"].startswith("Coherente: ") else "") + "): " + "; ".join(linea_g(g) for g in gs[:3])
+                              + (f"; y {len(gs) - 3} más" if len(gs) > 3 else ""))
+        bus = gre_meta["busquedas"]
+        sin_m = sorted(k for k in bus if not gre_venta.get("01-" + k))
+        n_k = {k: sum(k in c["mot"] for c in casos) for k in ("gre_ztc", "gre_cambio", "gre_zte")}
+        n_med = sum(c["estado"].startswith("Guía de remisión a la ZTE") for c in casos)
+        pat.append({"id": "gre", "nivel": "Alta" if any(("gre_ztc" in c["mot"] or "gre_cambio" in c["mot"]) and c["nivel"] == "Alta" for c in casos) else "Info",
+                    "t": "Guías de remisión de las máquinas vendidas", "items": it,
+                    "txt": f"{len(guias):,} guías consultadas en SUNAT{' para ' + pl(len(bus), 'caso', 'casos') if bus else ''}; "
+                           f"{pl(len(con_gre), 'venta tiene', 'ventas tienen')} la guía de su máquina: {n_k['gre_ztc']} con llegada fuera de la ZTE, "
+                           f"{n_k['gre_cambio']} con destino cambiado y {n_k['gre_zte']} con llegada en la ZTE"
+                           + (f" ({n_med} {'pasa' if n_med == 1 else 'pasan'} a nivel medio: verificar que la máquina siga ahí)" if n_med else "") + "."
+                           + (f" En {pl(len(sin_m), 'caso consultado', 'casos consultados')} ninguna guía lleva la máquina: {', '.join(sin_m)}." if sin_m else ""),
+                    "filtro": {"mk": "gre"}})
+        dz = [(c, g) for c in con_gre for g in gre_res[c["cpe"]]["desde_ztc"][:1]]
+        if dz:
+            pat.append({"id": "gre_lima", "nivel": "Info", "t": "Máquinas que partieron de Lima o Callao después de la venta",
+                        "items": [f"{c['cpe'][3:]} ({c['cli'][:30].strip()}, vendida el {fecha_txt(c['f'])}): guía {g['num']} del {fecha_txt(g['f'])}, "
+                                  f"{g['p']['lugar']} → {g['l']['lugar']} ({g['l']['zona']})" + ("" if c["maqs"] else "; la serie no está en las DAM del periodo") for c, g in dz],
+                        "txt": "La factura se emitió en una sede de la ZTE, pero la guía muestra que la máquina partió de la ZTC: al venderse no estaba en la zona. "
+                               "Si la serie no está en las DAM del importador, buscar con qué DAM ingresó.",
+                        "filtro": {"mk": "gre"}})
     zt = vend[vend.doc.map(lambda d: zona_doc.get(d, "")) == "ZTC"]
     n_mudo = sum(1 for c in casos if "dom_ztc" in c["mot"])
     if len(zt):
@@ -1247,6 +1571,7 @@ def main(a):
         CATEG = (("Confirmada", "Confirmadas sin traslado de salida (DAM con destino Tarapoto)"),
                  ("DAM con destino", "De DAM con destino a otra intendencia amazónica"),
                  ("Serie fuera", "Con una serie que no está en las DAM del importador del periodo"),
+                 ("Guía de remisión a la ZTE", "Con guía de remisión a la ZTE (verificar que la máquina siga ahí)"),
                  ("Traslado probable", "Con traslado probable por confirmar"),
                  ("Regularizada", "Regularizadas con traslado autorizado"),
                  ("Coherente: importada sin beneficio", "Importadas sin beneficio y vendidas con IGV (coherente)"),
@@ -1316,6 +1641,11 @@ def main(a):
              if cons["dam"] or cons["series"] or cons["pin"] else [])
           + ([{"t": "Cuaderno de control de la IA", "d": f"{sum(1 for k in ctl if k in dams_periodo)} DAM del periodo, {sum(len([n for n in x.get('ncn', []) if not n['anulada']]) for k, x in ctl.items() if k in dams_periodo)} NCN, "
                                                           f"{len(tr)} expedientes de traslado y RI con su PDF."}] if ctl else [])
+          + ([{"t": "Guías de remisión (GRE)", "d": f"{len(guias):,} guías descargadas de SUNAT con el extractor de GRE ("
+                                                    + "; ".join(f"{x['titulo']}, {fecha_txt(x['generado'])}" for x in gre_meta["archivos"]) + "). "
+                                                    + f"{len({i for d_ in gre_venta.values() for i in d_})} enlazadas con {len(gre_venta)} ventas. Enlaces: "
+                                                    + ", ".join(f"{n} {POR_GRE.get(k, k)}" for k, n in Counter(p_ for d_ in gre_venta.values() for p_ in d_.values()).most_common()) + "."}]
+             if guias else [])
           + ([{"t": "Domicilio fiscal y actividad", "d": f"Padrón reducido del RUC{' al ' + fecha_txt(str(dom.fecha_padron.iloc[0])) if dom is not None and 'fecha_padron' in dom and len(dom) else ''} "
                                                           f"y consulta múltiple de RUC: {con_dom} de {len(cli)} compradores de maquinaria ubicados en la ZTE o la ZTC."}] if dom is not None else []),
         "limites": [
@@ -1334,6 +1664,12 @@ def main(a):
           + ([{"t": "Diligencias pendientes", "d": "Se muestran solo como «pendiente de regularización»: el estado y el plazo del reconocimiento físico suelen ser falta de registro."}] if ctl else [])
           + ([{"t": "Moneda de los tributos", "d": f"DAM canceladas en soles (confirmado). Garantía 160 en dólares: {g160_ok} de {len(g160)} DAM tienen un IGV igual al 16 % del CIF en USD."}] if g160 else [])
           + ([{"t": "Registros de traslado a revisar", "d": ". ".join(obs_tras) + "."}] if obs_tras else [])
+          + ([{"t": "Guías de remisión", "d": f"Solo se consultaron los compradores de {pl(len(gre_meta['busquedas']), 'caso', 'casos')}, de pocos días antes a "
+                                              "dos semanas después de la venta; " + f"{sum(1 for g in guias if not g['nb'])} guías no detallan los bienes. "
+                                              "La guía muestra a dónde se llevó la máquina, no dónde está hoy, y la llegada la declara quien la emite. "
+                                              "El enlace «por tipo de máquina, comprador y fecha» es probable, no firme."
+                                              + (" Algunas búsquedas quedaron incompletas: " + ", ".join(k for k, b in gre_meta["busquedas"].items() if b["incompleta"]) + "."
+                                                 if any(b["incompleta"] for b in gre_meta["busquedas"].values()) else "")}] if guias else [])
           + ([{"t": "XML que no se pudieron leer", "d": f"{len(xml_err)}: {', '.join(xml_err[:10])}{' y otros' if len(xml_err) > 10 else ''}. Vuelva a descargarlos."}] if xml_err else []),
         "descartado": [
             {"t": "Sede inferida por el domicilio de los clientes", "d": "Se reemplazó por la sede que figura en los XML; se retiró la alerta de venta a otra circunscripción."},
@@ -1372,6 +1708,21 @@ def main(a):
         dams[k] = {"f": fstr(d.f), "ad": d.ad, "dest": d.dest, "canal": d.canal, "conv": d.conv, "series": int(d.series), "nmaq": int(d.nmaq),
                    "cif": r2(d.cif), "ctl": ctl_cache.get(k), "maqs": mq[mq.dam == k].key.tolist()}
     vend_z = {z: int(sum(1 for d in vend.doc if zona_doc.get(d, "Sin dato") == z)) for z in ("ZTE", "ZTC", "Extranjero", "Sin dato")}
+    # Guías: solo las enlazadas con una venta o con una máquina; el resto queda en «claves» (el extractor no las vuelve a descargar)
+    usadas_g = sorted({x["i"] for c in casos for x in c["gre"]} | {i for idx in maq_gre.values() for i in idx})
+    nuevo_i = {i: n for n, i in enumerate(usadas_g)}
+    for c in casos:
+        for x in c["gre"]:
+            x["i"] = nuevo_i[x["i"]]
+    for x in maquinas:
+        x["gre"] = [nuevo_i[i] for i in maq_gre.get(x["k"], [])]
+    guias_out = []
+    for i in usadas_g:
+        g = {k: v for k, v in guias[i].items() if k not in ("_det", "sustenta", "casos")}
+        g["casos"] = sorted(guias[i]["casos"])
+        if guias[i].get("sustenta") in nuevo_i:
+            g["sustenta"] = nuevo_i[guias[i]["sustenta"]]
+        guias_out.append(g)
     datos = {
         "meta": {"contribuyente": m.NOM_RAZONSOCIAL.iloc[0], "ruc": ruc_imp, "desde": fstr(desde)[:7], "hasta": fstr(max(m.f.max(), e.f.max()))[:7],
                  "generado": date.today().isoformat(), "portal": a.portal or "", "dam_hasta": fstr(m.f.max()), "cpe_hasta": fstr(e.f.max()),
@@ -1391,13 +1742,15 @@ def main(a):
         "clientes": cli, "facturas": facturas, "patrones": pat, "calidad": calidad, "pendientes": pendientes,
         "exportaciones": [x for x in exportaciones if x["maq"] or x["venta"]], "control": {"art2": meta_ctl.get("art2", []), "complejidad": meta_ctl.get("complejidad")},
         "transportistas": leer_transportistas(a.transportistas),
+        "guias": guias_out,
+        "gre": {"claves": [g["clave"] for g in guias], "archivos": gre_meta["archivos"], "busquedas": gre_meta["busquedas"]} if guias else {},
     }
     with open(a.salida, "w", encoding="utf-8") as f:
         json.dump(datos, f, ensure_ascii=False, separators=(",", ":"))
     n = datos["kpi"]["casos"]
     print(f"OK {a.salida}: {len(casos)} casos (alta {n['Alta']}, media {n['Media']}, baja {n['Baja']}); {len(maquinas)} máquinas; "
           f"{len(cli)} compradores; {len(facturas)} XML; {len(pendientes)} comprobantes por descargar; "
-          f"{len(datos['transportistas'])} transportistas vigilados")
+          f"{len(datos['transportistas'])} transportistas vigilados; {len(guias)} guías ({len(guias_out)} enlazadas)")
 
 
 if __name__ == "__main__":
@@ -1412,5 +1765,6 @@ if __name__ == "__main__":
     ap.add_argument("--facturas-xml", nargs="*", default=[], help="XML de comprobantes del emisor (archivos, carpetas o ZIP)")
     ap.add_argument("--consultas", help="Libro de consultas a otras intendencias completado por el equipo (ver consultas_xlsx.py)")
     ap.add_argument("--control-ia", help="Cuaderno de control de la intendencia (xlsx/xlsm): control en destino, NCN, RI y traslados")
+    ap.add_argument("--guias", nargs="*", default=[], help="JSON que descarga el extractor de GRE (uno o más; las guías repetidas se leen una sola vez)")
     ap.add_argument("--transportistas", help="Transportistas vigilados (TXT: un RUC por línea, opcionalmente con el nombre); entran en la «Lista del día» de guías")
     main(ap.parse_args())

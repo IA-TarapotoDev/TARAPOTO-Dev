@@ -37,12 +37,29 @@ El tablero no consulta a SUNAT: arma listas de búsqueda que se copian y se pega
 
 Si el navegador no deja copiar, la lista se descarga como archivo y se abre en el extractor con «Abrir archivo de lista». El extractor devuelve un JSON (para integrarlo al tablero) y un Excel (para revisar); ambos tienen reserva tributaria y no se versionan sin cifrar.
 
+El JSON vuelve al generador con `--guias` (uno o más archivos; una guía repetida se lee una sola vez). Cada guía se enlaza con su venta:
+
+| Enlace | Cuándo |
+|---|---|
+| Firme | La guía cita la factura (o la factura cita la guía), o sus bienes llevan la serie (8 últimos caracteres del PIN) o el motor de la máquina. Si la factura no trae la serie, la guía del importador o del comprador con una máquina del mismo tipo, de 5 días antes a 30 después de la venta, la identifica |
+| Del transportista | La guía de transportista que cita una guía de remitente ya enlazada. Si esa guía de remitente se dio de baja, la del transportista tampoco cuenta como vigente |
+| Probable | Guía del importador o del comprador con el mismo tipo de máquina, de 3 días antes a 30 después de la venta, cuando una sola venta encaja |
+
+La zona de la partida y de la llegada sale del ubigeo de cada dirección. En el caso:
+
+- **Llegada fuera de la ZTE** (guía vigente con llegada en la ZTC): es un indicio de salida por sí solo; si la máquina viene de una DAM con destino Tarapoto, el caso queda «Confirmada: guía de remisión con llegada fuera de la ZTE».
+- **Destino cambiado**: una guía a la ZTC se dio de baja y otra lleva la máquina a la ZTE. El caso no baja de nivel.
+- **Llegada en la ZTE** (todas las guías vigentes llegan a la ZTE y no hubo cambio de destino): un caso alto por ubicación (comprador de fuera, venta con IGV o reconocimiento físico o NCN después de la venta) pasa a medio, «Guía de remisión a la ZTE: verificar que la máquina siga ahí». No baja si hubo reemisión sin IGV, entrega fuera de la ZTE, venta a no domiciliado o traslado autorizado.
+- Si la única guía con la máquina se dio de baja, la ficha lo dice y sugiere pedir la guía con la que el comprador la recibió.
+
+La ficha de cada caso y de cada máquina muestra sus guías (partida y llegada con su zona, emisor, destinatario, motivo, placas, bienes y cómo se enlazó) y la cronología las incluye. Solo se guardan las guías enlazadas; las claves de todas las demás quedan como «conocidas», para que las listas nuevas no las descarguen otra vez. Una guía muestra a dónde se llevó la máquina, no dónde está hoy, y la llegada la declara quien la emite.
+
 ## Criterios de los casos
 
 | Nivel | Cuándo |
 |---|---|
 | Alta | Venta de maquinaria con indicio de salida de la ZTE (comprador domiciliado en la ZTC, venta con IGV, reemisión sin IGV de una factura con IGV, entrega fuera de la ZTE o venta a no domiciliado sin DAM de exportación) sin traslado que la respalde. Estados: confirmada sin traslado (la serie del XML lleva a su DAM y la DAM no tiene traslado para esa serie), DAM de otro destino, serie fuera de las DAM del periodo, o por confirmar (falta el XML) |
-| Media | Indicio de salida con **traslado probable** (por tipo de máquina y fecha, por confirmar con el XML); comprador con RUC inscrito 180 días o menos antes de comprar; comprador no habido o con RUC no activo; anulación o reemisión cerca de un traslado de maquinaria |
+| Media | Indicio de salida con **traslado probable** (por tipo de máquina y fecha, por confirmar con el XML); **guía de remisión a la ZTE** (verificar que la máquina siga ahí); comprador con RUC inscrito 180 días o menos antes de comprar; comprador no habido o con RUC no activo; anulación o reemisión cerca de un traslado de maquinaria |
 | Baja | Flujo coherente: venta a no domiciliado con DAM de exportación, o salida con traslado autorizado para la misma DAM y serie |
 
 Reglas de calidad:
@@ -66,7 +83,7 @@ python3 -I riesgo/scripts/generar_datos.py DAMs.csv CPEs_EMITIDOS.txt CPE_DETALL
   --domicilios /ruta/privada/domicilios.csv --consulta-ruc lote1.zip lote2.zip \
   --facturas-xml /ruta/privada/xml --control-ia /ruta/privada/control.xlsm \
   --trazabilidad /ruta/privada/casos.csv --portal URL_DEL_PORTAL_DEL_EMISOR \
-  --transportistas /ruta/privada/transportistas.txt
+  --transportistas /ruta/privada/transportistas.txt --guias /ruta/privada/gre_*.json
 
 # 2. JSON → página cifrada (la clave se lee de un archivo privado, no del repositorio)
 CLAVE_TABLERO_ARCHIVO=/ruta/privada/clave.txt \
