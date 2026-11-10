@@ -37,7 +37,7 @@ El tablero no consulta a SUNAT: arma listas de búsqueda que se copian y se pega
 
 Si el navegador no deja copiar, la lista se descarga como archivo y se abre en el extractor con «Abrir archivo de lista». El extractor devuelve un JSON (para integrarlo al tablero) y un Excel (para revisar); ambos tienen reserva tributaria y no se versionan sin cifrar.
 
-El JSON vuelve al generador con `--guias` (uno o más archivos; una guía repetida se lee una sola vez). Cada guía se enlaza con su venta:
+El JSON vuelve al generador con `--guias` (uno o más archivos; también acepta el Excel del extractor; una guía repetida se lee una sola vez). Cada guía se enlaza con su venta:
 
 | Enlace | Cuándo |
 |---|---|
@@ -51,6 +51,7 @@ La zona de la partida y de la llegada sale del ubigeo de cada dirección. En el 
 - **Destino cambiado**: una guía a la ZTC se dio de baja y otra lleva la máquina a la ZTE. El caso no baja de nivel.
 - **Llegada en la ZTE** (todas las guías vigentes llegan a la ZTE y no hubo cambio de destino): un caso alto por ubicación (comprador de fuera, venta con IGV o reconocimiento físico o NCN después de la venta) pasa a medio, «Guía de remisión a la ZTE: verificar que la máquina siga ahí». No baja si hubo reemisión sin IGV, entrega fuera de la ZTE, venta a no domiciliado o traslado autorizado.
 - Si la única guía con la máquina se dio de baja, la ficha lo dice y sugiere pedir la guía con la que el comprador la recibió.
+- **Regreso a la ZTE**: si después de una guía a la ZTC hay otra que trae la máquina de vuelta a la ZTE, la ficha sugiere vigilar la anulación de la venta, un pedido de devolución de lo pagado por el traslado o una nueva venta sin IGV.
 
 La ficha de cada caso y de cada máquina muestra sus guías (partida y llegada con su zona, emisor, destinatario, motivo, placas, bienes y cómo se enlazó) y la cronología las incluye. Solo se guardan las guías enlazadas; las claves de todas las demás quedan como «conocidas», para que las listas nuevas no las descarguen otra vez. Una guía muestra a dónde se llevó la máquina, no dónde está hoy, y la llegada la declara quien la emite.
 
@@ -109,7 +110,7 @@ CLAVE_TABLERO_ARCHIVO=/ruta/privada/clave.txt python3 -I riesgo/scripts/cifrar.p
 python3 -I riesgo/scripts/generar_datos.py ... --consultas /ruta/privada/consultas_completadas.xlsx
 ```
 
-Con el Excel completado, el control de cada DAM consultada aparece en la ficha de sus máquinas («consulta a la intendencia de destino»). Una DAM con «Ninguno» en traslado confirma la venta fuera de la ZTE sin traslado. Una serie ubicada como importada por otro importador o comprada en el país baja de nivel. Un PIN de una DAM anterior que coincide con la serie de una factura confirma el traslado de esa venta. El Excel tiene datos de contribuyentes: no se versiona ni se publica sin cifrar.
+Con el Excel completado, el control de cada DAM consultada aparece en la ficha de sus máquinas («consulta a la intendencia de destino»). Una DAM con «Ninguno» en traslado confirma la venta fuera de la ZTE sin traslado. Una serie ubicada como importada por otro importador o comprada en el país baja de nivel: a «coherente» si se importó sin desgravación y se vendió con IGV. Una serie ubicada en una DAM anterior con beneficio y sin traslado queda en nivel alto. Un PIN de una DAM anterior que coincide con la serie de una factura confirma el traslado de esa venta. El Excel tiene datos de contribuyentes: no se versiona ni se publica sin cifrar.
 
 Todas las opciones de `generar_datos.py` son opcionales salvo los tres archivos de origen y la salida.
 

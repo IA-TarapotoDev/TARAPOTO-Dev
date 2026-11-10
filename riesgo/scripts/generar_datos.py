@@ -534,6 +534,75 @@ POR_GRE = {"factura citada en la guía": "por la factura citada en la guía", "s
            "tipo de máquina, comprador y fecha": "por tipo de máquina, comprador y fecha (probables)"}
 
 
+def guias_xlsx(ruta):
+    """Excel del extractor de GRE (hojas Resumen, Guías, Bienes, Documentos relacionados, Vehículos) → misma
+    estructura que el JSON del extractor, para leer las dos descargas igual."""
+    import openpyxl
+    wb = openpyxl.load_workbook(ruta, read_only=True, data_only=True)
+    hojas = {ws.title: list(ws.iter_rows(values_only=True)) for ws in wb.worksheets}
+    wb.close()
+
+    def tabla(nombre):
+        filas = hojas.get(nombre) or []
+        if not filas:
+            return []
+        cab = [str(x or "").strip() for x in filas[0]]
+        idx = {}
+        for i, c in enumerate(cab):
+            idx.setdefault(c, i)
+        return [{c: (r[i] if i < len(r) else None) for c, i in idx.items()} for r in filas[1:] if r and any(x is not None for x in r)]
+    txt = lambda x: "" if x is None or str(x) == "None" else str(x).strip()
+    res = {txt(r.get("Concepto")): txt(r.get("Valor")) for r in tabla("Resumen") if r.get("Concepto")}
+    if not hojas.get("Guías"):
+        return None
+    bienes, docs, placas = {}, {}, {}
+    for r in tabla("Bienes"):
+        if txt(r.get("Descripción bien")):
+            bienes.setdefault(txt(r.get("Clave")), []).append({"desBien": txt(r.get("Descripción bien"))})
+    for r in tabla("Documentos relacionados"):
+        docs.setdefault(txt(r.get("Clave")), []).append({k: txt(r.get(k)) for k in ("codTipoDocumento", "desTipoDocumento", "numRuc", "numSerie", "numDocumento")})
+    for r in tabla("Vehículos"):
+        if txt(r.get("numPlaca")):
+            placas.setdefault(txt(r.get("Clave")), []).append({"numPlaca": txt(r.get("numPlaca"))})
+
+    def lugar(pre, r):
+        return {"direccion": {"codUbigeo": txt(r.get(f"{pre} ubigeo")), "desDepartamento": txt(r.get(f"{pre} departamento")),
+                              "desProvincia": txt(r.get(f"{pre} provincia")), "desDistrito": txt(r.get(f"{pre} distrito")),
+                              "desDireccion": txt(r.get(f"traslado.{pre.lower()}.direccion.desDireccion")) or txt(r.get(f"{pre} dirección")),
+                              "contribuyente": {"numRuc": txt(r.get(f"traslado.{pre.lower()}.direccion.contribuyente.numRuc"))}}}
+    guias = []
+    for r in tabla("Guías"):
+        clave = txt(r.get("Clave"))
+        if not clave:
+            continue
+        peso = txt(r.get("Peso bruto"))
+        try:
+            peso = float(peso)
+        except ValueError:
+            peso = None
+        guias.append({"clave": clave, "listado": {"codCpe": txt(r.get("Código CPE")), "rucEmisor": txt(r.get("RUC emisor")),
+                                                   "rucReceptor": txt(r.get("Receptor documento"))},
+                      "detalle": {"numRuc": txt(r.get("RUC emisor")), "codCpe": txt(r.get("Código CPE")), "numSerie": txt(r.get("Serie")),
+                                  "numCpe": txt(r.get("Número")), "desEstado": txt(r.get("Estado")), "emision": {"fecEmision": txt(r.get("Fecha emisión"))},
+                                  "emisor": {"desNombre": txt(r.get("Nombre emisor"))},
+                                  "receptor": {"numDocIdentidad": txt(r.get("Receptor documento")), "desNombre": txt(r.get("Receptor nombre"))},
+                                  "baja": {"desMotivo": txt(r.get("baja.desMotivo"))} if txt(r.get("baja.desMotivo")) else None,
+                                  "docRelacionado": docs.get(clave, []),
+                                  "traslado": {"desMotivoTraslado": txt(r.get("traslado.desMotivoTraslado")) or txt(r.get("Motivo traslado")),
+                                               "desMotivoTrasladoOtros": txt(r.get("traslado.desMotivoTrasladoOtros")),
+                                               "fecInicioTraslado": txt(r.get("Fecha inicio traslado")), "numPesoBruto": peso,
+                                               "codUnidadMedidaPb": txt(r.get("Unidad peso")), "bien": bienes.get(clave, []),
+                                               "vehiculo": placas.get(clave) or ([{"numPlaca": txt(r.get("Placa"))}] if txt(r.get("Placa")) else []),
+                                               "partida": lugar("Partida", r), "llegada": lugar("Llegada", r)}},
+                      "busquedas": []})
+    titulo = f"RUC {res.get('RUC consultados', '')} buscado como {res.get('Buscados como', '')}, {res.get('Periodos', '')}"
+    if res.get("RUC consultados", "").isdigit() and int(res["RUC consultados"]) == 1:
+        rucs = sorted({txt(r.get("RUC")) for r in tabla("Búsquedas") if txt(r.get("RUC"))})
+        titulo = f"RUC {', '.join(rucs)} como {res.get('Buscados como', '')}, {res.get('Periodos', '')}"
+    return {"formato": "GRE_EXTRACTOR_JSON", "version": res.get("Versión del extractor", ""), "busquedas": [], "guias": guias,
+            "pedido": {"titulo": titulo, "generado": res.get("Generado", "")[:10]}}
+
+
 def leer_guias(rutas, r_ubi):
     """Guías de remisión electrónicas (GRE) que descarga el extractor de GRE (JSON «GRE_EXTRACTOR_JSON»).
     Admite varias descargas: una guía repetida (misma clave) se lee una sola vez, con las búsquedas de todas.
@@ -566,8 +635,11 @@ def leer_guias(rutas, r_ubi):
         return f"{m.group(3)}-{m.group(2)}-{m.group(1)}" if m else ""
     por, meta = {}, {"archivos": [], "busquedas": {}}
     for ruta in rutas:
-        with open(ruta, encoding="utf-8-sig") as f:
-            d = json.load(f)
+        if ruta.lower().endswith((".xlsx", ".xlsm")):
+            d = guias_xlsx(ruta)
+        else:
+            with open(ruta, encoding="utf-8-sig") as f:
+                d = json.load(f)
         if not isinstance(d, dict) or d.get("formato") != "GRE_EXTRACTOR_JSON":
             print(f"AVISO guías: {os.path.basename(ruta)} no es una descarga del extractor de GRE; se omite")
             continue
@@ -1074,11 +1146,13 @@ def main(a):
         vig = [g for g in gs if g["vig"]]
         zl = {g["l"]["zona"] for g in vig}
         ztc = "ZTC" in zl
-        return {"gs": gs, "vig": vig, "ztc": ztc, "zte": zl == {"ZTE"},
+        ida = min((g["f"] for g in vig if g["p"]["zona"] == "ZTE" and g["l"]["zona"] == "ZTC" and g["f"]), default="")
+        regreso = [g for g in vig if ida and g["p"]["zona"] == "ZTC" and g["l"]["zona"] == "ZTE" and g["f"] >= ida]
+        return {"gs": gs, "vig": vig, "ztc": ztc, "zte": zl == {"ZTE"}, "regreso": regreso,
                 "cambio": not ztc and any(not g["vig"] and g["l"]["zona"] == "ZTC" for g in gs),
-                "desde_ztc": [g for g in vig if g["p"]["zona"] == "ZTC"]}
+                "desde_ztc": [g for g in vig if g["p"]["zona"] == "ZTC" and g not in regreso]}
     gre_res = {cpe: resumen_gre(cpe) for cpe in gre_venta}
-    sin_gre = {"gs": [], "vig": [], "ztc": False, "zte": False, "cambio": False, "desde_ztc": []}
+    sin_gre = {"gs": [], "vig": [], "ztc": False, "zte": False, "cambio": False, "desde_ztc": [], "regreso": []}
 
     # ---------- Exportación de lo vendido a no domiciliados ----------
     exp_venta = {}
@@ -1222,7 +1296,9 @@ def main(a):
             nivel, estado = "Media", "Traslado probable: confirmar la serie"
         elif salida and ext:
             r_ = norm(ext["resultado"])
-            if r_.startswith(("IMPORTADA POR OTRO", "COMPRA LOCAL")):
+            if r_.startswith(("IMPORTADA POR OTRO", "COMPRA LOCAL")) and v.igv > 0 and (r_.startswith("COMPRA LOCAL") or norm(ext["modalidad"]).startswith("SIN DESGRAVACION")):
+                nivel, estado = "Baja", f"Coherente: {ext['resultado'].lower()} sin beneficio y vendida con IGV (según la consulta)"
+            elif r_.startswith(("IMPORTADA POR OTRO", "COMPRA LOCAL")):
                 nivel, estado = "Media", f"Serie ubicada: {ext['resultado'].lower()} (sin beneficio de este importador)"
             elif r_.startswith("DAM ENCONTRADA") and norm(ext["modalidad"]).startswith("SIN DESGRAVACION"):
                 nivel, estado = "Baja", "Coherente: importada sin beneficio (según la consulta)"
@@ -1284,6 +1360,8 @@ def main(a):
         if fuente:
             out.append(f"La serie de la máquina se tomó de la {fuente[0].lower() + fuente[1:]}: la factura no la trae.")
         for g in [g for g in gz["vig"] if g["l"]["zona"] == "ZTC"]:
+            if g["p"]["zona"] == "ZTC" and g in gz["regreso"]:
+                continue
             base = (f"La guía {g['num']} del {ftx(g['f'])} ({g['tipo'].lower()}: {nom(g['em'])}) lleva la máquina de {g['p']['lugar'] or 's/d'} a "
                     f"{g['l']['lugar'] or 's/d'} (ZTC)")
             if c["nivel"] != "Alta":
@@ -1293,6 +1371,10 @@ def main(a):
                                                                           else "Requerir el sustento del beneficio aplicado a la DAM."))
             else:
                 out.append(base + ": requerir el sustento de la salida de la ZTE.")
+        for g in gz["regreso"][:1]:
+            out.append(f"La guía {g['num']} del {ftx(g['f'])} ({(g['motivo'] or 'sin motivo').lower()}) regresa la máquina de {g['p']['lugar']} (ZTC) a "
+                       f"{g['l']['lugar']} (ZTE) después de haber salido: vigilar si se anula la venta, si se pide la devolución de lo pagado por el "
+                       "traslado o si la máquina se vuelve a vender en la ZTE sin IGV.")
         if gz["cambio"]:
             bajas = [g for g in gz["gs"] if not g["vig"] and g["l"]["zona"] == "ZTC"]
             rem = [g for g in bajas if g["estado"] == "Baja"]
@@ -1321,9 +1403,9 @@ def main(a):
             d_ = (pd.Timestamp(g["f"]) - pd.Timestamp(c["f"])).days
             out.append(f"Según la guía {g['num']}, la máquina partió de {g['p']['lugar']} (ZTC) {pl_(abs(d_), 'día', 'días') if d_ else 'el día'} "
                        f"{'después de la venta' if d_ > 0 else 'de la venta' if d_ == 0 else 'antes de la venta'}: al venderse no estaba en la ZTE"
-                       + (". Buscar la DAM con la que ingresó la máquina." if not c["maqs"] else "."))
+                       + (". Buscar la DAM con la que ingresó la máquina." if not c["maqs"] and not c["dam_ext"] else "."))
         b_ = c.get("gre_bus")
-        if b_ and not c["gre"]:
+        if b_ and not c["gre"] and c["nivel"] != "Baja":
             out.append(f"Se consultaron las guías del comprador del {ftx(b_['desde'])} al {ftx(b_['hasta'])} ({pl_(b_['n'], 'guía', 'guías')}): ninguna lleva "
                        "esta máquina. Pedir al comprador la guía con la que la recibió y dónde opera.")
         return out
@@ -1344,7 +1426,23 @@ def main(a):
             acc.append("Descargar el XML de la factura del portal del emisor para obtener la serie de la máquina y del motor.")
         elif not c["series"]:
             acc.append("El XML no trae la serie de la máquina: pedirla al emisor (guía de remisión, acta de entrega o ficha técnica).")
-        elif not mm:
+        elif not mm and c["dam_ext"] and norm(c["dam_ext"]["resultado"]).startswith("DAM ENCONTRADA"):
+            x_ = c["dam_ext"]
+            if c["nivel"] == "Alta":
+                misma = [t for t in tr if x_["dam"] in t["dams"]]
+                otras = sorted({p_["serie"] for t in misma for p_ in cons["pin"] if p_["exp"] == t["exp"] and p_["serie"] != x_["serie"]})
+                acc.append(f"La consulta ubicó la máquina en la DAM {x_['dam']} serie {x_['serie'] or 's/d'} ({x_['intendencia'] or 's/d'}, "
+                           f"{(x_['modalidad'] or 's/d').lower()}, solicitud {(x_['estado'] or 's/d').lower()}) y la venta no tiene traslado autorizado: "
+                           "requerir el sustento de la salida de la ZTE y los tributos (IGV e IPM)."
+                           + (f" La misma DAM tiene el traslado {', '.join(t['exp'] for t in misma)}"
+                              + (f" para las series {', '.join(otras)}" if otras else "") + ", pero no para esta." if misma else ""))
+        elif not mm and c["tras"]:
+            pass        # la serie coincide con el PIN de la DAM del traslado (consulta del equipo)
+        elif not mm and c["dam_ext"] and norm(c["dam_ext"]["resultado"]).startswith("NO ENCONTRADA"):
+            s0 = c["series"][0]
+            acc.append(f"La consulta no encontró la serie {s0.get('serie') or 's/d'} en las DAM: pedir al comprador el documento con el que adquirió "
+                       "la máquina (compra local o importación antigua).")
+        elif not mm and c["nivel"] != "Baja":
             s0 = c["series"][0]
             t0 = tr[c["tras_prob"][0]] if c["tras_prob"] else None
             acc.append(f"Buscar la DAM por la serie {s0.get('serie') or 's/d'} y el motor {s0.get('motor') or 's/d'}: no está entre las DAM del importador "
@@ -1376,7 +1474,7 @@ def main(a):
         if "cambio" in c["mot"]:
             x = next(p for p in c["cadena"] if p["cambio"] == "con→sin")
             acc.append(f"Pedir el sustento de la {'baja' if x['via'] == 'Baja' else 'nota de crédito ' + x['nc']} de {x['orig']} (con IGV) y de su reemisión sin IGV.")
-        if {"ztc", "entrega"} & set(c["mot"]) and not c["gre"]:
+        if {"ztc", "entrega"} & set(c["mot"]) and not c["gre"] and c["nivel"] != "Baja":
             acc.append("Verificar dónde opera la máquina: visita, guías de remisión de la venta o información de terceros.")
         if c["tras_prob"]:
             acc.append("Confirmar con el XML si la máquina vendida es la del traslado probable (misma DAM y serie).")
@@ -1445,9 +1543,9 @@ def main(a):
                 if k in c["mot"] or (k == "baja" and gz["gs"] and not gz["vig"]):
                     gs = [guias[x["i"]] for x in c["gre"]]
                     gs = [g for g in gs if g["tipo"] == "Remitente"] or gs
-                    e_ = c["estado"][11:]
                     it.append(f"{t_} · {c['cpe'][3:]} ({c['cli'][:30].strip()}, nivel {c['nivel'].lower()}"
-                              + (f": {e_[:1].lower() + e_[1:]}" if c["estado"].startswith("Coherente: ") else "") + "): " + "; ".join(linea_g(g) for g in gs[:3])
+                              + (f" · {c['estado'][:1].lower() + c['estado'][1:]}" if c["nivel"] == "Baja" else "")
+                              + (f"; regresó a la ZTE el {fecha_txt(gz['regreso'][0]['f'])}" if gz["regreso"] else "") + "): " + "; ".join(linea_g(g) for g in gs[:3])
                               + (f"; y {len(gs) - 3} más" if len(gs) > 3 else ""))
         bus = gre_meta["busquedas"]
         sin_m = sorted(k for k in bus if not gre_venta.get("01-" + k))
@@ -1455,13 +1553,14 @@ def main(a):
         n_med = sum(c["estado"].startswith("Guía de remisión a la ZTE") for c in casos)
         pat.append({"id": "gre", "nivel": "Alta" if any(("gre_ztc" in c["mot"] or "gre_cambio" in c["mot"]) and c["nivel"] == "Alta" for c in casos) else "Info",
                     "t": "Guías de remisión de las máquinas vendidas", "items": it,
-                    "txt": f"{len(guias):,} guías consultadas en SUNAT{' para ' + pl(len(bus), 'caso', 'casos') if bus else ''}; "
+                    "txt": f"{len(guias):,} guías descargadas de SUNAT en {pl(len(gre_meta['archivos']), 'consulta', 'consultas')}"
+                           f"{' (búsqueda por caso para ' + pl(len(bus), 'caso', 'casos') + ')' if bus else ''}; "
                            f"{pl(len(con_gre), 'venta tiene', 'ventas tienen')} la guía de su máquina: {n_k['gre_ztc']} con llegada fuera de la ZTE, "
                            f"{n_k['gre_cambio']} con destino cambiado y {n_k['gre_zte']} con llegada en la ZTE"
                            + (f" ({n_med} {'pasa' if n_med == 1 else 'pasan'} a nivel medio: verificar que la máquina siga ahí)" if n_med else "") + "."
                            + (f" En {pl(len(sin_m), 'caso consultado', 'casos consultados')} ninguna guía lleva la máquina: {', '.join(sin_m)}." if sin_m else ""),
                     "filtro": {"mk": "gre"}})
-        dz = [(c, g) for c in con_gre for g in gre_res[c["cpe"]]["desde_ztc"][:1]]
+        dz = [(c, g) for c in con_gre for g in gre_res[c["cpe"]]["desde_ztc"][:1] if c["nivel"] != "Baja"]
         if dz:
             pat.append({"id": "gre_lima", "nivel": "Info", "t": "Máquinas que partieron de Lima o Callao después de la venta",
                         "items": [f"{c['cpe'][3:]} ({c['cli'][:30].strip()}, vendida el {fecha_txt(c['f'])}): guía {g['num']} del {fecha_txt(g['f'])}, "
@@ -1570,7 +1669,9 @@ def main(a):
         con_serie = [c for c in casos if c["series"] or c["maqs"]]
         CATEG = (("Confirmada", "Confirmadas sin traslado de salida (DAM con destino Tarapoto)"),
                  ("DAM con destino", "De DAM con destino a otra intendencia amazónica"),
+                 ("DAM ubicada", "Con DAM anterior al periodo ubicada en la consulta y sin traslado"),
                  ("Serie fuera", "Con una serie que no está en las DAM del importador del periodo"),
+                 ("Coherente: importada por otro", "Importadas por otro importador sin beneficio y vendidas con IGV (según la consulta)"),
                  ("Guía de remisión a la ZTE", "Con guía de remisión a la ZTE (verificar que la máquina siga ahí)"),
                  ("Traslado probable", "Con traslado probable por confirmar"),
                  ("Regularizada", "Regularizadas con traslado autorizado"),
@@ -1636,8 +1737,10 @@ def main(a):
                                                        f" y {pl(sum(d['tipo'] == '07' for d in facturas.values()), 'nota de crédito', 'notas de crédito')}"
                                                        + (f"; {len(xml_rep)} archivos repetidos se leyeron una sola vez" if xml_rep else "")
                                                        + f". {len(venta_maq)} ventas enlazadas con su DAM por la serie."}] if facturas else [])
-          + ([{"t": "Consultas del equipo", "d": f"Libro de consultas a otras intendencias: control de {len(cons['dam'])} DAM, "
-                                                   f"{len(cons['series'])} series ubicadas y {len(cons['pin'])} PIN de DAM anteriores al periodo."}]
+          + ([{"t": "Consultas del equipo", "d": "Libro de consultas a otras intendencias: " + ", ".join(x for x in (
+                  pl(len(cons["dam"]), "DAM con su control", "DAM con su control") if cons["dam"] else "",
+                  pl(len(cons["series"]), "serie ubicada", "series ubicadas") if cons["series"] else "",
+                  pl(len(cons["pin"]), "PIN de DAM anteriores al periodo", "PIN de DAM anteriores al periodo") if cons["pin"] else "") if x) + "."}]
              if cons["dam"] or cons["series"] or cons["pin"] else [])
           + ([{"t": "Cuaderno de control de la IA", "d": f"{sum(1 for k in ctl if k in dams_periodo)} DAM del periodo, {sum(len([n for n in x.get('ncn', []) if not n['anulada']]) for k, x in ctl.items() if k in dams_periodo)} NCN, "
                                                           f"{len(tr)} expedientes de traslado y RI con su PDF."}] if ctl else [])

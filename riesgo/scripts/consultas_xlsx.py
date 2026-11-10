@@ -176,7 +176,7 @@ def main(r_json, salida, r_previo=None):
     # ---------- Series que no están en las DAM del periodo ----------
     filas_s = []
     for c in d["casos"]:
-        if not c["series"] or c["maqs"] or c["tras_prob"]:
+        if not c["series"] or c["maqs"] or c["tras_prob"] or c["tras"]:     # c["tras"] sin máquina: confirmada con el PIN de la DAM del traslado
             continue
         s = c["series"][0]
         lugar = c.get("lugar_fac") or cli.get(c["ruc"], {}).get("lugar", "")
@@ -196,8 +196,11 @@ def main(r_json, salida, r_previo=None):
     for t in d["traslados"]:
         if not (t["es_maq"] and t["salida"] and not t["maqs"] and t["f"] >= d["meta"]["desde"]):
             continue
-        ventas = [p["cpe"] for p in t.get("prob", [])]
-        txt_v = "; ".join(f"{folio(v)} ({casos[v]['cli'][:30].strip()})" if v in casos else folio(v) for v in ventas)
+        # Ventas ya confirmadas con el PIN (consulta anterior) y ventas probables: las dos alimentan la comparación de la columna J
+        conf = list(t.get("venta") or [])
+        ventas = list(dict.fromkeys(conf + [p["cpe"] for p in t.get("prob", [])]))
+        txt_v = "; ".join((f"{folio(v)} ({casos[v]['cli'][:30].strip()})" if v in casos else folio(v)) + (" — confirmada por el PIN" if v in conf else "")
+                          for v in ventas)
         series_fac = "; ".join(f"{folio(v)}: {s['serie']}" for v in ventas for s in (casos.get(v, {}).get("series") or []))
         for dam, serie in t.get("pares") or [[x, ""] for x in t["dams"]]:
             filas_t.append([t["exp"], fecha(t["f"]), t["ri"], dam, serie, txt_v, series_fac])
