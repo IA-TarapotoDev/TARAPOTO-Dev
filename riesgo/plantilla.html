@@ -851,8 +851,9 @@ function guiasCitadas(cpe) {
 /* Búsquedas de un caso: el comprador como destinatario y como remitente, de 3 días antes a 15 después de la venta,
    y cada guía citada en la factura, consultada directamente por su número. */
 function busquedasCaso(c) {
-  const caso = folio(c.cpe), desde = isoMas(c.f, -VENTANA_CASO.antes), hasta = isoMas(c.f, VENTANA_CASO.despues), out = [];
-  if (rucGRE(c.ruc)) {
+  const caso = folio(c.cpe), conFecha = /^\d{4}-\d{2}-\d{2}$/.test(c.f || ""), out = [];
+  const desde = conFecha ? isoMas(c.f, -VENTANA_CASO.antes) : "", hasta = conFecha ? isoMas(c.f, VENTANA_CASO.despues) : "";
+  if (conFecha && rucGRE(c.ruc)) {
     out.push({ etiqueta: `Caso ${caso}: comprador ${c.ruc} como destinatario`, caso, grupo: "caso", rucReceptor: c.ruc, tipos: TIPOS_GRE, desde, hasta },
       { etiqueta: `Caso ${caso}: comprador ${c.ruc} como remitente`, caso, grupo: "caso", rucEmisor: c.ruc, tipos: TIPOS_GRE, desde, hasta });
   }
