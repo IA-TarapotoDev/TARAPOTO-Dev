@@ -14,7 +14,7 @@ La unidad de seguimiento es la **máquina** (DAM y serie). Cada venta de maquina
 
 | Pestaña | Qué muestra |
 |---|---|
-| Resumen | Casos por nivel, máquinas importadas, ventas por zona del comprador, control de la IA, **patrones**, comprobantes por descargar y **calidad de los datos** (confiable, con límites, descartado) |
+| Resumen | Casos por nivel, máquinas importadas, ventas por zona del comprador, control de la IA, **patrones**, comprobantes por descargar, **Excel de consultas a otras intendencias** y **calidad de los datos** (confiable, con límites, descartado) |
 | Alertas | Lista de casos con íconos, filtros y CSV, que se puede **agrupar** por comprador, máquina (serie), DAM, tipo de mercancía, tipo de máquina, departamento del comprador, traslado o estado. Cada fila se abre en una ficha con «Ver factura» (cuando hay XML), **«Buscar guías»** y los datos para buscar el comprobante en el portal del emisor. Arriba, la lista de comprobantes por descargar y las **listas de guías de remisión** para el extractor de GRE |
 | Máquinas | Traslados de maquinaria del periodo con su venta probable, y el registro de máquinas importadas. Agrupado por DAM, la cabecera de cada grupo muestra el control de la IA una sola vez (regularización, tributos, NCN y traslados) |
 | Clientes | Compradores de maquinaria: domicilio fiscal, actividad, máquinas compradas y casos; se agrupan por zona, departamento o tipo de comprador |
@@ -74,6 +74,25 @@ CLAVE_TABLERO_ARCHIVO=/ruta/privada/clave.txt \
 
 # 3. Publicar: copiar index.html a riesgo/index.html en la rama gh-pages
 ```
+
+### Consultas a otras intendencias (Excel)
+
+El cuaderno de la IA Tarapoto solo cubre las DAM con destino Tarapoto. `consultas_xlsx.py` arma un Excel de trabajo con lo que conviene consultar en el sistema: las DAM con maquinaria y destino en otra intendencia (modalidad de pago o garantía, estado de la solicitud, diligencia, RI, NCN y traslado), las series vendidas que no están en las DAM del periodo y el PIN de cada serie de las DAM anteriores al periodo que tienen traslados de maquinaria. Las celdas grises vienen del tablero y las amarillas se completan.
+
+```bash
+# Arma el Excel (con --previo conserva lo que el equipo ya completó)
+python3 -I riesgo/scripts/consultas_xlsx.py /ruta/privada/datos.json /ruta/privada/consultas_otras_intendencias.xlsx \
+  [--previo /ruta/privada/consultas_completadas.xlsx]
+
+# Lo adjunta cifrado a la página: se descarga desde Resumen o Máquinas una vez abierta con la clave
+CLAVE_TABLERO_ARCHIVO=/ruta/privada/clave.txt python3 -I riesgo/scripts/cifrar.py /ruta/privada/datos.json riesgo/plantilla.html \
+  /ruta/privada/index.html --adjunto /ruta/privada/consultas_otras_intendencias.xlsx
+
+# El Excel completado vuelve al generador
+python3 -I riesgo/scripts/generar_datos.py ... --consultas /ruta/privada/consultas_completadas.xlsx
+```
+
+Con el Excel completado, el control de cada DAM consultada aparece en la ficha de sus máquinas («consulta a la intendencia de destino»). Una DAM con «Ninguno» en traslado confirma la venta fuera de la ZTE sin traslado. Una serie ubicada como importada por otro importador o comprada en el país baja de nivel. Un PIN de una DAM anterior que coincide con la serie de una factura confirma el traslado de esa venta. El Excel tiene datos de contribuyentes: no se versiona ni se publica sin cifrar.
 
 Todas las opciones de `generar_datos.py` son opcionales salvo los tres archivos de origen y la salida.
 

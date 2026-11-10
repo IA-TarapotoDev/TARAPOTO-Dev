@@ -682,7 +682,7 @@ function bloque(titulo, icono, filas, o = {}) {
   return b;
 }
 const ctlEstado = c => !c ? "Sin registro en el control de la IA" : c.reg === "Concluida" ? (c.res ? `Concluida · ${c.res.toLowerCase()}` : "Concluida") : c.reg;
-const ctlClase = c => !c ? "" : c.reg === "Pendiente de regularización" ? "pend" : c.res === "No conforme" ? "alerta" : "ok";
+const ctlClase = c => !c ? "" : c.reg === "Pendiente de regularización" ? "pend" : c.res === "No conforme" || c.reg === "Improcedente" ? "alerta" : "ok";
 function bloqueControl(dam, k) {
   const d = D.dams[dam] || {}, c = d.ctl;
   if (!c) return bloque("Control de la DAM", "lupax", [["Control de la IA", `Sin registro: la DAM tiene destino ${esc(destT(d.dest))}${d.dest && d.dest !== "271" ? ". Lo controla esa intendencia" : ""}.`]]);
@@ -690,13 +690,14 @@ function bloqueControl(dam, k) {
   const qué = c.mon === "PEN" ? "Tributos pagados" : c.mon === "USD" ? "Tributos garantizados" : "Tributos";
   const tr = (c.tras || []).map(i => D.traslados[i]).filter(Boolean);
   const s = k ? +k.split("#")[1] : null;
-  return bloque("Control de la DAM (IA Tarapoto)", "lupax", [
+  return bloque(c.fuente ? "Control de la DAM (consulta a la intendencia de destino)" : "Control de la DAM (IA Tarapoto)", "lupax", [
     ["Modalidad", esc(c.tipo || "–") + (c.mon ? ` <span class="etq">${c.mon === "PEN" ? "en soles" : "en dólares"}</span>` : "")],
     [qué, c.trib && c.trib.total ? `${sim} ${f0(c.trib.total)} <span class="etq">IGV ${f0(c.trib.igv)} · IPM ${f0(c.trib.ipm)}${c.trib.adv ? " · ad valorem " + f0(c.trib.adv) : ""}</span> <span class="etq">de toda la DAM</span>` : ""],
     ["Regularización", `<span class="etq ${ctlClase(c)}">${esc(ctlEstado(c))}</span>` + (c.ri ? ` RI ${esc(c.ri)}${c.ri_f ? " del " + fecha(c.ri_f) : ""}` : "") + (c.fin ? ` · ${esc(c.fin.toLowerCase())}` : "")],
     ["Reconocimiento físico", c.f_rf ? fecha(c.f_rf) : ""], ["Diligencia concluida", c.f_dil ? fecha(c.f_dil) : ""],
     ["NCN", (c.ncn || []).length ? c.ncn.map(n => `${esc(n.ncn || "NCN")} · S/ ${f0(n.total)}${n.ri ? " · RI " + esc(n.ri) : ""}${n.f ? " · " + fecha(n.f) : ""}`).join("<br>") : ""],
     ["RI de la DAM", (c.ris || []).length ? c.ris.map(r => esc(r.ri) + (r.pdf ? ` <span class="etq">${esc(r.pdf)}</span>` : "")).join("<br>") : ""],
+    ["Traslado informado", esc(c.tras_txt || "")], ["Observaciones", esc(c.obs || "")],
     ["Traslados de la DAM", tr.length ? tr.map(t => `${esc(t.exp)} · ${fecha(t.f)} · ${esc(t.tipo)}` + (s != null && t.maqs.includes(k) ? ` <span class="etq ok">incluye esta serie</span>` : t.maqs.length ? ` <span class="etq">series ${esc(t.maqs.map(x => x.split("#")[1]).join(", "))}</span>` : "")).join("<br>") : "Ninguno"],
   ], { clase: ctlClase(c) });
 }
@@ -1028,6 +1029,8 @@ function vistaResumen(sec) {
     sec.append(tpen);
   }
 
+  const tcons = tarjetaConsultas(); if (tcons) sec.append(tcons);
+
   const tc = tarjeta("Calidad de los datos", "Qué fuentes sostienen el tablero, qué límites tienen y qué se retiró por no aportar al análisis.");
   const g = el("div", { class: "calidad" });
   for (const [k, t, i, c] of [["confiable", "Confiable", "check", "var(--ok)"], ["limites", "Con límites", "limite", "var(--aviso)"], ["descartado", "Descartado", "equis", "var(--mudo)"]]) {
@@ -1035,6 +1038,28 @@ function vistaResumen(sec) {
       el("ul", { html: (D.calidad[k] || []).map(x => `<li><b>${esc(x.t)}</b>${esc(x.d)}</li>`).join("") })));
   }
   tc.append(g); sec.append(tc);
+}
+
+/* Excel de consultas a otras intendencias: viaja cifrado dentro de los datos */
+const XLSX_CONSULTAS = "consultas_otras_intendencias.xlsx";
+function descargarAdjunto(nombre) {
+  const b64 = (D.adjuntos || {})[nombre]; if (!b64) return;
+  const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  const a = el("a", { href: URL.createObjectURL(new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })), download: nombre });
+  document.body.append(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+function tarjetaConsultas() {
+  if (!(D.adjuntos || {})[XLSX_CONSULTAS]) return null;
+  const otras = Object.values(D.dams).filter(x => x.dest && x.dest !== "271" && (x.conv || "").includes("C-"));
+  const ventasAlta = new Set(D.casos.filter(c => c.nivel !== "Baja").flatMap(c => c.maqs.map(k => k.split("#")[0])));
+  const p1 = Object.entries(D.dams).filter(([k, x]) => x.dest && x.dest !== "271" && (x.conv || "").includes("C-") && ventasAlta.has(k)).length;
+  const series = D.casos.filter(c => (c.series || []).length && !c.maqs.length && !(c.tras_prob || []).length).length;
+  const t = tarjeta("Consultas a otras intendencias", `El cuaderno de la IA Tarapoto solo cubre las DAM con destino Tarapoto. Este Excel lista lo que conviene consultar en el sistema: ` +
+    `${f0(otras.length)} DAM con maquinaria y destino en otra intendencia (${f0(p1)} de prioridad 1, ya vendidas con indicios de salida), ${f0(series)} series que no están en las DAM del periodo ` +
+    `y las DAM de 2024 con traslados de maquinaria. Complete las celdas amarillas y devuélvalo por el chat: el tablero lo incorpora y conserva lo ya completado en la siguiente versión.`);
+  t.id = "consultas";
+  t.append(el("div", { class: "acc" }, el("button", { class: "btn principal", type: "button", onclick: () => descargarAdjunto(XLSX_CONSULTAS), html: ic("descarga") + "Descargar Excel de consultas" })));
+  return t;
 }
 
 function csvPendientes() {
@@ -1156,7 +1181,9 @@ function fichaCaso(c) {
   } else {
     const s = (c.series || [])[0];
     b.append(bloque("Máquina vendida", "importaciones", s ? [["Serie (XML)", copiable(s.serie)], ["Motor", s.motor ? copiable(s.motor) : ""], ["Modelo", esc(s.modelo || "")], ["Año", esc(s.anio || "")]] : [],
-      { clase: "pend", html: s ? `<p>La serie no está en las DAM de ${esc(mesLargo(D.meta.desde))} a ${esc(mesLargo(D.meta.hasta))}: la máquina se importó antes. Búsquela en el sistema aduanero por la serie y el motor.</p>`
+      { clase: "pend", html: c.dam_ext ? `<p>Consulta del equipo: ${esc(c.dam_ext.resultado)}${c.dam_ext.dam ? " · DAM " + esc(c.dam_ext.dam) + (c.dam_ext.serie ? " serie " + esc(c.dam_ext.serie) : "") : ""}` +
+        `${c.dam_ext.intendencia ? " · " + esc(c.dam_ext.intendencia) : ""}${c.dam_ext.modalidad ? " · " + esc(c.dam_ext.modalidad) : ""}${c.dam_ext.estado ? " · solicitud " + esc(c.dam_ext.estado.toLowerCase()) : ""}` +
+        `${c.dam_ext.obs ? ". " + esc(c.dam_ext.obs) : ""}.</p>` : s ? `<p>La serie no está en las DAM de ${esc(mesLargo(D.meta.desde))} a ${esc(mesLargo(D.meta.hasta))}: la máquina se importó antes. Búsquela en el sistema aduanero por la serie y el motor.</p>`
         : `<p>Sin el XML no se conoce la serie de la máquina. Descárguelo del portal (datos arriba) y súbalo: la máquina se enlazará con su DAM y su control.</p>` }));
   }
   const cr = cronologia(c); if (cr) b.append(cr);
@@ -1260,6 +1287,8 @@ function vistaMaquinas(sec) {
     }
     tt.append(g); sec.append(tt);
   }
+  if ((D.adjuntos || {})[XLSX_CONSULTAS]) sec.append(el("div", { class: "acc", style: "margin:0 0 16px" },
+    el("button", { class: "btn principal", type: "button", onclick: () => descargarAdjunto(XLSX_CONSULTAS), html: ic("descarga") + "Descargar Excel de consultas a otras intendencias" })));
   const t = tarjeta(); sec.append(t);
   t.append(leyendaMarcas(["usada", "dep", "exp", "tras", "pend", "dnc", "ncn", "venta"]));
   const estado = m => ctlEstado((D.dams[m.dam] || {}).ctl);

@@ -75,6 +75,7 @@ PUBLICO = re.compile(r"MUNICIPALIDAD|GOBIERNO REGIONAL|MINISTERIO|PROGRAMA |PROY
                      r"MARINA DE GUERRA|FUERZA AEREA|INSTITUTO NACIONAL|SERVICIO NACIONAL|"
                      r"PETROLEOS DEL PERU|SEGURO SOCIAL|ESSALUD|DIRECCION REGIONAL|UNIDAD EJECUTORA")
 REVENDE = re.compile(r"VTA.*MAQUINARIA|VENTA.*MAQUINARIA|ALQUILER.*MAQUINARIA")
+SIN_TRASLADO = {"NINGUNO", "NINGUNA", "NO", "SIN TRASLADO", "NO TIENE", "NO REGISTRA"}
 PEND = {"REGISTRAR DILIGENCIA", "REGISTRAR RF", "EMITIR INFORME", "EMITIR RESOLUCION", "CON NOTIFICACION", "EMITIR NCN",
         "INGRESADA, SIN CONSOLIDAR"}
 NS = {"cbc": "urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2",
@@ -418,6 +419,71 @@ def leer_control_ia(ruta, ruc):
     return ctl, traslados, meta
 
 
+def leer_consultas(ruta):
+    """Libro de consultas completado por el equipo (ver consultas_xlsx.py). Devuelve:
+    - dam: {dam: {"control": {...}, "ncn": [...], "fuente": ...}} con el control informado por la IA de destino
+    - series: {cpe: {...}} con la DAM ubicada para una serie que no estaba en las DAM del periodo
+    - pin: [{exp, dam, serie, pin, motor}] de las DAM anteriores al periodo con traslados; pin_filas: filas por traslado"""
+    import openpyxl
+    import warnings
+    warnings.filterwarnings("ignore")
+    wb = openpyxl.load_workbook(ruta, data_only=True, read_only=True)
+
+    def filas(nombre):
+        if nombre not in wb.sheetnames:
+            return []
+        rows = list(wb[nombre].iter_rows(values_only=True))
+        if not rows:
+            return []
+        cab = [str(c or "").strip() for c in rows[0]]
+        return [dict(zip(cab, r)) for r in rows[1:] if any(v not in (None, "") for v in r)]
+    txt = lambda v: "" if v is None else (v.strftime("%Y-%m-%d") if hasattr(v, "strftime") else str(v).strip())
+
+    def fch(v):
+        if hasattr(v, "strftime"):
+            return v.strftime("%Y-%m-%d")
+        m_ = re.fullmatch(r"(\d{1,2})[/-](\d{1,2})[/-](\d{4})", txt(v))
+        return f"{m_[3]}-{int(m_[2]):02d}-{int(m_[1]):02d}" if m_ else txt(v)[:10]
+
+    def num(v):
+        if isinstance(v, (int, float)):
+            return float(v)
+        t_ = txt(v).replace("S/", "").replace("USD", "").replace(",", "").strip()
+        return float(t_) if re.fullmatch(r"\d+(\.\d+)?", t_) else None
+    out = {"dam": {}, "series": {}, "pin": [], "pin_filas": Counter()}
+    llenar = ("Modalidad", "Monto de tributos", "Estado de la solicitud", "Resultado de la diligencia", "Fecha del reconocimiento físico",
+              "Fecha de conclusión", "RI o RD", "NCN", "Traslado (expediente y fecha)", "Observaciones")
+    for r in filas("DAM otras intendencias"):
+        dam = (claves_dam(r.get("DAM")) or [""])[0]
+        if not dam or not any(txt(r.get(c_)) for c_ in llenar):
+            continue
+        modal, sol = txt(r.get("Modalidad")), txt(r.get("Estado de la solicitud"))
+        mon = {"S/": "PEN", "USD": "USD"}.get(txt(r.get("Moneda")).upper(), "") or \
+            ("PEN" if norm(modal) == "CANCELADA" else "USD" if norm(modal).startswith("GARANTIA") else "")
+        control = {"tipo": modal, "dilig": txt(r.get("Resultado de la diligencia")), "fin": "", "ri": txt(r.get("RI o RD")),
+                   "ri_f": fch(r.get("Fecha de la RI")), "estado": "", "igv": None, "ipm": None, "adv": None,
+                   "trib_total": num(r.get("Monto de tributos")), "mon": mon,
+                   "reg_txt": {"PENDIENTE": "Pendiente de regularización", "EN TRAMITE": "Pendiente de regularización", "CONCLUIDA": "Concluida"}.get(norm(sol), sol),
+                   "f_rf": fch(r.get("Fecha del reconocimiento físico")), "f_dil": fch(r.get("Fecha de conclusión")),
+                   "tras_txt": txt(r.get("Traslado (expediente y fecha)")), "obs": txt(r.get("Observaciones"))}
+        ncn = [{"ri": control["ri"], "ri_f": control["ri_f"], "peco": "", "amaz": txt(r.get("NCN")), "f": fch(r.get("Fecha de la NCN")),
+                "total": num(r.get("Monto de la NCN (S/)")), "anulada": False}] if txt(r.get("NCN")) else []
+        out["dam"][dam] = {"control": control, "ncn": ncn, "fuente": "Consulta del equipo a la intendencia de destino"}
+    for r in filas("Series por ubicar"):
+        fac = txt(r.get("Factura"))
+        if fac and (txt(r.get("Resultado de la búsqueda")) or txt(r.get("DAM encontrada"))):
+            out["series"]["01-" + fac] = {"resultado": txt(r.get("Resultado de la búsqueda")) or "DAM encontrada", "dam": txt(r.get("DAM encontrada")),
+                                          "serie": txt(r.get("Serie de la DAM")), "intendencia": txt(r.get("Intendencia de destino")),
+                                          "modalidad": txt(r.get("Modalidad")), "estado": txt(r.get("Estado de la solicitud")), "obs": txt(r.get("Observaciones"))}
+    for r in filas("DAM 2024 de traslados"):
+        exp_ = txt(r.get("Traslado"))
+        out["pin_filas"][exp_] += 1
+        if txt(r.get("PIN o serie de la máquina en la DAM")):
+            out["pin"].append({"exp": exp_, "dam": txt(r.get("DAM")), "serie": txt(r.get("Serie de la DAM")),
+                               "pin": txt(r.get("PIN o serie de la máquina en la DAM")), "motor": txt(r.get("Serie del motor en la DAM"))})
+    return out
+
+
 # ---------------------------------------------------------------- domicilio fiscal y actividad
 
 def ruc_valido(ruc):
@@ -573,6 +639,10 @@ def main(a):
 
     # ---------- Control de la intendencia: DAM, NCN y traslados ----------
     ctl, tras_todos, meta_ctl = leer_control_ia(a.control_ia, ruc_imp) if a.control_ia else ({}, [], {"art2": [], "complejidad": None})
+    cons = leer_consultas(a.consultas) if a.consultas else {"dam": {}, "series": {}, "pin": [], "pin_filas": Counter()}
+    for k, x in cons["dam"].items():
+        if "control" not in ctl.get(k, {}):
+            ctl[k] = x
     dams_periodo = set(dec.dam)
     tr = [t for t in tras_todos if t["f"] >= fstr(desde) or set(t["dams"]) & dams_periodo]
     claves_maq = set(mq.key)
@@ -623,14 +693,15 @@ def main(a):
         if not x:
             return None
         c = x.get("control", {})
-        pend = norm(c.get("estado", "")) in PEND
+        pend = c["reg_txt"] == "Pendiente de regularización" if c.get("reg_txt") else norm(c.get("estado", "")) in PEND
         dg = norm(c.get("dilig", ""))
         ncn = [n for n in x.get("ncn", []) if not n["anulada"]]
         trib = {q: c.get(q) for q in ("igv", "ipm", "adv")}
-        total = sum(v or 0 for v in trib.values())
-        return {"tipo": c.get("tipo", ""), "mon": {"CANCELADA": "PEN", "GARANTIA 160": "USD"}.get(norm(c.get("tipo", "")), ""),
-                "trib": {**trib, "total": r2(total) if total else None},
-                "reg": "Sin registro de diligencia" if not c else "Pendiente de regularización" if pend else "Concluida",
+        total = c.get("trib_total") or sum(v or 0 for v in trib.values())
+        return {"tipo": c.get("tipo", ""), "mon": c.get("mon") or {"CANCELADA": "PEN", "GARANTIA 160": "USD"}.get(norm(c.get("tipo", "")), ""),
+                "trib": {**trib, "total": r2(total) if total else None}, "fuente": x.get("fuente", ""),
+                "tras_txt": c.get("tras_txt", ""), "obs": c.get("obs", ""),
+                "reg": c.get("reg_txt") or ("Sin registro de diligencia" if not c else "Pendiente de regularización" if pend else "Concluida"),
                 "res": "" if pend or not c else "No conforme" if dg.startswith("NO CONFORME") else "Conforme" if dg.startswith("CONFORME") else "",
                 "fin": "" if pend else c.get("fin", ""), "ri": "" if pend else c.get("ri", ""), "ri_f": "" if pend else c.get("ri_f", ""),
                 "f_rf": "" if pend else c.get("f_rf", ""), "f_dil": "" if pend else c.get("f_dil", ""),
@@ -826,6 +897,23 @@ def main(a):
             cupo[i] -= 1
             prob_venta[cpe] = i
             tr[i]["prob"].append({"cpe": cpe, "dias": dias})
+    limpio = lambda x: re.sub(r"[^A-Z0-9]", "", norm(x))
+    coincide = lambda a_, b_: bool(a_ and b_) and (a_.endswith(b_) or b_.endswith(a_) or (min(len(a_), len(b_)) >= 8 and a_[-8:] == b_[-8:]))
+    tras_ext = {}
+    for t in tras_salida:
+        pins = [limpio(p["pin"]) for p in cons["pin"] if p["exp"] == t["exp"]]
+        if not pins:
+            continue
+        hall = {p["cpe"] for p in t["prob"] if any(coincide(pin, limpio(s["serie"])) for pin in pins for s in seriales.get(p["cpe"], []))}
+        completo = len(pins) >= cons["pin_filas"].get(t["exp"], 0)
+        for p in list(t["prob"]):
+            if p["cpe"] in hall or completo:
+                t["prob"].remove(p)
+                prob_venta.pop(p["cpe"], None)
+        for cpe in hall:
+            tras_ext[cpe] = t["i"]
+        t["venta"] = sorted(set(t["venta"]) | hall)
+        t["pin_ext"] = [p["pin"] for p in cons["pin"] if p["exp"] == t["exp"]]
     # Anulaciones y reemisiones que coinciden con un traslado de maquinaria a la ZTC: la venta probable del traslado
     # es parte de la cadena, o la NC o la reemisión caen a 7 días o menos del traslado (mismo tipo de máquina y con indicio de salida)
     for c in cadenas:
@@ -868,7 +956,11 @@ def main(a):
         if not mot:
             continue
         maqs = venta_maq.get(v.cpe, [])
-        t_conf = sorted({i for k in maqs for i in tras_maq.get(k, []) if tr[i]["salida"]})
+        t_conf = sorted({i for k in maqs for i in tras_maq.get(k, []) if tr[i]["salida"]} | ({tras_ext[v.cpe]} if v.cpe in tras_ext else set()))
+        cd_m = [ctl_cache.get(k.split("#")[0]) for k in maqs]
+        tras_inf = [cd["tras_txt"] for cd in cd_m if cd and cd.get("tras_txt") and norm(cd["tras_txt"]) not in SIN_TRASLADO]
+        sin_tras_inf = bool(maqs) and all(cd and cd.get("fuente") and norm(cd.get("tras_txt", "")) in SIN_TRASLADO for cd in cd_m)
+        ext = cons["series"].get(v.cpe) if not maqs else None
         t_trans = sorted({i for k in maqs for i in tras_maq.get(k, []) if not tr[i]["salida"]})
         sin_benef = bool(maqs) and all(conv_key[k] == "Sin beneficio" for k in maqs)
         t_prob = [] if maqs or v.cpe not in prob_venta else [prob_venta[v.cpe]]
@@ -897,9 +989,9 @@ def main(a):
         if salida and sin_benef:
             nivel, estado = (("Baja", "Coherente: importada sin beneficio y vendida con IGV") if v.igv > 0 else
                              ("Media", "Importada sin beneficio: revisar el IGV de la venta") if z == "ZTC" else ("Baja", "Importada sin beneficio"))
-        elif salida and t_conf:
-            nivel, estado = "Baja", "Regularizada: traslado autorizado"
-        elif salida and maqs and all(d == "271" for d in dest_m):
+        elif salida and (t_conf or tras_inf):
+            nivel, estado = "Baja", "Regularizada: traslado autorizado" if t_conf else "Regularizada: traslado informado en la consulta"
+        elif salida and maqs and (all(d == "271" for d in dest_m) or sin_tras_inf):
             nivel, estado = "Alta", ("Confirmada: tributos devueltos después de la venta" if "ncn_post" in mot else
                                      "Confirmada: reconocimiento físico después de la venta" if "rf_post" in mot else
                                      "Confirmada: solo tiene un traslado de tránsito" if t_trans else "Confirmada: sin traslado autorizado")
@@ -907,6 +999,16 @@ def main(a):
             nivel, estado = "Alta", f"DAM con destino {', '.join(DESTINOS.get(d, d) for d in dest_m)}: verificar con esa intendencia"
         elif salida and t_prob:
             nivel, estado = "Media", "Traslado probable: confirmar la serie"
+        elif salida and ext:
+            r_ = norm(ext["resultado"])
+            if r_.startswith(("IMPORTADA POR OTRO", "COMPRA LOCAL")):
+                nivel, estado = "Media", f"Serie ubicada: {ext['resultado'].lower()} (sin beneficio de este importador)"
+            elif r_.startswith("DAM ENCONTRADA") and norm(ext["modalidad"]).startswith("SIN DESGRAVACION"):
+                nivel, estado = "Baja", "Coherente: importada sin beneficio (según la consulta)"
+            elif r_.startswith("DAM ENCONTRADA"):
+                nivel, estado = "Alta", f"DAM ubicada en la consulta: {ext['dam'] or 's/n'}" + (f" ({ext['intendencia']})" if ext["intendencia"] else "")
+            else:
+                nivel, estado = "Alta", "Serie no encontrada en la consulta"
         elif salida:
             nivel, estado = "Alta", ("Serie fuera de las DAM del periodo" if v.cpe in seriales else
                                      "El XML no indica la serie de la máquina" if v.cpe in facturas else "Por confirmar: falta el XML")
@@ -921,7 +1023,7 @@ def main(a):
                       "zona": z, "zona_hoy": z_hoy, "lugar_fac": lug["lugar"] if lug else "", "zona_fac": lug["zona"] if lug else "",
                       "sede": lugar_sede((facturas.get(v.cpe) or {}).get("emisor", {}).get("sede") or sede_de.get(v.serie, "")),
                       "desc": v.desc, "cat": v["cat"], "merc": MERCANCIA.get(v["cat"], "Otros"), "maqs": maqs, "dams": dests, "series": seriales.get(v.cpe, []),
-                      "cadena": ch, "anticipos": anticipos.get(v.cpe, []), "tras": t_conf, "transito": t_trans, "post": post if nivel == "Alta" else [], "tras_prob": t_prob, "exp": ex["dam"] if ex else "", "entrega": ent, "xml": xml})
+                      "cadena": ch, "anticipos": anticipos.get(v.cpe, []), "tras": t_conf, "transito": t_trans, "dam_ext": ext, "post": post if nivel == "Alta" else [], "tras_prob": t_prob, "exp": ex["dam"] if ex else "", "entrega": ent, "xml": xml})
 
     # ---------- Indicadores de cada máquina y de cada caso ----------
     maquinas = []
@@ -984,7 +1086,8 @@ def main(a):
                 acc.append(f"Requerir el sustento de la salida de la ZTE de la máquina {x['pin'] or x['k']} (DAM {x['dam']} serie {x['s']}): no tiene traslado "
                            f"autorizado. Tributos estimados de la serie: USD {x['cif'] * TASA_IMP:,.0f} (18 % del CIF).")
             elif c["nivel"] == "Alta":
-                acc.append(f"La DAM {x['dam']} tiene destino {DESTINOS.get(x['dest'], x['dest'])}: coordinar con esa intendencia el control en destino y los traslados.")
+                acc.append(f"La DAM {x['dam']} tiene destino {DESTINOS.get(x['dest'], x['dest'])}: consultar en el sistema su control en destino y "
+                           "sus traslados (está en el Excel de consultas a otras intendencias, en Resumen).")
         if "cambio" in c["mot"]:
             x = next(p for p in c["cadena"] if p["cambio"] == "con→sin")
             acc.append(f"Pedir el sustento de la {'baja' if x['via'] == 'Baja' else 'nota de crédito ' + x['nc']} de {x['orig']} (con IGV) y de su reemisión sin IGV.")
@@ -1208,6 +1311,9 @@ def main(a):
                                                        f" y {pl(sum(d['tipo'] == '07' for d in facturas.values()), 'nota de crédito', 'notas de crédito')}"
                                                        + (f"; {len(xml_rep)} archivos repetidos se leyeron una sola vez" if xml_rep else "")
                                                        + f". {len(venta_maq)} ventas enlazadas con su DAM por la serie."}] if facturas else [])
+          + ([{"t": "Consultas del equipo", "d": f"Libro de consultas a otras intendencias: control de {len(cons['dam'])} DAM, "
+                                                   f"{len(cons['series'])} series ubicadas y {len(cons['pin'])} PIN de DAM anteriores al periodo."}]
+             if cons["dam"] or cons["series"] or cons["pin"] else [])
           + ([{"t": "Cuaderno de control de la IA", "d": f"{sum(1 for k in ctl if k in dams_periodo)} DAM del periodo, {sum(len([n for n in x.get('ncn', []) if not n['anulada']]) for k, x in ctl.items() if k in dams_periodo)} NCN, "
                                                           f"{len(tr)} expedientes de traslado y RI con su PDF."}] if ctl else [])
           + ([{"t": "Domicilio fiscal y actividad", "d": f"Padrón reducido del RUC{' al ' + fecha_txt(str(dom.fecha_padron.iloc[0])) if dom is not None and 'fecha_padron' in dom and len(dom) else ''} "
@@ -1265,8 +1371,6 @@ def main(a):
         d = dec[dec.dam == k].iloc[0]
         dams[k] = {"f": fstr(d.f), "ad": d.ad, "dest": d.dest, "canal": d.canal, "conv": d.conv, "series": int(d.series), "nmaq": int(d.nmaq),
                    "cif": r2(d.cif), "ctl": ctl_cache.get(k), "maqs": mq[mq.dam == k].key.tolist()}
-    for t in tr:
-        t.pop("pares", None)
     vend_z = {z: int(sum(1 for d in vend.doc if zona_doc.get(d, "Sin dato") == z)) for z in ("ZTE", "ZTC", "Extranjero", "Sin dato")}
     datos = {
         "meta": {"contribuyente": m.NOM_RAZONSOCIAL.iloc[0], "ruc": ruc_imp, "desde": fstr(desde)[:7], "hasta": fstr(max(m.f.max(), e.f.max()))[:7],
@@ -1306,6 +1410,7 @@ if __name__ == "__main__":
     ap.add_argument("--consulta-ruc", nargs="*", default=[], help="Resultados de la consulta múltiple de RUC de SUNAT (ZIP o TXT)")
     ap.add_argument("--trazabilidad", help="CSV de casos: cpe, serie_maquina, serie_motor, modelo, ubicacion_entrega (DISTRITO, PROVINCIA, DEPARTAMENTO), direccion_entrega, fuente, nota")
     ap.add_argument("--facturas-xml", nargs="*", default=[], help="XML de comprobantes del emisor (archivos, carpetas o ZIP)")
+    ap.add_argument("--consultas", help="Libro de consultas a otras intendencias completado por el equipo (ver consultas_xlsx.py)")
     ap.add_argument("--control-ia", help="Cuaderno de control de la intendencia (xlsx/xlsm): control en destino, NCN, RI y traslados")
     ap.add_argument("--transportistas", help="Transportistas vigilados (TXT: un RUC por línea, opcionalmente con el nombre); entran en la «Lista del día» de guías")
     main(ap.parse_args())

@@ -1,7 +1,10 @@
 """Cifra el JSON del tablero dentro de la plantilla HTML.
 
 Uso:
-  CLAVE_TABLERO_ARCHIVO=/ruta/clave.txt python3 -I cifrar.py datos.json ../plantilla.html index.html
+  CLAVE_TABLERO_ARCHIVO=/ruta/clave.txt python3 -I cifrar.py datos.json ../plantilla.html index.html [--adjunto archivo ...]
+
+Cada --adjunto (por ejemplo, el Excel de consultas) viaja cifrado dentro de los datos y se descarga desde la
+página una vez abierta con la clave.
 
 La clave se lee del archivo indicado en CLAVE_TABLERO_ARCHIVO (o se pide por
 teclado). El JSON se comprime con gzip y se cifra con AES-256-GCM; la llave se
@@ -23,13 +26,19 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 ITERACIONES = 600_000
 
 
-def main(r_json, r_plantilla, salida):
+def main(r_json, r_plantilla, salida, adjuntos=()):
     ruta_clave = os.environ.get("CLAVE_TABLERO_ARCHIVO")
     clave = open(ruta_clave, encoding="utf-8").read().strip() if ruta_clave else getpass.getpass("Clave: ")
     if len(clave) < 16:
         sys.exit("La clave debe tener al menos 16 caracteres.")
     datos = open(r_json, "rb").read()
-    json.loads(datos)  # valida
+    obj = json.loads(datos)  # valida
+    if adjuntos:
+        obj["adjuntos"] = {}
+        for r in adjuntos:
+            with open(r, "rb") as f:
+                obj["adjuntos"][os.path.basename(r)] = base64.b64encode(f.read()).decode("ascii")
+        datos = json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     sal, iv = os.urandom(16), os.urandom(12)
     llave = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=sal, iterations=ITERACIONES).derive(clave.encode("utf-8"))
     cifrado = AESGCM(llave).encrypt(iv, gzip.compress(datos, 9), None)
@@ -44,6 +53,13 @@ def main(r_json, r_plantilla, salida):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 4:
+    args, adjuntos = sys.argv[1:], []
+    while "--adjunto" in args:
+        i = args.index("--adjunto")
+        if i + 1 >= len(args):
+            sys.exit(__doc__)
+        adjuntos.append(args[i + 1])
+        del args[i:i + 2]
+    if len(args) != 3:
         sys.exit(__doc__)
-    main(*sys.argv[1:])
+    main(*args, adjuntos=adjuntos)
