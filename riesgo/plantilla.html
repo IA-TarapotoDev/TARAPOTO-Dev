@@ -92,6 +92,8 @@
   h2:first-child { margin-top: 4px; }
   h3 { margin: 0 0 4px; font-size: 15px; color: var(--texto); font-weight: 650; }
   p.nota { margin: 0 0 12px; font-size: 13px; color: var(--suave); max-width: 920px; }
+  ul.nota { margin: 10px 0 8px; padding-left: 20px; font-size: 13px; color: var(--suave); max-width: 920px; }
+  ul.nota li { margin: 3px 0; }
   .tarjeta { background: var(--sup); border-radius: var(--radio); padding: 18px; margin: 0 0 16px; min-width: 0; box-shadow: var(--sombra); }
   .tarjeta > p.nota:last-child { margin-bottom: 0; }
   .g12 { display: grid; gap: 16px; grid-template-columns: repeat(12, minmax(0, 1fr)); margin-bottom: 16px; }
@@ -807,8 +809,114 @@ ${pago ? `<p><b>Forma de pago:</b><br>${pago}</p>` : ""}${(x.notas || []).length
 }
 document.addEventListener("click", e => {
   const b = e.target.closest("[data-factura]"); if (b) { e.preventDefault(); verFactura(b.dataset.factura); return; }
+  const g = e.target.closest("[data-guias]"); if (g) { e.preventDefault(); const c = IDX.caso.get(g.dataset.guias); if (c) entregarPedido(pedidoCaso(c), g); return; }
   const a = e.target.closest("[data-caso]"); if (a) { e.preventDefault(); irCaso(a.dataset.caso); }
 });
+
+/* ---------- guías de remisión: listas para el extractor de GRE (sunat-gre/extractor-gre.js) ----------
+   El tablero no consulta a SUNAT: arma la lista de búsquedas (formato GRE_PEDIDO), la copia y el
+   usuario la pega en el panel del extractor, dentro de su sesión de SUNAT. */
+const TIPOS_GRE = ["09", "31", "G9"];               // remitente, transportista y por eventos
+const VENTANA_CASO = { antes: 3, despues: 15 };     // días alrededor de la venta en que se buscan las guías de un caso
+function rucGRE(r) {
+  const s = String(r || "");
+  if (!/^(10|15|16|17|20)\d{9}$/.test(s)) return false;
+  const suma = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2].reduce((a, p, i) => a + p * +s[i], 0);
+  let dv = 11 - suma % 11; if (dv === 10) dv = 0; else if (dv === 11) dv = 1;
+  return dv === +s[10];
+}
+const isoMas = (iso, n) => { const d = new Date(iso + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+const hoyLocal = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+const esReincidente = c => (c.nivel === "Alta" || c.nivel === "Media") && rucGRE(c.ruc);
+
+function pedidoGRE(id, titulo, busquedas) {
+  // «conocidas»: guías que el tablero ya tiene; el extractor no vuelve a descargarlas (solo anota su estado).
+  return { tipo: "GRE_PEDIDO", version: 1, id, titulo, generado: new Date().toISOString(), tablero: D.meta.generado || "",
+    busquedas, conocidas: ((D.gre || {}).claves || []).slice() };
+}
+
+/* Guías citadas en la factura: solo las electrónicas de remitente (serie que empieza con letra; las «V…» son del transportista) */
+function guiasCitadas(cpe) {
+  const fac = D.facturas[cpe]; if (!fac) return [];
+  const ruc = (fac.emisor || {}).ruc || D.meta.ruc, vistas = new Set(), out = [];
+  for (const g of fac.guias || []) {
+    const m = /^([A-Z][A-Z0-9]{3})-0*(\d{1,8})$/.exec(String(g).toUpperCase().replace(/\s+/g, ""));
+    if (!m || m[1].startsWith("V") || vistas.has(m[0])) continue;
+    vistas.add(m[0]);
+    out.push({ rucEmisor: ruc, codCpe: "09", serie: m[1], numero: m[2] });
+  }
+  return out;
+}
+
+/* Búsquedas de un caso: el comprador como destinatario y como remitente, de 3 días antes a 15 después de la venta,
+   y cada guía citada en la factura, consultada directamente por su número. */
+function busquedasCaso(c) {
+  const caso = folio(c.cpe), desde = isoMas(c.f, -VENTANA_CASO.antes), hasta = isoMas(c.f, VENTANA_CASO.despues), out = [];
+  if (rucGRE(c.ruc)) {
+    out.push({ etiqueta: `Caso ${caso}: comprador ${c.ruc} como destinatario`, caso, grupo: "caso", rucReceptor: c.ruc, tipos: TIPOS_GRE, desde, hasta },
+      { etiqueta: `Caso ${caso}: comprador ${c.ruc} como remitente`, caso, grupo: "caso", rucEmisor: c.ruc, tipos: TIPOS_GRE, desde, hasta });
+  }
+  for (const d of guiasCitadas(c.cpe)) out.push({ etiqueta: `Caso ${caso}: guía ${d.serie}-${d.numero} citada en la factura`, caso, grupo: "citada", directa: d });
+  return out;
+}
+const pedidoCaso = c => pedidoGRE("caso-" + folio(c.cpe), "Caso " + folio(c.cpe), busquedasCaso(c));
+const pedidoCasosAltos = () => {
+  const altos = D.casos.filter(c => c.nivel === "Alta");
+  return pedidoGRE("casos-altos-" + hoyLocal(), `Casos de nivel alto (${altos.length})`, altos.flatMap(busquedasCaso));
+};
+
+/* Lista del día (ayer y hoy): compradores reincidentes (con casos altos o medios), el importador y los transportistas vigilados */
+function pedidoDelDia() {
+  const hoy = hoyLocal(), busq = [], vistos = new Set();
+  const agregar = b => {
+    const k = `${b.rucEmisor || ""}|${b.rucReceptor || ""}`;
+    if (!vistos.has(k)) { vistos.add(k); busq.push({ tipos: TIPOS_GRE, desde: "hoy-1", hasta: "hoy", ...b }); }
+  };
+  const reinc = new Map();
+  for (const c of D.casos) if (esReincidente(c)) { if (!reinc.has(c.ruc)) reinc.set(c.ruc, []); reinc.get(c.ruc).push(folio(c.cpe)); }
+  for (const [ruc, casos] of reinc) {
+    const caso = casos.join(", ");
+    agregar({ etiqueta: `Reincidente ${ruc} como destinatario`, caso, grupo: "reincidente", rucReceptor: ruc });
+    agregar({ etiqueta: `Reincidente ${ruc} como remitente`, caso, grupo: "reincidente", rucEmisor: ruc });
+  }
+  if (rucGRE(D.meta.ruc)) {
+    agregar({ etiqueta: `Importador ${D.meta.ruc} como remitente`, grupo: "importador", rucEmisor: D.meta.ruc });
+    agregar({ etiqueta: `Importador ${D.meta.ruc} como destinatario`, grupo: "importador", rucReceptor: D.meta.ruc });
+  }
+  for (const t of D.transportistas || []) if (rucGRE(t.ruc)) agregar({ etiqueta: `Transportista ${t.ruc}`, grupo: "transportista", rucEmisor: t.ruc });
+  return pedidoGRE("diario-" + hoy, "Lista del día " + fecha(hoy), busq);
+}
+
+function resumenPedido(p) {
+  const l = p.busquedas.filter(b => !b.directa), d = p.busquedas.length - l.length;
+  const rucs = new Set(l.flatMap(b => [b.rucEmisor, b.rucReceptor].filter(Boolean)));
+  return `${f0(l.length)} ${l.length === 1 ? "búsqueda" : "búsquedas"} de ${f0(rucs.size)} RUC` +
+    (d ? ` y ${f0(d)} ${d === 1 ? "guía citada" : "guías citadas"} en facturas` : "");
+}
+
+/* Copia la lista para pegarla en el extractor; si el navegador no deja copiar, la descarga como archivo. */
+async function entregarPedido(p, boton, nota) {
+  const avisar = (texto, clase) => {
+    if (nota) { nota.textContent = texto; nota.className = "nota " + (clase || ""); return; }
+    if (!boton.dataset.html) boton.dataset.html = boton.innerHTML;
+    boton.innerHTML = ic(clase === "error" ? "limite" : "check") + esc(texto.split(":")[0]);
+    boton.title = texto;
+    clearTimeout(boton._t); boton._t = setTimeout(() => { boton.innerHTML = boton.dataset.html; boton.title = ""; }, 6000);
+  };
+  if (!p.busquedas.length) { avisar("No hay nada que buscar: no hay RUC válidos ni guías citadas.", "error"); return; }
+  const txt = JSON.stringify(p);
+  let copiada = false;
+  try { if (navigator.clipboard) { await navigator.clipboard.writeText(txt); copiada = true; } } catch (e) { /* sin permiso para copiar */ }
+  if (!copiada) {
+    const a = el("a", { href: URL.createObjectURL(new Blob([txt], { type: "application/json" })), download: p.id + ".json" });
+    document.body.append(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+  }
+  avisar(copiada
+    ? `Lista copiada: ${resumenPedido(p)}. En SUNAT, péguela (Ctrl+V) en el panel del extractor y pulse «Buscar y descargar».`
+    : `Lista descargada (${p.id}.json): ${resumenPedido(p)}. En el extractor use «Abrir archivo de lista».`);
+}
+const botonPedido = (icono, texto, clase, fabricar, nota) => el("button", { class: clase, type: "button", html: ic(icono) + esc(texto),
+  onclick: ev => entregarPedido(fabricar(), ev.currentTarget, nota) });
 
 /* ---------- vistas ---------- */
 const VISTAS = [{ id: "resumen", t: "Resumen" }, { id: "alertas", t: "Alertas" }, { id: "maquinas", t: "Máquinas" }, { id: "clientes", t: "Clientes" }];
@@ -1023,7 +1131,10 @@ function cronologia(c) {
 function fichaCaso(c) {
   const v = IDX.venta.get(c.cpe) || {}, cl = D.clientes[c.ruc];
   const f = el("div", { class: "ficha" });
-  f.append(el("div", { class: "ficha-acc", html: (D.facturas[c.cpe] ? `<button class="btn principal" type="button" data-factura="${esc(c.cpe)}">${ic("doc")}Ver factura</button>` : "") + portalH(c.cpe, c.f, c.tot) }));
+  const nGuias = busquedasCaso(c).length;
+  f.append(el("div", { class: "ficha-acc", html: (D.facturas[c.cpe] ? `<button class="btn principal" type="button" data-factura="${esc(c.cpe)}">${ic("doc")}Ver factura</button>` : "") +
+    `<button class="btn claro" type="button" data-guias="${esc(c.cpe)}"${nGuias ? ` title="Copia la lista de búsqueda de guías de remisión de este caso para el extractor de GRE"` : ` disabled title="El comprador no tiene RUC y la factura no cita guías"`}>${ic("camion")}Buscar guías</button>` +
+    portalH(c.cpe, c.f, c.tot) }));
   const b = el("div", { class: "bloques" }); f.append(b);
   b.append(bloque("Venta", "ventas", [
     ["Comprobante", `${esc(tipoDoc(c.cpe))} ${esc(folio(c.cpe))} · ${fecha(c.f)}`], ["Descripción", esc(c.desc)],
@@ -1063,6 +1174,22 @@ function vistaAlertas(sec) {
   const sub = { Alta: K.alta_sin_xml ? `${f0(K.alta_sin_xml)} esperan su XML` : `${f0(D.casos.filter(c => c.estado.startsWith("Confirmada")).length)} confirmados por número de serie`, Media: `${f0(D.casos.filter(c => c.estado.startsWith("Traslado probable")).length)} con traslado probable`, Baja: "coherentes o regularizados" };
   for (const n of ["Alta", "Media", "Baja"]) ks.append(kpi(NIVEL(n), f0(K.casos[n]), sub[n]));
   sec.append(ks);
+
+  // Guías de remisión: listas para el extractor de GRE (se pegan en su panel, en la sesión de SUNAT)
+  const nReinc = new Set(D.casos.filter(esReincidente).map(c => c.ruc)).size;
+  const transp = (D.transportistas || []).filter(x => rucGRE(x.ruc));
+  const tg = tarjeta("Guías de remisión (extractor de GRE)", "El tablero arma la lista; en la pantalla de guías de SUNAT, péguela en el panel del extractor y pulse «Buscar y descargar». " +
+    "El JSON que descarga el extractor es para integrarlo al tablero; el Excel, para revisar.");
+  const notaG = el("p", { class: "nota", role: "status" });
+  tg.append(el("div", { class: "ficha-acc" },
+    botonPedido("calendario", "Lista del día", "btn principal", pedidoDelDia, notaG),
+    botonPedido("alertas", "Guías de los casos altos", "btn claro", pedidoCasosAltos, notaG)),
+    el("ul", { class: "nota" },
+      el("li", {}, `Lista del día (ayer y hoy): ${f0(nReinc)} ${nReinc === 1 ? "comprador reincidente" : "compradores reincidentes"} (con casos altos o medios) como remitentes y destinatarios, el importador (RUC ${D.meta.ruc}) y ` +
+        (transp.length ? `${f0(transp.length)} ${transp.length === 1 ? "transportista" : "transportistas"}: ${transp.map(x => x.nombre ? `${x.nombre} (${x.ruc})` : x.ruc).join(", ")}.` : "ningún transportista (la lista se agrega al generar el tablero).")),
+      el("li", {}, `Casos: «Buscar guías» en cada caso, o todos los altos a la vez. Busca las guías del comprador desde ${VENTANA_CASO.antes} días antes hasta ${VENTANA_CASO.despues} días después de la venta, y las guías citadas en la factura.`)),
+    notaG);
+  sec.append(tg);
 
   if (D.pendientes.length) {
     const d = el("details", { class: "tarjeta bandeja", id: "bandeja" });

@@ -13,6 +13,8 @@ Fuentes opcionales:
   --control-ia    cuaderno de control de la intendencia (xlsx/xlsm): diligencia, NCN, RI y traslados
   --trazabilidad  casos documentados a mano (CSV: cpe, serie_maquina, serie_motor, modelo,
                   ubicacion_entrega, direccion_entrega, fuente, nota)
+  --transportistas lista simple de transportistas vigilados (TXT: un RUC por línea, opcionalmente
+                  seguido del nombre). Entran en la «Lista del día» de guías de remisión.
 
 Uso:
   python3 -I generar_datos.py DAMS.csv CPE_EMITIDOS.txt CPE_DETALLE.txt salida.json [opciones]
@@ -417,6 +419,44 @@ def leer_control_ia(ruta, ruc):
 
 
 # ---------------------------------------------------------------- domicilio fiscal y actividad
+
+def ruc_valido(ruc):
+    """RUC peruano: prefijo 10, 15, 16, 17 o 20 y dígito verificador (módulo 11)."""
+    if not re.fullmatch(r"(10|15|16|17|20)\d{9}", ruc or ""):
+        return False
+    dv = 11 - sum(p * int(d) for p, d in zip((5, 4, 3, 2, 7, 6, 5, 4, 3, 2), ruc)) % 11
+    return {10: 0, 11: 1}.get(dv, dv) == int(ruc[10])
+
+
+def leer_transportistas(ruta):
+    """Lista simple de transportistas vigilados: un RUC por línea, opcionalmente seguido del nombre
+    (separado por espacio, coma, punto y coma, barra vertical, tabulación o guion). Se ignoran las
+    líneas vacías, los comentarios (#), los RUC repetidos y los no válidos (se avisa el número de línea)."""
+    if not ruta:
+        return []
+    texto = None
+    for cod in ("utf-8-sig", "latin-1"):
+        try:
+            with open(ruta, encoding=cod) as f:
+                texto = f.read()
+            break
+        except UnicodeDecodeError:
+            continue
+    out, vistos = [], set()
+    for i, ln in enumerate((texto or "").splitlines(), 1):
+        ln = ln.strip()
+        if not ln or ln.startswith("#"):
+            continue
+        m = re.match(r"^(?:RUC\W*)?(\d{11})(?:\s*[;,|\t-]\s*|\s+|$)(.*)$", ln, re.I)
+        if not m or not ruc_valido(m.group(1)):
+            print(f"AVISO transportistas: línea {i} ignorada (no empieza con un RUC válido de 11 dígitos)")
+            continue
+        if m.group(1) in vistos:
+            continue
+        vistos.add(m.group(1))
+        out.append({"ruc": m.group(1), "nombre": m.group(2).strip().strip('"').strip()})
+    return out
+
 
 def leer_consulta_ruc(rutas):
     """Resultados de la consulta múltiple de RUC de SUNAT (ZIP o TXT separados por «|»)."""
@@ -1246,12 +1286,14 @@ def main(a):
         "maquinas": maquinas, "dams": dams, "traslados": tr, "casos": casos, "ventas": ventas, "cadenas": cadenas,
         "clientes": cli, "facturas": facturas, "patrones": pat, "calidad": calidad, "pendientes": pendientes,
         "exportaciones": [x for x in exportaciones if x["maq"] or x["venta"]], "control": {"art2": meta_ctl.get("art2", []), "complejidad": meta_ctl.get("complejidad")},
+        "transportistas": leer_transportistas(a.transportistas),
     }
     with open(a.salida, "w", encoding="utf-8") as f:
         json.dump(datos, f, ensure_ascii=False, separators=(",", ":"))
     n = datos["kpi"]["casos"]
     print(f"OK {a.salida}: {len(casos)} casos (alta {n['Alta']}, media {n['Media']}, baja {n['Baja']}); {len(maquinas)} máquinas; "
-          f"{len(cli)} compradores; {len(facturas)} XML; {len(pendientes)} comprobantes por descargar")
+          f"{len(cli)} compradores; {len(facturas)} XML; {len(pendientes)} comprobantes por descargar; "
+          f"{len(datos['transportistas'])} transportistas vigilados")
 
 
 if __name__ == "__main__":
@@ -1265,4 +1307,5 @@ if __name__ == "__main__":
     ap.add_argument("--trazabilidad", help="CSV de casos: cpe, serie_maquina, serie_motor, modelo, ubicacion_entrega (DISTRITO, PROVINCIA, DEPARTAMENTO), direccion_entrega, fuente, nota")
     ap.add_argument("--facturas-xml", nargs="*", default=[], help="XML de comprobantes del emisor (archivos, carpetas o ZIP)")
     ap.add_argument("--control-ia", help="Cuaderno de control de la intendencia (xlsx/xlsm): control en destino, NCN, RI y traslados")
+    ap.add_argument("--transportistas", help="Transportistas vigilados (TXT: un RUC por línea, opcionalmente con el nombre); entran en la «Lista del día» de guías")
     main(ap.parse_args())

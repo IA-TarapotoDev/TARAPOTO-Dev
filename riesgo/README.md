@@ -15,7 +15,7 @@ La unidad de seguimiento es la **máquina** (DAM y serie). Cada venta de maquina
 | Pestaña | Qué muestra |
 |---|---|
 | Resumen | Casos por nivel, máquinas importadas, ventas por zona del comprador, control de la IA, **patrones**, comprobantes por descargar y **calidad de los datos** (confiable, con límites, descartado) |
-| Alertas | Lista de casos con íconos, filtros y CSV, que se puede **agrupar** por comprador, máquina (serie), DAM, tipo de mercancía, tipo de máquina, departamento del comprador, traslado o estado. Cada fila se abre en una ficha con «Ver factura» (cuando hay XML) y los datos para buscar el comprobante en el portal del emisor. Arriba, la lista de comprobantes por descargar |
+| Alertas | Lista de casos con íconos, filtros y CSV, que se puede **agrupar** por comprador, máquina (serie), DAM, tipo de mercancía, tipo de máquina, departamento del comprador, traslado o estado. Cada fila se abre en una ficha con «Ver factura» (cuando hay XML), **«Buscar guías»** y los datos para buscar el comprobante en el portal del emisor. Arriba, la lista de comprobantes por descargar y las **listas de guías de remisión** para el extractor de GRE |
 | Máquinas | Traslados de maquinaria del periodo con su venta probable, y el registro de máquinas importadas. Agrupado por DAM, la cabecera de cada grupo muestra el control de la IA una sola vez (regularización, tributos, NCN y traslados) |
 | Clientes | Compradores de maquinaria: domicilio fiscal, actividad, máquinas compradas y casos; se agrupan por zona, departamento o tipo de comprador |
 
@@ -24,6 +24,18 @@ La agrupación elegida en cada pestaña se recuerda en el navegador de quien la 
 ### Control de la DAM (cuaderno de la IA)
 
 Se muestra unificado por DAM y se hereda en cada máquina: modalidad (cancelada, en soles; garantía 160, en dólares), tributos, NCN, RI con su PDF, traslados y regularización. Una diligencia pendiente se muestra solo como **«pendiente de regularización»**: su estado y el plazo del reconocimiento físico suelen ser falta de registro. El cuaderno cubre las DAM con destino Tarapoto (271); las de otro destino aparecen sin control.
+
+### Guías de remisión (extractor de GRE)
+
+El tablero no consulta a SUNAT: arma listas de búsqueda que se copian y se pegan en el panel del [extractor de GRE](../sunat-gre/README.md), que corre en la consola de Edge dentro de la sesión de SUNAT de quien lo usa.
+
+| Botón | Qué busca |
+|---|---|
+| **Lista del día** (pestaña Alertas) | Ayer y hoy: los compradores **reincidentes** (con al menos un caso alto o medio) como remitentes y destinatarios, el importador como remitente y destinatario, y los **transportistas vigilados** (guías de remitente, transportista y por eventos) |
+| **Buscar guías** (ficha de cada caso) | Las guías del comprador como destinatario y como remitente desde 3 días antes hasta 15 días después de la venta, y las guías citadas en la factura (XML), consultadas directo por su número |
+| **Guías de los casos altos** (pestaña Alertas) | Lo mismo que «Buscar guías», para todos los casos de nivel alto a la vez |
+
+Si el navegador no deja copiar, la lista se descarga como archivo y se abre en el extractor con «Abrir archivo de lista». El extractor devuelve un JSON (para integrarlo al tablero) y un Excel (para revisar); ambos tienen reserva tributaria y no se versionan sin cifrar.
 
 ## Criterios de los casos
 
@@ -53,7 +65,8 @@ Los casos son indicios para el análisis de riesgo y no constituyen conclusiones
 python3 -I riesgo/scripts/generar_datos.py DAMs.csv CPEs_EMITIDOS.txt CPE_DETALLE_EMITIDO.txt /ruta/privada/datos.json \
   --domicilios /ruta/privada/domicilios.csv --consulta-ruc lote1.zip lote2.zip \
   --facturas-xml /ruta/privada/xml --control-ia /ruta/privada/control.xlsm \
-  --trazabilidad /ruta/privada/casos.csv --portal URL_DEL_PORTAL_DEL_EMISOR
+  --trazabilidad /ruta/privada/casos.csv --portal URL_DEL_PORTAL_DEL_EMISOR \
+  --transportistas /ruta/privada/transportistas.txt
 
 # 2. JSON → página cifrada (la clave se lee de un archivo privado, no del repositorio)
 CLAVE_TABLERO_ARCHIVO=/ruta/privada/clave.txt \
@@ -73,6 +86,7 @@ Todas las opciones de `generar_datos.py` son opcionales salvo los tres archivos 
 - **Consulta múltiple de RUC** (`--consulta-ruc`, ZIP o TXT, hasta 100 RUC por consulta): actividad económica, fecha de inscripción y, si el padrón no lo trae, el domicilio. La consulta pública no muestra el domicilio de las personas naturales.
 - **XML de las facturas** (`--facturas-xml`, archivos, carpetas o ZIP, también ZIP dentro de ZIP; los 7z y RAR se descomprimen antes): se leen facturas y notas de crédito (UBL 2.1). De cada ítem se extraen la serie de la máquina y del motor, el modelo, el año y la afectación del IGV; la máquina se enlaza con su DAM y el caso se confirma o se descarta. La nota de crédito indica con exactitud la factura que anula. El comprobante completo se puede ver desde la ficha («Ver factura»).
 - **Cuaderno de control de la IA** (`--control-ia`, xlsx o xlsm): hojas ConsolidadoT y de los especialistas, Ingreso de DAM, NCN, Hoja1 (RI y PDF), Traslados (con las series de cada DAM), ConsolidadoA2 y Complejidad.
+- **Transportistas vigilados** (`--transportistas`, TXT): un RUC por línea, opcionalmente seguido del nombre (`20123456789 TRANSPORTES EJEMPLO SAC`). Se ignoran las líneas vacías, las que empiezan con `#`, los repetidos y los RUC no válidos (se avisa el número de línea). Entran en la «Lista del día» de guías de remisión.
 - **Casos documentados a mano** (`--trazabilidad`, CSV con `cpe, serie_maquina, serie_motor, modelo, ubicacion_entrega, direccion_entrega, fuente, nota`; `ubicacion_entrega` como «DISTRITO, PROVINCIA, DEPARTAMENTO»): por ejemplo, la representación impresa de una factura con el lugar de entrega.
 
 Ninguno de estos archivos se versiona: todos tienen datos de contribuyentes.
