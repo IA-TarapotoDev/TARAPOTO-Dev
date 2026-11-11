@@ -701,7 +701,13 @@ def leer_guias(rutas, r_ubi):
             print(f"AVISO guías: {os.path.basename(ruta)} no es una descarga del extractor de GRE; se omite")
             continue
         p = d.get("pedido") or {}
-        meta["archivos"].append({"titulo": limpio(p.get("titulo")), "generado": str(p.get("generado") or "")[:10],
+        par = d.get("parametros") or {}
+        titulo = limpio(p.get("titulo"))
+        if par.get("rucs") and par.get("periodos") and (p.get("id") == "manual" or not titulo):
+            dmy = lambda x: "/".join(reversed(str(x)[:10].split("-")))
+            rol = {"ambos": " como emisor y destinatario", "emisor": " como emisor", "receptor": " como destinatario"}.get(par.get("rol"), "")
+            titulo = (f"RUC {', '.join(par['rucs'])}{rol}, " + "; ".join(f"{dmy(x.get('desde'))} al {dmy(x.get('hasta'))}" for x in par["periodos"]))
+        meta["archivos"].append({"titulo": titulo, "generado": str(p.get("generado") or "")[:10],
                                  "version": str(d.get("version") or ""), "guias": len(d.get("guias") or [])})
         for b in d.get("busquedas") or []:
             caso = str(b.get("caso") or "").strip()
@@ -1191,18 +1197,26 @@ def main(a):
         for g in guias:
             g["vig"] = g["estado"] != "Baja" and ("sustenta" not in g or guias[g["sustenta"]]["estado"] != "Baja")
 
+    # Traslado del importador entre sus propias sedes de la ZTE: muestra por dónde pasó la máquina, no a dónde la llevó el
+    # comprador. Se ve en la ficha, pero no cuenta para la zona de la entrega.
+    interno = lambda g: norm(g["motivo"]).startswith("TRASLADO ENTRE ESTABLECIMIENTOS") and g["l"]["zona"] == "ZTE"
+
     def resumen_gre(cpe):
         gs = [guias[i] for i in gre_venta.get(cpe, {})]
-        vig = [g for g in gs if g["vig"]]
+        dias_v = lambda g: (pd.Timestamp(g["f"]) - por_cpe.loc[cpe].f).days if g["f"] else None
+        ent = [g for g in gs if not interno(g) and not (g.get("sustenta") is not None and interno(guias[g["sustenta"]]))]
+        vig = [g for g in ent if g["vig"]]
         zl = {g["l"]["zona"] for g in vig}
         ztc = "ZTC" in zl
+        # Para ubicar la máquina en la ZTE solo cuentan las guías desde 3 días antes de la venta
+        zl_post = {g["l"]["zona"] for g in vig if dias_v(g) is not None and dias_v(g) >= -3}
         ida = min((g["f"] for g in vig if g["p"]["zona"] == "ZTE" and g["l"]["zona"] == "ZTC" and g["f"]), default="")
         regreso = [g for g in vig if ida and g["p"]["zona"] == "ZTC" and g["l"]["zona"] == "ZTE" and g["f"] >= ida]
-        return {"gs": gs, "vig": vig, "ztc": ztc, "zte": zl == {"ZTE"}, "regreso": regreso,
-                "cambio": not ztc and any(not g["vig"] and g["l"]["zona"] == "ZTC" for g in gs),
+        return {"gs": gs, "ent": ent, "vig": vig, "ztc": ztc, "zte": zl_post == {"ZTE"} and zl <= {"ZTE"}, "regreso": regreso,
+                "cambio": not ztc and any(not g["vig"] and g["l"]["zona"] == "ZTC" for g in ent),
                 "desde_ztc": [g for g in vig if g["p"]["zona"] == "ZTC" and g not in regreso]}
     gre_res = {cpe: resumen_gre(cpe) for cpe in gre_venta}
-    sin_gre = {"gs": [], "vig": [], "ztc": False, "zte": False, "cambio": False, "desde_ztc": [], "regreso": []}
+    sin_gre = {"gs": [], "ent": [], "vig": [], "ztc": False, "zte": False, "cambio": False, "desde_ztc": [], "regreso": []}
 
     # ---------- Exportación de lo vendido a no domiciliados ----------
     exp_venta = {}
@@ -1318,7 +1332,8 @@ def main(a):
         t_prob = [] if maqs or v.cpe not in prob_venta else [prob_venta[v.cpe]]
         dests = sorted({k.split("#")[0] for k in maqs})
         dest_m = sorted({mq.loc[mq.key == k, "dest"].iloc[0] for k in maqs})
-        salida = bool({"ztc", "igv", "cambio", "entrega", "nodom", "gre_ztc"} & set(mot))
+        # Una venta exportada va a la ZTC para embarcarse: su guía a la ZTC no es por sí sola un indicio de salida
+        salida = bool({"ztc", "igv", "cambio", "entrega", "nodom"} & set(mot)) or ("gre_ztc" in mot and "exp" not in mot)
         menor = v.vv < MENOR.get(v.moneda, 0) and not {"cambio", "nodom"} & set(mot)
         mot += [k for k, ok in (("gre_cambio", gz["cambio"]), ("gre_zte", gz["zte"] and not gz["cambio"])) if ok]
         if menor:
@@ -1417,19 +1432,24 @@ def main(a):
                        f"{g['l']['lugar']} (ZTE) después de haber salido: vigilar si se anula la venta, si se pide la devolución de lo pagado por el "
                        "traslado o si la máquina se vuelve a vender en la ZTE sin IGV.")
         if gz["cambio"]:
-            bajas = [g for g in gz["gs"] if not g["vig"] and g["l"]["zona"] == "ZTC"]
+            bajas = [g for g in gz["ent"] if not g["vig"] and g["l"]["zona"] == "ZTC"]
             rem = [g for g in bajas if g["estado"] == "Baja"]
             sig = [g for g in bajas if g["estado"] != "Baja"]
             vig = [g for g in gz["vig"] if g["tipo"] == "Remitente"] or gz["vig"]
             b0 = rem or bajas
             out.append(f"{'La guía' if len(b0) == 1 else 'Las guías'} {num_g(b0)} a {bajas[0]['l']['lugar']} (ZTC) {'se dio' if len(b0) == 1 else 'se dieron'} de baja"
-                       + (f" ({rem[0]['baja'].lower()})" if rem and rem[0]["baja"] else "") + f" y la {num_g(vig[:2])} lleva la máquina a "
+                       + (f" ({rem[0]['baja'].lower()})" if rem and rem[0]["baja"] else "") + f" y {'la' if len(vig[:2]) == 1 else 'las'} {num_g(vig[:2])} {'lleva' if len(vig[:2]) == 1 else 'llevan'} la máquina a "
                        f"{vig[0]['l']['lugar']} ({vig[0]['l']['zona']}). "
                        + (f"Las guías del transportista {num_g(sig)} a {sig[0]['l']['lugar']} siguen emitidas. " if sig else "")
                        + "Verificar a dónde llegó la máquina: transportista, placas " + ", ".join(sorted({p_ for g in gz["gs"] for p_ in g["placas"]})[:4] or ["s/d"])
                        + ", peajes o visita.")
-        if gz["gs"] and not gz["vig"]:
-            bj = [g for g in gz["gs"] if g["estado"] == "Baja"] or gz["gs"]
+        internos = [g for g in gz["gs"] if interno(g) and g["estado"] != "Baja"]
+        if internos and not gz["ent"]:
+            g = max(internos, key=lambda g: g["f"])
+            out.append(f"Solo hay traslados internos del importador: la guía {g['num']} del {ftx(g['f'])} lleva la máquina a su sede de {g['l']['lugar']}. "
+                       "Falta la guía con la que se entregó al comprador: pedirla y ubicar la máquina.")
+        if gz["ent"] and not gz["vig"]:
+            bj = [g for g in gz["ent"] if g["estado"] == "Baja"] or gz["ent"]
             reemp = [g for g in guias if g["vig"] and g["em"]["ruc"] == bj[0]["em"]["ruc"] and g not in gz["gs"] and g["f"] and bj[0]["f"]
                      and abs((pd.Timestamp(g["f"]) - pd.Timestamp(bj[0]["f"])).days) <= 2 and g["l"]["u"] == bj[0]["l"]["u"]]
             out.append(f"{'La guía' if len(bj) == 1 else 'Las guías'} {num_g(bj)} con esta máquina {'se dio' if len(bj) == 1 else 'se dieron'} de baja"
@@ -1501,7 +1521,7 @@ def main(a):
             elif c["nivel"] == "Alta" and x["dest"] == "271" and not c.get("transito"):
                 acc.append(f"Requerir el sustento de la salida de la ZTE de la máquina {x['pin'] or x['k']} (DAM {x['dam']} serie {x['s']}): "
                            "tiene el beneficio y no tiene solicitud de traslado para esta serie.")
-            elif c["nivel"] == "Alta" or (c["estado"].startswith("Guía de remisión a la ZTE") and x["dest"] not in ("271", "")):
+            elif x["dest"] not in ("271", "") and (c["nivel"] == "Alta" or c["estado"].startswith("Guía de remisión a la ZTE")):
                 acc.append(f"La DAM {x['dam']} tiene destino {DESTINOS.get(x['dest'], x['dest'])}: consultar en el sistema su control en destino y "
                            "sus traslados (está en el Excel de consultas a otras intendencias, en Resumen).")
         if "cambio" in c["mot"]:
@@ -1552,7 +1572,7 @@ def main(a):
                       ("gre_zte", "Llegada en la ZTE")):
             for c in con_gre:
                 gz = gre_res[c["cpe"]]
-                if k in c["mot"] or (k == "baja" and gz["gs"] and not gz["vig"]):
+                if k in c["mot"] or (k == "baja" and gz["ent"] and not gz["vig"]):
                     gs = [guias[x["i"]] for x in c["gre"]]
                     gs = [g for g in gs if g["tipo"] == "Remitente"] or gs
                     it.append(f"{t_} · {c['cpe'][3:]} ({c['cli'][:30].strip()}, nivel {c['nivel'].lower()}"

@@ -778,13 +778,15 @@ const persG = x => x && (x.nombre || x.ruc) ? `${esc(x.nombre || x.ruc)}${x.nomb
 function guiaH(g, por, fVenta, i) {
   const d = fVenta && g.f ? Math.round((new Date(g.f) - new Date(fVenta)) / 864e5) : null;
   const est = g.estado === "Baja" ? ` <span class="etq alerta" title="${esc(g.baja || "")}">dada de baja</span>` : !g.vig ? ` <span class="etq pend">sustentada en una guía dada de baja</span>` : "";
-  const lleg = g.vig && g.l.zona === "ZTC" ? "alerta" : g.vig && g.l.zona === "ZTE" ? "ok" : "";
+  const interno = /^traslado entre establecimientos/i.test(g.motivo || "") && g.l.zona === "ZTE";
+  const lleg = g.vig && g.l.zona === "ZTC" ? "alerta" : g.vig && g.l.zona === "ZTE" && !interno ? "ok" : "";
   const bienes = (g.bienes || []).slice(0, 3).map(esc).join("<br>") + ((g.nb || 0) > 3 ? `<br><span class="etq">y ${f0(g.nb - 3)} más</span>` : "");
   return `<div class="guia${g.vig ? "" : " baja"}">` +
     `<div class="paso-c"><b>${copiable(g.num)}</b> <span class="etq">${esc(g.tipo)}</span> ${fecha(g.f)}` +
     (d != null ? ` <span class="etq">${d === 0 ? "el día de la venta" : Math.abs(d) + (Math.abs(d) === 1 ? " día " : " días ") + (d > 0 ? "después" : "antes")}</span>` : "") + est +
     (i != null ? `<button class="btn claro mini ver-g" type="button" data-guia="${i}" title="Abrir la guía completa para leerla o imprimirla">${ic("doc")}Ver guía</button>` : "") + `</div>` +
-    `<div class="paso-c">${esc(g.p.lugar || "s/d")} ${zonaH(g.p.zona)} <span class="fl">→</span> <b>${esc(g.l.lugar || "s/d")}</b> <span class="etq ${lleg}">${esc(zonaT(g.l.zona))}</span></div>` +
+    `<div class="paso-c">${esc(g.p.lugar || "s/d")} ${zonaH(g.p.zona)} <span class="fl">→</span> <b>${esc(g.l.lugar || "s/d")}</b> <span class="etq ${lleg}">${esc(zonaT(g.l.zona))}</span>` +
+    (interno ? ` <span class="etq" title="Traslado del importador entre sus sedes: no muestra a dónde llevó la máquina el comprador">traslado interno</span>` : "") + `</div>` +
     (g.l.dir ? `<div class="mudo">Llegada: ${esc(g.l.dir)}</div>` : "") +
     `<div class="mudo">Emisor: ${persG(g.em)} · Destinatario: ${persG(g.de)}${g.rem ? " · Remitente: " + persG(g.rem) : ""}</div>` +
     `<div class="mudo">${g.motivo ? "Motivo: " + esc(g.motivo) + " · " : ""}${g.fi ? "Inicio del traslado: " + fecha(g.fi) + " · " : ""}${(g.placas || []).length ? "Placas: " + g.placas.map(esc).join(", ") + " · " : ""}${g.peso ? "Peso: " + esc(g.peso) : ""}</div>` +

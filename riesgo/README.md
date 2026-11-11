@@ -59,6 +59,9 @@ La zona de la partida y de la llegada sale del ubigeo de cada dirección. En el 
 - **Destino cambiado**: una guía a la ZTC se dio de baja y otra lleva la máquina a la ZTE. El caso no baja de nivel.
 - **Llegada en la ZTE** (todas las guías vigentes llegan a la ZTE y no hubo cambio de destino): un caso alto por ubicación (comprador de fuera o venta con IGV) pasa a medio, «Guía de remisión a la ZTE: verificar que la máquina siga ahí». No baja si hubo reemisión sin IGV, entrega fuera de la ZTE, venta a no domiciliado o solicitud de traslado.
 - Si la única guía con la máquina se dio de baja, la ficha lo dice y sugiere pedir la guía con la que el comprador la recibió.
+- **Traslados internos**: una guía del importador entre sus sedes de la ZTE («Traslado entre establecimientos») se muestra en la ficha, pero no cuenta como entrega al comprador ni baja el nivel del caso; si es la única, la ficha pide la guía de la entrega.
+- **Exportaciones**: la guía a la ZTC de una venta exportada (con DAM de exportación) es el camino al puerto y no es por sí sola un indicio de salida.
+- Para ubicar la máquina en la ZTE solo cuentan las guías desde 3 días antes de la venta.
 - **Regreso a la ZTE**: si después de una guía a la ZTC hay otra que trae la máquina de vuelta a la ZTE, la ficha sugiere vigilar la anulación de la venta, un pedido de devolución de lo pagado por el traslado o una nueva venta sin IGV.
 
 La ficha de cada caso y de cada máquina muestra sus guías (partida y llegada con su zona, emisor, destinatario, motivo, placas, bienes y cómo se enlazó) y la cronología las incluye. Solo se guardan las guías enlazadas; las claves de todas las demás quedan como «conocidas», para que las listas nuevas no las descarguen otra vez. Una guía muestra a dónde se llevó la máquina, no dónde está hoy, y la llegada la declara quien la emite.
