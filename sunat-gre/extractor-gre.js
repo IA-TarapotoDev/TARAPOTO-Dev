@@ -1462,7 +1462,7 @@
   /**
    * Función principal. Ejemplos desde la consola:
    *   await GREExtractor.iniciar({ pedido: textoCopiadoDelTablero });
-   *   await GREExtractor.iniciar({ rucs: ['20103913340'], rol: 'ambos', periodos: [{ desde: 'hoy-1', hasta: 'hoy' }] });
+   *   await GREExtractor.iniciar({ rucs: ['20XXXXXXXXX'], rol: 'ambos', periodos: [{ desde: 'hoy-1', hasta: 'hoy' }] });
    * Si no hay conexión, pedirá abrir una guía con «Ver» en la pantalla de SUNAT.
    */
   async function iniciarExtraccionGRE(opciones = {}) {
