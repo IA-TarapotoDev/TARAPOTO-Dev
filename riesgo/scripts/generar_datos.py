@@ -575,13 +575,20 @@ def guias_xlsx(ruta):
         clave = txt(r.get("Clave"))
         if not clave:
             continue
+        # «Consulta correcta»: SI (con detalle), YA_EN_TABLERO, NO o NO_PROCESADA (sin detalle). Sin la columna, se asume SI.
+        con_detalle = txt(r.get("Consulta correcta")).upper() in ("", "SI", "SÍ")
+        listado = {"codCpe": txt(r.get("Código CPE")), "rucEmisor": txt(r.get("RUC emisor")), "rucReceptor": txt(r.get("Receptor documento")),
+                   "numSerie": txt(r.get("Serie")), "numCpe": txt(r.get("Número")), "desEstado": txt(r.get("Estado")),
+                   "fecEmision": txt(r.get("Fecha emisión"))}
+        if not con_detalle:
+            guias.append({"clave": clave, "listado": listado, "detalle": None, "busquedas": []})
+            continue
         peso = txt(r.get("Peso bruto"))
         try:
             peso = float(peso)
         except ValueError:
             peso = None
-        guias.append({"clave": clave, "listado": {"codCpe": txt(r.get("Código CPE")), "rucEmisor": txt(r.get("RUC emisor")),
-                                                   "rucReceptor": txt(r.get("Receptor documento"))},
+        guias.append({"clave": clave, "listado": listado,
                       "detalle": {"numRuc": txt(r.get("RUC emisor")), "codCpe": txt(r.get("Código CPE")), "numSerie": txt(r.get("Serie")),
                                   "numCpe": txt(r.get("Número")), "desEstado": txt(r.get("Estado")), "emision": {"fecEmision": txt(r.get("Fecha emisión"))},
                                   "emisor": {"desNombre": txt(r.get("Nombre emisor"))},
@@ -1846,7 +1853,9 @@ def main(a):
         "exportaciones": [x for x in exportaciones if x["maq"] or x["venta"]], "control": {"art2": meta_ctl.get("art2", []), "complejidad": meta_ctl.get("complejidad")},
         "transportistas": leer_transportistas(a.transportistas),
         "guias": guias_out,
-        "gre": {"claves": [g["clave"] for g in guias], "archivos": gre_meta["archivos"], "busquedas": gre_meta["busquedas"]} if guias else {},
+        # «claves»: guías que el extractor no vuelve a descargar. Solo las que tienen detalle: las no procesadas o con
+        # error se vuelven a pedir en la siguiente lista del día o del caso.
+        "gre": {"claves": [g["clave"] for g in guias if g["_det"]], "archivos": gre_meta["archivos"], "busquedas": gre_meta["busquedas"]} if guias else {},
     }
     with open(a.salida, "w", encoding="utf-8") as f:
         json.dump(datos, f, ensure_ascii=False, separators=(",", ":"))
