@@ -224,6 +224,9 @@
   .guia.baja { opacity: .78; border-style: dashed; }
   .bloque .mudo { color: var(--suave); font-size: 12.5px; }
   .guia .bienes { font-size: 12.5px; background: color-mix(in srgb, var(--mudo) 8%, transparent); border-radius: 6px; padding: 4px 6px; }
+  .btn.mini { font-size: 12px; padding: 4px 10px; gap: 4px; }
+  .btn.mini svg.ic { width: 14px; height: 14px; }
+  .paso-c .ver-g { margin-left: auto; }
 
   /* ---------- tablas ---------- */
   .barra-tabla { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 10px; }
@@ -774,14 +777,15 @@ const POR_GRE = { "factura citada en la guía": "la guía cita la factura", "ser
   "guía del transportista": "guía del transportista que sigue a la del remitente", "guía citada en la factura": "la factura cita la guía",
   "tipo de máquina, comprador y fecha": "probable: mismo tipo de máquina, comprador y fechas cercanas" };
 const persG = x => x && (x.nombre || x.ruc) ? `${esc(x.nombre || x.ruc)}${x.nombre && x.ruc ? ` <span class="etq">${esc(x.ruc)}</span>` : ""}` : "s/d";
-function guiaH(g, por, fVenta) {
+function guiaH(g, por, fVenta, i) {
   const d = fVenta && g.f ? Math.round((new Date(g.f) - new Date(fVenta)) / 864e5) : null;
   const est = g.estado === "Baja" ? ` <span class="etq alerta" title="${esc(g.baja || "")}">dada de baja</span>` : !g.vig ? ` <span class="etq pend">sustentada en una guía dada de baja</span>` : "";
   const lleg = g.vig && g.l.zona === "ZTC" ? "alerta" : g.vig && g.l.zona === "ZTE" ? "ok" : "";
   const bienes = (g.bienes || []).slice(0, 3).map(esc).join("<br>") + ((g.nb || 0) > 3 ? `<br><span class="etq">y ${f0(g.nb - 3)} más</span>` : "");
   return `<div class="guia${g.vig ? "" : " baja"}">` +
     `<div class="paso-c"><b>${copiable(g.num)}</b> <span class="etq">${esc(g.tipo)}</span> ${fecha(g.f)}` +
-    (d != null ? ` <span class="etq">${d === 0 ? "el día de la venta" : Math.abs(d) + (Math.abs(d) === 1 ? " día " : " días ") + (d > 0 ? "después" : "antes")}</span>` : "") + est + `</div>` +
+    (d != null ? ` <span class="etq">${d === 0 ? "el día de la venta" : Math.abs(d) + (Math.abs(d) === 1 ? " día " : " días ") + (d > 0 ? "después" : "antes")}</span>` : "") + est +
+    (i != null ? `<button class="btn claro mini ver-g" type="button" data-guia="${i}" title="Abrir la guía completa para leerla o imprimirla">${ic("doc")}Ver guía</button>` : "") + `</div>` +
     `<div class="paso-c">${esc(g.p.lugar || "s/d")} ${zonaH(g.p.zona)} <span class="fl">→</span> <b>${esc(g.l.lugar || "s/d")}</b> <span class="etq ${lleg}">${esc(zonaT(g.l.zona))}</span></div>` +
     (g.l.dir ? `<div class="mudo">Llegada: ${esc(g.l.dir)}</div>` : "") +
     `<div class="mudo">Emisor: ${persG(g.em)} · Destinatario: ${persG(g.de)}${g.rem ? " · Remitente: " + persG(g.rem) : ""}</div>` +
@@ -790,13 +794,13 @@ function guiaH(g, por, fVenta) {
     (por ? `<div class="mudo">Enlace: ${esc(POR_GRE[por] || por)}</div>` : "") + `</div>`;
 }
 function bloqueGuias(c) {
-  const gs = (c.gre || []).map(x => [D.guias[x.i], x.por]).filter(x => x[0]);
+  const gs = (c.gre || []).map(x => [D.guias[x.i], x.por, x.i]).filter(x => x[0]);
   const b = c.gre_bus;
   const busq = b ? `<p class="mudo">Búsqueda del equipo: guías del comprador del ${fecha(b.desde)} al ${fecha(b.hasta)} (${f0(b.n)} ${b.n === 1 ? "guía" : "guías"})${b.incompleta ? " · <b>búsqueda incompleta</b>" : ""}.</p>` : "";
   if (!gs.length) return b ? bloque("Guías de remisión", "ruta", [], { clase: "pend", html: `<p>Ninguna guía consultada lleva esta máquina.</p>` + busq }) : null;
   const mot = c.mot || [];
   return bloque(`Guías de remisión (${gs.length})`, "ruta", [], { clase: "ancho " + (mot.includes("gre_ztc") || mot.includes("gre_cambio") ? "alerta" : mot.includes("gre_zte") ? "ok" : "pend"),
-    html: `<div class="guias">${gs.map(([g, por]) => guiaH(g, por, c.f)).join("")}</div>` + busq });
+    html: `<div class="guias">${gs.map(([g, por, i]) => guiaH(g, por, c.f, i)).join("")}</div>` + busq });
 }
 
 /* ---------- ver la factura (representación desde el XML) ---------- */
@@ -848,8 +852,118 @@ ${pago ? `<p><b>Forma de pago:</b><br>${pago}</p>` : ""}${(x.notas || []).length
   if (!w) location.assign(url);
   setTimeout(() => URL.revokeObjectURL(url), 300000);
 }
+/* ---------- ver la guía de remisión (representación desde el detalle que descargó el extractor de GRE) ---------- */
+const SECC_GRE = [["traslado.partida", "Punto de partida"], ["traslado.llegada", "Punto de llegada"], ["traslado.transportista", "Transportista"],
+  ["traslado.vehiculo", "Vehículos"], ["traslado.conductor", "Conductores"], ["traslado.proveedor", "Proveedores"], ["traslado.comprador", "Comprador"],
+  ["traslado.contenedores", "Contenedores"], ["traslado", "Datos del traslado"], ["receptor", "Destinatario"], ["remitente", "Remitente"],
+  ["emisor", "Emisor"], ["emision", "Emisión"], ["docRelacionado", "Documentos relacionados"], ["docGrePorEvento", "Guías por evento"],
+  ["baja", "Baja"], ["noConformidad", "No conformidad"], ["", "Otros datos"]];
+const ETQ_GRE = { numRuc: "RUC", numDocIdentidad: "N.° de documento", codTipDocIdentidad: "Tipo de documento (código)", desTipDocIdentidad: "Tipo de documento",
+  desNomRazonSocial: "Nombre o razón social", desRazonSocial: "Razón social", desNombre: "Nombre", desNombres: "Nombres", desApellidos: "Apellidos",
+  numPlaca: "Placa", numRegistroMTC: "Registro MTC", numLicencia: "Licencia de conducir", numCertificado: "Certificado", vehiculoSec: "Vehículo secundario",
+  codUbigeo: "Ubigeo", desDireccion: "Dirección", desDepartamento: "Departamento", desProvincia: "Provincia", desDistrito: "Distrito",
+  codEstablecimiento: "Código de establecimiento", codMotivoTraslado: "Motivo (código)", desMotivoTraslado: "Motivo", desMotivoTrasladoOtros: "Motivo (detalle)",
+  fecInicioTraslado: "Inicio del traslado", fecEntrega: "Entrega", codModalidadTraslado: "Modalidad (código)", desModalidadTraslado: "Modalidad",
+  numBultosPallets: "Bultos o pallets", codUnidadMedidaPb: "Unidad del peso", numPesoBruto: "Peso bruto", numPlacaVehiculo: "Placa del vehículo",
+  fecEmision: "Fecha de emisión", horEmision: "Hora de emisión", desObservacion: "Observaciones", desMotivo: "Motivo", fecBaja: "Fecha de baja",
+  numDocumento: "N.° de documento", numSerie: "Serie", codTipoDocumento: "Tipo de documento (código)", desTipoDocumento: "Tipo de documento",
+  numContenedor: "Contenedor", numPrecinto: "Precinto", codProductoSunat: "Código de producto SUNAT", codSubPartida: "Subpartida", codGtin: "GTIN",
+  indBienRegulado: "Bien regulado", docRelacionado: "Documento relacionado" };
+const TILDES_GRE = { emision: "emisión", direccion: "dirección", razon: "razón", numero: "número", codigo: "código", guia: "guía", vehiculo: "vehículo",
+  observacion: "observación", telefono: "teléfono", pais: "país", transito: "tránsito", via: "vía", unico: "único", electronico: "electrónico", ruc: "RUC", mtc: "MTC" };
+function etqGRE(k) {
+  if (ETQ_GRE[k]) return ETQ_GRE[k];
+  const m = /^(num|des|cod|fec|hor|ind|mto|cnt|nom|tip)([A-Z0-9].*)$/.exec(k);
+  let t = (m ? m[2] : k).replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2").toLowerCase()
+    .split(" ").map(p => TILDES_GRE[p] || p).join(" ");
+  if (m && m[1] === "fec") t = "fecha de " + t;
+  if (m && m[1] === "hor") t = "hora de " + t;
+  if (m && m[1] === "ind") t = "indicador de " + t;
+  if (m && m[1] === "cod") t += " (código)";
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+const valGRE = v => /^\d{4}-\d{2}-\d{2}$/.test(v) ? fecha(v) : /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(v) ? `${fecha(v.slice(0, 10))} ${esc(v.slice(11, 16))}` : esc(v);
+/* Filas de una sección del detalle: «traslado.vehiculo[1].vehiculoSec[1].numPlaca» → «Vehículo secundario › Placa» */
+function filasGRE(campos, pre) {
+  const varios = campos.some(([r]) => /\[([2-9]|\d{2,})\]/.test(r.slice(pre.length)));
+  return campos.map(([r, v]) => {
+    const resto = r.slice(pre.length);
+    const idx = [...resto.matchAll(/\[(\d+)\]/g)].map(m => m[1]);
+    const claves = resto.replace(/\[\d+\]/g, "").split(".").filter(k => k && k !== "direccion" && k !== "contribuyente");
+    const ult = claves.pop() || pre.split(".").pop();
+    return `<tr><th>${esc([...claves.map(etqGRE), etqGRE(ult)].join(" › "))}${varios && idx.length ? ` (${esc(idx.join("."))})` : ""}</th><td>${valGRE(v)}</td></tr>`;
+  }).join("");
+}
+function verGuia(i) {
+  const g = D.guias[i]; if (!g) return;
+  const ver = g.ver || null, campos = (ver && ver.c) || [];
+  const dato = ruta => (campos.find(p => p[0] === ruta) || [])[1] || "";
+  const tipo = g.tipo ? g.tipo.toUpperCase() : "";
+  const per = x => x && (x.nombre || x.ruc) ? `${esc(x.nombre || "")}${x.ruc ? `${x.nombre ? "<br>" : ""}<span class="mudo">${esc(x.ruc)}</span>` : ""}` : "s/d";
+  const punto = (t, x) => `<div class="punto"><h3>${t}</h3><b>${esc(x.lugar || "s/d")}</b> <span class="zona">${esc(zonaT(x.zona))}</span>` +
+    `<div>${esc(x.dir || "")}</div><div class="mudo">${x.u ? "Ubigeo " + esc(x.u) : ""}${x.ruc ? `${x.u ? " · " : ""}RUC ${esc(x.ruc)}` : ""}</div></div>`;
+  const datos = [["Fecha de emisión", fecha(g.f) + (dato("emision.horEmision") ? " · " + esc(dato("emision.horEmision").slice(0, 5)) : "")],
+    ["Inicio del traslado", g.fi ? fecha(g.fi) : ""], ["Entrega", dato("traslado.fecEntrega") ? valGRE(dato("traslado.fecEntrega")) : ""],
+    ["Motivo", esc(g.motivo || "")], ["Modalidad", esc(dato("traslado.desModalidadTraslado"))], ["Peso bruto", esc(g.peso || "")],
+    ["Bultos o pallets", esc(dato("traslado.numBultosPallets"))], ["Placas", (g.placas || []).map(esc).join(", ")],
+    ["Destinatario", per(g.de)], ["Remitente", g.rem ? per(g.rem) : ""]].filter(x => x[1]);
+  const bienes = ver && ver.b && ver.b.length
+    ? ver.b.map(([n, cod, desc, cant, und, otros]) => `<tr><td>${esc(n)}</td><td>${esc(cod)}</td><td>${esc(desc)}${(otros || []).length ? `<div class="mudo">${otros.map(([k, v]) => `${esc(etqGRE(k))}: ${esc(v)}`).join(" · ")}</div>` : ""}</td><td class="n">${esc(cant)}</td><td>${esc(und)}</td></tr>`).join("")
+    : (g.bienes || []).map((d, j) => `<tr><td>${j + 1}</td><td></td><td>${esc(d)}</td><td></td><td></td></tr>`).join("");
+  const casos = D.casos.filter(c => (c.gre || []).some(x => x.i === i));
+  const maqs = (D.maquinas || []).filter(m => (m.gre || []).includes(i));
+  const enlaces = casos.map(c => { const x = c.gre.find(y => y.i === i);
+    return `<li>Caso ${esc(folio(c.cpe))} (${esc(c.nivel)}) · ${esc(c.cli)}${x.por ? ` · enlace: ${esc(POR_GRE[x.por] || x.por)}` : ""}</li>`; })
+    .concat(maqs.map(m => `<li>Máquina ${esc(m.cat || "")} ${esc(m.modelo || "")} · ${esc(m.pin || m.k)}</li>`)).join("");
+  const secciones = [];
+  const usados = new Set();
+  for (const [pre, titulo] of SECC_GRE) {
+    const cs = campos.filter(([r]) => !usados.has(r) && (!pre || r === pre || r.startsWith(pre + ".") || r.startsWith(pre + "[")));
+    cs.forEach(([r]) => usados.add(r));
+    if (pre === "docRelacionado" && (g.docs || []).length) continue; // ya están arriba, en «Documentos relacionados»
+    if (cs.length) secciones.push(`<section><h3>${titulo}</h3><table class="kv"><tbody>${filasGRE(cs, pre)}</tbody></table></section>`);
+  }
+  const html = `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer">
+<title>Guía de remisión ${esc(g.num)}</title><style>
+body{margin:0;background:#eef2f1;color:#13211f;font:14px/1.45 Inter,"Segoe UI",system-ui,Arial,sans-serif}
+.hoja{max-width:900px;margin:24px auto;background:#fff;border-radius:14px;padding:28px 32px;box-shadow:0 10px 30px rgba(0,0,0,.08)}
+header{display:flex;flex-wrap:wrap;gap:16px;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #13211f;padding-bottom:14px}
+h1{font-size:18px;margin:0 0 4px}h2{font-size:15px;margin:22px 0 6px;border-bottom:1px solid #dfe5e3;padding-bottom:4px}h3{font-size:13px;margin:0 0 4px;color:#5f6d69;text-transform:uppercase;letter-spacing:.03em}
+.caja{border:2px solid #13211f;border-radius:10px;padding:10px 18px;text-align:center;min-width:220px}.caja b{display:block;font-size:16px}
+.mudo{color:#5f6d69;font-size:12.5px}.datos{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:6px 24px;margin:16px 0}
+.datos div span{color:#5f6d69;display:block;font-size:12px}.puntos{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+.punto{border:1px solid #dfe5e3;border-radius:10px;padding:10px 12px}.zona{font-size:12px;background:#f3f6f5;border-radius:999px;padding:1px 8px}
+table{width:100%;border-collapse:collapse;margin-top:6px;font-size:13px}th,td{border-bottom:1px solid #dfe5e3;padding:6px 8px;text-align:left;vertical-align:top}
+thead th{background:#f3f6f5;font-size:12px}td.n{text-align:right;white-space:nowrap}.kv th{width:42%;font-weight:500;color:#5f6d69}
+.secc{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:4px 24px}.secc section{break-inside:avoid;margin-top:10px}
+.aviso{background:#fff6e5;border-radius:8px;padding:10px 12px;margin:12px 0}.baja{background:#fde8e8;color:#7d1d1d}ul{margin:4px 0;padding-left:20px}
+footer{margin-top:22px;font-size:11.5px;color:#5f6d69;display:flex;flex-wrap:wrap;gap:8px;justify-content:space-between;align-items:center}
+button{font:inherit;font-size:13px;font-weight:650;border:0;border-radius:999px;padding:8px 16px;background:#12302e;color:#e9f2ef;cursor:pointer}
+@media print{body{background:#fff}.hoja{box-shadow:none;margin:0;max-width:none}button{display:none}}
+</style></head><body><div class="hoja">
+<header><div><h1>${esc(g.em.nombre || "Emisor")}</h1><div class="mudo">RUC ${esc(g.em.ruc)}</div></div>
+<div class="caja"><span class="mudo">RUC ${esc(g.em.ruc)}</span><b>GUÍA DE REMISIÓN ELECTRÓNICA</b>${tipo ? `<b>${esc(tipo)}</b>` : ""}<b>${esc(g.num)}</b></div></header>
+${g.estado === "Baja" ? `<div class="aviso baja"><b>Guía dada de baja</b>${g.baja ? ": " + esc(g.baja) : ""}${dato("baja.fecBaja") ? " · " + valGRE(dato("baja.fecBaja")) : ""}</div>`
+    : g.vig === false ? `<div class="aviso">Esta guía se sustenta en otra guía que fue dada de baja.</div>` : g.estado ? `<div class="mudo" style="margin-top:8px">Estado en SUNAT: ${esc(g.estado)}</div>` : ""}
+<div class="datos">${datos.map(([k, v]) => `<div><span>${k}</span>${v}</div>`).join("")}</div>
+<div class="puntos">${punto("Punto de partida", g.p || {})}${punto("Punto de llegada", g.l || {})}</div>
+<h2>Bienes${g.nb ? ` (${f0(g.nb)})` : ""}</h2>
+${bienes ? `<table><thead><tr><th>N.°</th><th>Código</th><th>Descripción</th><th class="n">Cantidad</th><th>Unidad</th></tr></thead><tbody>${bienes}</tbody></table>` : `<p class="mudo">La guía no detalla los bienes.</p>`}
+${!ver && (g.nb || 0) > (g.bienes || []).length ? `<p class="mudo">Se muestran ${f0((g.bienes || []).length)} de ${f0(g.nb)} bienes.</p>` : ""}
+${(g.docs || []).length ? `<h2>Documentos relacionados</h2><ul>${g.docs.map(d => `<li>${esc(d.nombre || d.t)} ${esc(d.num)}${d.ruc ? ` · RUC ${esc(d.ruc)}` : ""}</li>`).join("")}</ul>` : ""}
+${enlaces ? `<h2>En el tablero</h2><ul>${enlaces}</ul>` : ""}
+${secciones.length ? `<h2>Todos los datos de la guía</h2><div class="secc">${secciones.join("")}</div>`
+    : `<div class="aviso">Esta guía se integró al tablero antes de que se guardaran todos sus datos: se muestran los principales. Las cantidades, el transportista, los vehículos y los conductores aparecerán cuando se vuelva a generar el tablero.</div>`}
+<footer><span>Representación generada desde el detalle de la guía en SUNAT (extractor de GRE) en el tablero de riesgo. Uso interno: información con reserva tributaria.</span><button type="button" onclick="print()">Imprimir</button></footer>
+</div></body></html>`;
+  const url = URL.createObjectURL(new Blob([html], { type: "text/html;charset=utf-8" }));
+  const w = window.open(url, "_blank");
+  if (!w) location.assign(url);
+  setTimeout(() => URL.revokeObjectURL(url), 300000);
+}
 document.addEventListener("click", e => {
   const b = e.target.closest("[data-factura]"); if (b) { e.preventDefault(); verFactura(b.dataset.factura); return; }
+  const vg = e.target.closest("[data-guia]"); if (vg) { e.preventDefault(); verGuia(+vg.dataset.guia); return; }
   const g = e.target.closest("[data-guias]"); if (g) { e.preventDefault(); const c = IDX.caso.get(g.dataset.guias); if (c) entregarPedido(pedidoCaso(c), g); return; }
   const a = e.target.closest("[data-caso]"); if (a) { e.preventDefault(); irCaso(a.dataset.caso); }
 });
@@ -1310,7 +1424,7 @@ function fichaMaquina(m) {
       ["Comprador", esc(v ? v.cli : "")], ["Monto", v ? montoH(v) : ""], ["Caso", c ? NIVEL(c.nivel) + " " + esc(c.estado) : "Sin indicios"]], { clase: c && c.nivel === "Alta" ? "alerta" : "" }));
   }
   if ((m.gre || []).length) b.append(bloque(`Guías de remisión con esta máquina (${m.gre.length})`, "ruta", [], { clase: "ancho",
-    html: `<div class="guias">${m.gre.map(i => D.guias[i]).filter(Boolean).map(g => guiaH(g, "", (IDX.venta.get((m.ventas || [])[0]) || {}).f)).join("")}</div>` }));
+    html: `<div class="guias">${m.gre.filter(i => D.guias[i]).map(i => guiaH(D.guias[i], "", (IDX.venta.get((m.ventas || [])[0]) || {}).f, i)).join("")}</div>` }));
   const md = bloqueMismaDam(m.dam, m.k); if (md) b.append(md);
   return f;
 }
