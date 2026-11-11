@@ -10,7 +10,7 @@ Fuentes opcionales:
   --domicilios    domicilio fiscal de los clientes (sale de extraer_domicilios.py, padrón reducido del RUC)
   --consulta-ruc  resultados de la consulta múltiple de RUC (actividad, fecha de inscripción, domicilio)
   --facturas-xml  XML (UBL 2.1) de los comprobantes del emisor: archivos, carpetas o ZIP
-  --control-ia    cuaderno de control de la intendencia (xlsx/xlsm): diligencia, NCN, RI y traslados
+  --control-ia    cuaderno de control de la intendencia (xlsx/xlsm): solicitud de regularización (beneficio) y traslados
   --trazabilidad  casos documentados a mano (CSV: cpe, serie_maquina, serie_motor, modelo,
                   ubicacion_entrega, direccion_entrega, fuente, nota)
   --transportistas lista simple de transportistas vigilados (TXT: un RUC por línea, opcionalmente
@@ -80,8 +80,6 @@ PUBLICO = re.compile(r"MUNICIPALIDAD|GOBIERNO REGIONAL|MINISTERIO|PROGRAMA |PROY
                      r"PETROLEOS DEL PERU|SEGURO SOCIAL|ESSALUD|DIRECCION REGIONAL|UNIDAD EJECUTORA")
 REVENDE = re.compile(r"VTA.*MAQUINARIA|VENTA.*MAQUINARIA|ALQUILER.*MAQUINARIA")
 SIN_TRASLADO = {"NINGUNO", "NINGUNA", "NO", "SIN TRASLADO", "NO TIENE", "NO REGISTRA"}
-PEND = {"REGISTRAR DILIGENCIA", "REGISTRAR RF", "EMITIR INFORME", "EMITIR RESOLUCION", "CON NOTIFICACION", "EMITIR NCN",
-        "INGRESADA, SIN CONSOLIDAR"}
 NS = {"cbc": "urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2",
       "cac": "urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"}
 
@@ -346,9 +344,12 @@ def pares_traslado(num_dam, series):
 
 def leer_control_ia(ruta, ruc):
     """Cuaderno de control de la intendencia (xlsx/xlsm), solo para el RUC indicado. Devuelve:
-    - ctl: {dam: {"control": {...}, "ncn": [...], "ris": [...]}}
+    - ctl: {dam: {"control": {...}}}: la solicitud de regularización de cada DAM y su resultado (beneficio)
     - traslados: lista de expedientes de traslado con sus pares (DAM, serie)
-    - meta: verificación del art. 2 y complejidad."""
+    - meta: verificación del art. 2 y complejidad.
+    Criterio del equipo: si la DAM tiene solicitud de regularización, tiene el beneficio (aunque la diligencia esté
+    pendiente o haya sido no conforme). No lo tiene si «Resultado_solicitud» dice Improcedente o «Sin solicitud de
+    reconocimiento». La diligencia, el reconocimiento físico, las RI, las NCN y los tributos no se usan."""
     import openpyxl
     import warnings
     warnings.filterwarnings("ignore")
@@ -367,29 +368,21 @@ def leer_control_ia(ruta, ruc):
     num = lambda v: float(v) if isinstance(v, (int, float)) and v == v else None
     del_ruc = lambda df, col: df[df[col].astype(str).str.contains(ruc)] if len(df) and col in df else df.iloc[0:0]
     ctl = {}
-    # ConsolidadoT primero; luego las hojas de cada especialista y la de ingreso, solo para DAM que aún no estén consolidadas
-    fuentes = ["ConsolidadoT"] + [n for n in wb.sheetnames if n not in ("ConsolidadoT", "Ingreso de DAM")] + ["Ingreso de DAM"]
-    for nombre in fuentes:
+    # ConsolidadoT (las hojas de cada especialista repiten lo mismo y no se leen) y, para las DAM que aún no están
+    # consolidadas, «Ingreso de DAM»: la solicitud ya se presentó, así que cuenta como con beneficio.
+    for nombre in ("ConsolidadoT", "Ingreso de DAM"):
         ct = hoja(nombre)
-        if not len(ct) or "Num_DAM" not in ct or "RUC_Importador" not in ct or "NroSolic_Reg" not in ct:
+        if not len(ct) or "Num_DAM" not in ct or "RUC_Importador" not in ct:
             continue
+        col_res = next((c for c in ct.columns if re.sub(r"[^A-Z]", "", norm(c)) == "RESULTADOSOLICITUD"), None)
+        if nombre == "ConsolidadoT" and not col_res:
+            print("AVISO control IA: ConsolidadoT no tiene la columna «Resultado_solicitud»: todas sus DAM se toman con beneficio")
         for _, r in del_ruc(ct, "RUC_Importador").iterrows():
             for k in claves_dam(r.Num_DAM):
                 if "control" in ctl.get(k, {}):
                     continue
-                ctl.setdefault(k, {})["control"] = {
-                    "tipo": txt(r.get("Tipo_DAM")), "dilig": txt(r.get("Resultado de la Diligencia_Aduana Destino")),
-                    "fin": txt(r.get("Forma de Conclusion")), "ri": txt(r.get("Numero de la RI / RD")), "ri_f": txt(r.get("Fecha de RI / RD")),
-                    "ciudad": txt(r.get("Ciudad_Mercancia") or r.get("Ciudad de la Mercancia")), "merc": txt(r.get("Tipo_Mercancia")),
-                    "estado": txt(r.get("ESTADO ACTUAL")) or ("Ingresada, sin consolidar" if nombre == "Ingreso de DAM" else ""),
-                    "igv": num(r.get("Regulariza_IGV")), "ipm": num(r.get("Regulariza_IPM")), "adv": num(r.get("Regulariza_ADValorem")),
-                    "f_rf": txt(r.get("Fecha_Recon_Fisico"))[:10], "f_dil": txt(r.get("Fecha_Dilig_Dest"))[:10]}
-    h1 = hoja("Hoja1")
-    for _, r in h1.iterrows() if len(h1) else []:
-        for k in set(claves_dam(r.get("DAM")) + claves_dam(r.get("Detalle Asunto"))):
-            if k in ctl:
-                ctl[k].setdefault("ris", []).append({"ri": txt(r.get("Nro Documento definitivo")), "asunto": txt(r.get("Detalle Asunto")),
-                                                     "pdf": txt(r.get("CONTIENE AUTORIZA"))})
+                ctl.setdefault(k, {})["control"] = {"hoja": nombre, "nsol": txt(r.get("NroSolic_Reg")),
+                                                    "resultado": txt(r.get(col_res)) if col_res else ""}
     meta = {"art2": [], "complejidad": None}
     vistos = set()
     for _, r in del_ruc(hoja("ConsolidadoA2"), "RUC_Importador").iterrows():
@@ -408,11 +401,6 @@ def leer_control_ia(ruta, ruc):
                 if str(c).strip() == ruc and isinstance(vals[j + 1], (int, float)):
                     meta["complejidad"] = {"valor": round(float(vals[j + 1]), 3), "n": int(vals[j + 2]) if isinstance(vals[j + 2], (int, float)) else None,
                                            "media": round(float(media), 3) if isinstance(media, (int, float)) else None}
-    for _, r in del_ruc(hoja("NCN"), "RUC_Importador").iterrows():
-        for k in claves_dam(r.Num_DAM):
-            ctl.setdefault(k, {}).setdefault("ncn", []).append({
-                "ri": txt(r.get("Num_Res")), "ri_f": txt(r.get("Fecha RI")), "peco": txt(r.get("N_NCN_PECO")), "amaz": txt(r.get("N_NCN_AMAZONIA")),
-                "f": txt(r.get("F_Emision_NCN")), "total": num(r.get("TOTAL")), "anulada": "ANULAD" in txt(r.get("OBSERVACIONES")).upper()})
     traslados = []
     for _, r in del_ruc(hoja("Traslados"), "Doc_Solicitante").iterrows():
         traslados.append({"exp": txt(r.get("N_Expediente")), "f": txt(r.get("Fecha_Expediente"))[:10], "tipo": txt(r.get("Tipo_Traslado")),
@@ -467,7 +455,7 @@ def leer_consultas(ruta):
         control = {"tipo": modal, "dilig": txt(r.get("Resultado de la diligencia")), "fin": "", "ri": txt(r.get("RI o RD")),
                    "ri_f": fch(r.get("Fecha de la RI")), "estado": "", "igv": None, "ipm": None, "adv": None,
                    "trib_total": num(r.get("Monto de tributos")), "mon": mon,
-                   "reg_txt": {"PENDIENTE": "Pendiente de regularización", "EN TRAMITE": "Pendiente de regularización", "CONCLUIDA": "Concluida"}.get(norm(sol), sol),
+                   "sol_estado": sol,
                    "f_rf": fch(r.get("Fecha del reconocimiento físico")), "f_dil": fch(r.get("Fecha de conclusión")),
                    "tras_txt": txt(r.get("Traslado (expediente y fecha)")), "obs": txt(r.get("Observaciones"))}
         ncn = [{"ri": control["ri"], "ri_f": control["ri_f"], "peco": "", "amaz": txt(r.get("NCN")), "f": fch(r.get("Fecha de la NCN")),
@@ -937,25 +925,18 @@ def main(a):
     cat_t = {t["i"]: ({cat_key[k] for k in t["maqs"]} or CAT_MERC.get(norm(t["merc"]), set())) for t in tr}
 
     def control_dam(k):
+        """Beneficio de la DAM según el cuaderno (o la consulta a la intendencia de destino). None: la DAM no está registrada."""
         x = ctl.get(k)
-        if not x:
+        if not x or "control" not in x:
             return None
-        c = x.get("control", {})
-        pend = c["reg_txt"] == "Pendiente de regularización" if c.get("reg_txt") else norm(c.get("estado", "")) in PEND
-        dg = norm(c.get("dilig", ""))
-        ncn = [n for n in x.get("ncn", []) if not n["anulada"]]
-        trib = {q: c.get(q) for q in ("igv", "ipm", "adv")}
-        total = c.get("trib_total") or sum(v or 0 for v in trib.values())
-        return {"tipo": c.get("tipo", ""), "mon": c.get("mon") or {"CANCELADA": "PEN", "GARANTIA 160": "USD"}.get(norm(c.get("tipo", "")), ""),
-                "trib": {**trib, "total": r2(total) if total else None}, "fuente": x.get("fuente", ""),
-                "tras_txt": c.get("tras_txt", ""), "obs": c.get("obs", ""),
-                "reg": c.get("reg_txt") or ("Sin registro de diligencia" if not c else "Pendiente de regularización" if pend else "Concluida"),
-                "res": "" if pend or not c else "No conforme" if dg.startswith("NO CONFORME") else "Conforme" if dg.startswith("CONFORME") else "",
-                "fin": "" if pend else c.get("fin", ""), "ri": "" if pend else c.get("ri", ""), "ri_f": "" if pend else c.get("ri_f", ""),
-                "f_rf": "" if pend else c.get("f_rf", ""), "f_dil": "" if pend else c.get("f_dil", ""),
-                "ncn": [{"ri": n["ri"], "ri_f": n["ri_f"], "f": n["f"][:10], "total": r2(n["total"]), "ncn": n["amaz"] or n["peco"]} for n in ncn],
-                "ncn_total": r2(sum(n["total"] or 0 for n in ncn)),
-                "ris": [{"ri": r["ri"], "pdf": r["pdf"]} for r in x.get("ris", [])], "tras": tras_dam.get(k, [])}
+        c = x["control"]
+        consulta = bool(x.get("fuente"))
+        res = c.get("sol_estado", "") if consulta else c.get("resultado", "")
+        sin = norm(res).startswith(("IMPROCEDENTE", "SIN SOLICITUD"))
+        sol = res.strip().capitalize() if res.strip() else ("Solicitud ingresada" if c.get("hoja") == "Ingreso de DAM" else "En trámite")
+        return {"benef": not sin, "sol": sol, "nsol": c.get("nsol", ""),
+                "fuente": x.get("fuente") or ("Cuaderno de control: Ingreso de DAM" if c.get("hoja") == "Ingreso de DAM" else "Cuaderno de control: ConsolidadoT"),
+                "tras_txt": c.get("tras_txt", ""), "obs": c.get("obs", ""), "tras": tras_dam.get(k, [])}
 
     # ---------- Ventas de maquinaria y cadena de comprobantes ----------
     det_fp = dl[dl.num_serie_cpe.str.startswith("FP")].groupby("cpe").des_detalle_item.apply(
@@ -1291,12 +1272,19 @@ def main(a):
 
     # ---------- Casos: una venta de maquinaria con indicios ----------
     conv_key = dict(zip(mq.key, mq.conv))
+
+    def con_beneficio(k):
+        """Solo se siguen las máquinas con beneficio: la serie se importó con convenio (código liberatorio o TPI) y la
+        solicitud de regularización de su DAM no es improcedente ni «sin solicitud de reconocimiento»."""
+        c = ctl_cache.get(k.split("#")[0])
+        return conv_key.get(k, "Sin beneficio") != "Sin beneficio" and not (c and not c["benef"])
+    mq_dest = dict(zip(mq.key, mq.dest))
+    sin_reg = lambda k: mq_dest.get(k) == "271" and ctl_cache.get(k.split("#")[0]) is None   # DAM de Tarapoto que no está en el cuaderno
     TEXTO = {"ztc": "Comprador domiciliado fuera de la ZTE", "igv": "Vendida con IGV", "cambio": "Reemitida sin IGV tras anular la factura con IGV",
              "entrega": "Entregada fuera de la ZTE (según la factura)", "nodom": "Vendida a no domiciliado sin DAM de exportación",
              "exp": "Vendida a no domiciliado, con DAM de exportación", "nuevo": "Comprador con RUC reciente",
              "no_habido": "Comprador no habido o con RUC no activo", "anul_tras": "Anulación o reemisión el día de un traslado de maquinaria",
              "dom_ztc": "Al comprar figuraba en la ZTE; hoy está domiciliado fuera",
-             "ncn_post": "Tributos devueltos con NCN después de la venta", "rf_post": "Reconocimiento físico conforme después de la venta",
              "gre_ztc": "Guía de remisión con llegada fuera de la ZTE", "gre_cambio": "Guía a la ZTC dada de baja y cambiada por otra a la ZTE",
              "gre_zte": "Guía de remisión con llegada en la ZTE"}
     casos = []
@@ -1316,48 +1304,32 @@ def main(a):
             ("no_habido", bool(c_.get("no_habido"))), ("anul_tras", any(x["tras"] for x in ch)), ("gre_ztc", gz["ztc"])) if ok]
         if not mot:
             continue
-        maqs = venta_maq.get(v.cpe, [])
+        maqs_v = venta_maq.get(v.cpe, [])
+        maqs = [k for k in maqs_v if con_beneficio(k)]
+        if maqs_v and not maqs:
+            continue    # la máquina vendida no tiene el beneficio (importada sin él, improcedente o sin solicitud): no se sigue
         t_conf = sorted({i for k in maqs for i in tras_maq.get(k, []) if tr[i]["salida"]} | ({tras_ext[v.cpe]} if v.cpe in tras_ext else set()))
         cd_m = [ctl_cache.get(k.split("#")[0]) for k in maqs]
         tras_inf = [cd["tras_txt"] for cd in cd_m if cd and cd.get("tras_txt") and norm(cd["tras_txt"]) not in SIN_TRASLADO]
         sin_tras_inf = bool(maqs) and all(cd and cd.get("fuente") and norm(cd.get("tras_txt", "")) in SIN_TRASLADO for cd in cd_m)
         ext = cons["series"].get(v.cpe) if not maqs else None
         t_trans = sorted({i for k in maqs for i in tras_maq.get(k, []) if not tr[i]["salida"]})
-        sin_benef = bool(maqs) and all(conv_key[k] == "Sin beneficio" for k in maqs)
         t_prob = [] if maqs or v.cpe not in prob_venta else [prob_venta[v.cpe]]
         dests = sorted({k.split("#")[0] for k in maqs})
         dest_m = sorted({mq.loc[mq.key == k, "dest"].iloc[0] for k in maqs})
         salida = bool({"ztc", "igv", "cambio", "entrega", "nodom", "gre_ztc"} & set(mot))
         menor = v.vv < MENOR.get(v.moneda, 0) and not {"cambio", "nodom"} & set(mot)
-        post = []
-        if salida and not sin_benef:
-            for k in maqs:
-                cd = ctl_cache.get(k.split("#")[0])
-                if not cd or cd["reg"] != "Concluida":
-                    continue
-                dias = lambda f: (pd.Timestamp(f) - v.f).days
-                if cd["f_rf"] and dias(cd["f_rf"]) > 0:
-                    post.append({"t": "rf", "f": cd["f_rf"], "dias": dias(cd["f_rf"]), "res": cd["res"]})
-                if cd["f_dil"] and dias(cd["f_dil"]) > 0:
-                    post.append({"t": "dil", "f": cd["f_dil"], "dias": dias(cd["f_dil"]), "res": cd["res"]})
-                for n in cd["ncn"]:
-                    if n["f"] and dias(n["f"]) > 0:
-                        post.append({"t": "ncn", "f": n["f"], "dias": dias(n["f"]), "total": n["total"], "ncn": n["ncn"]})
-        mot += [k for k, ok in (("ncn_post", any(p["t"] == "ncn" for p in post)), ("rf_post", any(p["t"] == "rf" for p in post)),
-                                ("gre_cambio", gz["cambio"]), ("gre_zte", gz["zte"] and not gz["cambio"])) if ok]
+        mot += [k for k, ok in (("gre_cambio", gz["cambio"]), ("gre_zte", gz["zte"] and not gz["cambio"])) if ok]
         if menor:
             continue
         xml = v.cpe in facturas
-        if salida and sin_benef:
-            nivel, estado = (("Baja", "Coherente: importada sin beneficio y vendida con IGV") if v.igv > 0 else
-                             ("Media", "Importada sin beneficio: revisar el IGV de la venta") if z == "ZTC" else ("Baja", "Importada sin beneficio"))
-        elif salida and (t_conf or tras_inf):
-            nivel, estado = "Baja", "Regularizada: traslado autorizado" if t_conf else "Regularizada: traslado informado en la consulta"
+        if salida and (t_conf or tras_inf):
+            nivel, estado = "Baja", "Regularizada: con solicitud de traslado" if t_conf else "Regularizada: traslado informado en la consulta"
+        elif salida and maqs and any(sin_reg(k) for k in maqs):
+            nivel, estado = "Alta", "Por confirmar: la DAM no está en el cuaderno de control"
         elif salida and maqs and (all(d == "271" for d in dest_m) or sin_tras_inf):
-            nivel, estado = "Alta", ("Confirmada: tributos devueltos después de la venta" if "ncn_post" in mot else
-                                     "Confirmada: reconocimiento físico después de la venta" if "rf_post" in mot else
-                                     "Confirmada: guía de remisión con llegada fuera de la ZTE" if "gre_ztc" in mot else
-                                     "Confirmada: solo tiene un traslado de tránsito" if t_trans else "Confirmada: sin traslado autorizado")
+            nivel, estado = "Alta", ("Confirmada: guía de remisión con llegada fuera de la ZTE" if "gre_ztc" in mot else
+                                     "Confirmada: solo tiene un traslado de tránsito" if t_trans else "Confirmada: sin solicitud de traslado")
         elif salida and maqs:
             nivel, estado = "Alta", f"DAM con destino {', '.join(DESTINOS.get(d, d) for d in dest_m)}: verificar con esa intendencia"
         elif salida and t_prob:
@@ -1384,7 +1356,7 @@ def main(a):
             nivel, estado = "Baja", ("Coherente: traslado y exportación, confirmados por serie" if t_conf and "exp" in mot else
                                      "Coherente: traslado y exportación" if t_prob else "Coherente: exportada" if "exp" in mot else "Seguimiento")
         # La guía de remisión lleva la máquina a la ZTE (sin otra guía a la ZTC ni cambio de destino): baja a nivel medio
-        if ("gre_zte" in mot and "gre_cambio" not in mot and not {"cambio", "nodom", "entrega"} & set(mot) and not t_conf and not sin_benef
+        if ("gre_zte" in mot and "gre_cambio" not in mot and not {"cambio", "nodom", "entrega"} & set(mot) and not t_conf
                 and (nivel == "Alta" or estado.startswith(("Domicilio actual", "Traslado probable")))):
             nivel, estado = "Media", "Guía de remisión a la ZTE: verificar que la máquina siga ahí"
         casos.append({"cpe": v.cpe, "f": fstr(v.f), "ruc": v.doc, "cli": v.nombre, "nivel": nivel, "estado": estado, "mot": mot,
@@ -1392,21 +1364,21 @@ def main(a):
                       "zona": z, "zona_hoy": z_hoy, "lugar_fac": lug["lugar"] if lug else "", "zona_fac": lug["zona"] if lug else "",
                       "sede": lugar_sede((facturas.get(v.cpe) or {}).get("emisor", {}).get("sede") or sede_de.get(v.serie, "")),
                       "desc": v.desc, "cat": v["cat"], "merc": MERCANCIA.get(v["cat"], "Otros"), "maqs": maqs, "dams": dests, "series": seriales.get(v.cpe, []),
-                      "cadena": ch, "anticipos": anticipos.get(v.cpe, []), "tras": t_conf, "transito": t_trans, "dam_ext": ext, "post": post if nivel == "Alta" else [], "tras_prob": t_prob, "exp": ex["dam"] if ex else "", "entrega": ent, "xml": xml,
+                      "cadena": ch, "anticipos": anticipos.get(v.cpe, []), "tras": t_conf, "transito": t_trans, "dam_ext": ext, "tras_prob": t_prob, "exp": ex["dam"] if ex else "", "entrega": ent, "xml": xml,
                       "gre": [{"i": i, "por": por} for i, por in sorted(gre_venta.get(v.cpe, {}).items(), key=lambda x: (guias[x[0]]["f"], guias[x[0]]["tipo"] != "Remitente", x[0]))],
                       "gre_bus": (gre_meta or {}).get("busquedas", {}).get(v.cpe[3:])})
 
     # ---------- Indicadores de cada máquina y de cada caso ----------
     maquinas = []
     for _, s in mq.iterrows():
-        c = ctl_cache.get(s.dam)
+        if not con_beneficio(s.key):
+            continue    # sin beneficio (importada sin él, improcedente o sin solicitud de reconocimiento): no se sigue
         ex = exp_k8.get(s.k8)
         if ex:
             ex["maq"] = s.key
         t_ = tras_maq.get(s.key, [])
         mk = [k for k, ok in (("usada", s.usada), ("dep", s.k8 in dep_k8), ("exp", bool(ex)),
-                              ("tras", any(tr[i]["salida"] for i in t_)), ("pend", bool(c and c["reg"] == "Pendiente de regularización")),
-                              ("dnc", bool(c and c["res"] == "No conforme")), ("ncn", bool(c and c["ncn"])),
+                              ("tras", any(tr[i]["salida"] for i in t_)), ("sinreg", sin_reg(s.key)),
                               ("venta", s.key in maq_venta), ("gre", s.key in maq_gre)) if ok]
         maquinas.append({"k": s.key, "dam": s.dam, "s": int(s.s), "f": fstr(s.f), "dest": s.dest, "canal": s.CANAL, "conv": s.conv,
                          "cat": s["cat"], "merc": MERCANCIA.get(s["cat"], "Otros"), "marca": s.marca, "modelo": s.modelo, "anio": s.anio, "pin": s.id, "motor": s.motor,
@@ -1486,8 +1458,7 @@ def main(a):
             ("mudo", "dom_ztc" in c["mot"]),
             ("pub", cl_.get("tipo") == "Entidad pública"), ("pn", cl_.get("tipo") == "Persona natural"), ("rev", bool(cl_.get("rev"))),
             ("anul", bool(c["cadena"])), ("xml", c["xml"]), ("traza", bool(mm)), ("usada", any(x["usada"] for x in mm)),
-            ("pend", any(x and x["reg"] == "Pendiente de regularización" for x in cc)), ("dnc", any(x and x["res"] == "No conforme" for x in cc)),
-            ("ncn", any(x and x["ncn"] for x in cc)), ("post", any(p["t"] in ("rf", "ncn") for p in c["post"])), ("tras", bool(c["tras"])), ("trasp", bool(c["tras_prob"])), ("exp", bool(c["exp"])),
+            ("sinreg", any(sin_reg(x["k"]) for x in mm)), ("tras", bool(c["tras"])), ("trasp", bool(c["tras_prob"])), ("exp", bool(c["exp"])),
             ("gre_ztc", "gre_ztc" in c["mot"]), ("gre_cambio", "gre_cambio" in c["mot"]), ("gre_zte", "gre_zte" in c["mot"]), ("gre", bool(c["gre"]))) if ok]
         acc = []
         if not c["xml"] and not c["series"]:
@@ -1500,7 +1471,7 @@ def main(a):
                 misma = [t for t in tr if x_["dam"] in t["dams"]]
                 otras = sorted({p_["serie"] for t in misma for p_ in cons["pin"] if p_["exp"] == t["exp"] and p_["serie"] != x_["serie"]})
                 acc.append(f"La consulta ubicó la máquina en la DAM {x_['dam']} serie {x_['serie'] or 's/d'} ({x_['intendencia'] or 's/d'}, "
-                           f"{(x_['modalidad'] or 's/d').lower()}, solicitud {(x_['estado'] or 's/d').lower()}) y la venta no tiene traslado autorizado: "
+                           f"{(x_['modalidad'] or 's/d').lower()}, solicitud {(x_['estado'] or 's/d').lower()}) y la venta no tiene solicitud de traslado: "
                            "requerir el sustento de la salida de la ZTE y los tributos (IGV e IPM)."
                            + (f" La misma DAM tiene el traslado {', '.join(t['exp'] for t in misma)}"
                               + (f" para las series {', '.join(otras)}" if otras else "") + ", pero no para esta." if misma else ""))
@@ -1519,23 +1490,16 @@ def main(a):
         if "dom_ztc" in c["mot"]:
             acc.append(f"Al comprar figuraba en {c['lugar_fac']} (según la factura) y hoy su domicilio fiscal está en {cl_.get('lugar') or 'la ZTC'}: "
                        "ubicar la máquina (visita, guías de remisión o información de terceros).")
-        if c["estado"].startswith("Importada sin beneficio"):
-            acc.append(f"La máquina se importó sin beneficio (DAM {', '.join(x['dam'] for x in mm)}): no hay tributos aduaneros por regularizar. "
-                       "La venta sin IGV a un comprador de fuera de la ZTE es materia de tributos internos.")
-        for p in c["post"]:
-            if p["t"] == "ncn":
-                acc.insert(0, f"Evaluar dejar sin efecto la NCN {p['ncn']} por S/ {p['total']:,.0f}: se emitió {p['dias']} días después de vender la máquina "
-                              "a un comprador de fuera de la ZTE.")
-            elif p["t"] == "rf":
-                acc.insert(0, f"Revisar el acta del reconocimiento físico del {p['f'][8:10]}/{p['f'][5:7]}/{p['f'][:4]}: la máquina ya se había vendido "
-                              f"a un comprador de fuera de la ZTE {p['dias']} días antes.")
         for i in c.get("transito", []):
             acc.append(f"La máquina tiene el traslado {tr[i]['exp']} de tránsito (ZTE a ZTE pasando por la ZTC), pero se vendió a un comprador "
                        "de fuera de la ZTE: verificar su destino final.")
         for x, k in zip(mm, cc):
-            if c["nivel"] == "Alta" and x["dest"] == "271" and not c.get("transito"):
-                acc.append(f"Requerir el sustento de la salida de la ZTE de la máquina {x['pin'] or x['k']} (DAM {x['dam']} serie {x['s']}): no tiene traslado "
-                           f"autorizado. Tributos estimados de la serie: USD {x['cif'] * TASA_IMP:,.0f} (18 % del CIF).")
+            if sin_reg(x["k"]):
+                acc.append(f"Completar en el cuaderno de control (ConsolidadoT) la solicitud de regularización de la DAM {x['dam']}: sin ese dato "
+                           "no se sabe si la máquina tiene el beneficio.")
+            elif c["nivel"] == "Alta" and x["dest"] == "271" and not c.get("transito"):
+                acc.append(f"Requerir el sustento de la salida de la ZTE de la máquina {x['pin'] or x['k']} (DAM {x['dam']} serie {x['s']}): "
+                           "tiene el beneficio y no tiene solicitud de traslado para esta serie.")
             elif c["nivel"] == "Alta" or (c["estado"].startswith("Guía de remisión a la ZTE") and x["dest"] not in ("271", "")):
                 acc.append(f"La DAM {x['dam']} tiene destino {DESTINOS.get(x['dest'], x['dest'])}: consultar en el sistema su control en destino y "
                            "sus traslados (está en el Excel de consultas a otras intendencias, en Resumen).")
@@ -1551,9 +1515,8 @@ def main(a):
         acc[:0] = acciones_gre(c)
         c["acc"] = acc
     orden = {"Alta": 0, "Media": 1, "Baja": 2}
-    prio_estado = lambda s: (0 if s.startswith("Confirmada: tributos") else 1 if s.startswith("Confirmada: reconocimiento") else
-                             2 if s.startswith("Confirmada") else 3 if s.startswith("DAM con destino") else 4 if s.startswith("Serie")
-                             else 5 if s.startswith("El XML") else 6)
+    prio_estado = lambda s: (0 if s.startswith("Confirmada") else 1 if s.startswith("DAM con destino") else 2 if s.startswith("Por confirmar: la DAM")
+                             else 3 if s.startswith("Serie") else 4 if s.startswith("El XML") else 5)
     casos.sort(key=lambda c: (orden[c["nivel"]], prio_estado(c["estado"]), -(c["tot"] or 0) * (3.4 if c["mon"] == "USD" else 1)))
 
     # ---------- Clientes compradores de maquinaria ----------
@@ -1577,26 +1540,6 @@ def main(a):
     modelo_key = dict(zip(mq.key, mq.modelo))
     maq_modelo = lambda k: modelo_key.get(k, "")
     pat = []
-    con_post = [c for c in casos if c["post"]]
-    if con_post:
-        it = []
-        for c in con_post:
-            ncn = [p for p in c["post"] if p["t"] == "ncn"]
-            rf = [p for p in c["post"] if p["t"] == "rf"]
-            lugar = cli.get(c["ruc"], {}).get("lugar", "")
-            base = f"{c['cpe'][3:]}: vendida el {fecha_txt(c['f'])} a {c['cli'][:40].strip()}{' (' + lugar + ')' if lugar else ''}"
-            if ncn:
-                it.append(base + "; NCN " + ", ".join(f"{p['ncn']} por S/ {p['total']:,.0f} el {fecha_txt(p['f'])} ({p['dias']} días después)" for p in ncn))
-            if rf:
-                it.append(base + "; reconocimiento físico " + (rf[0]["res"].lower() or "") + f" el {fecha_txt(rf[0]['f'])} ({pl(rf[0]['dias'], 'día', 'días')} después)")
-        n_dil = sum(1 for c in casos if c["estado"].startswith("Confirmada") and c["post"])
-        n_conf = sum(1 for c in casos if c["estado"].startswith("Confirmada"))
-        total_ncn = sum(p["total"] or 0 for c in con_post for p in c["post"] if p["t"] == "ncn")
-        pat.append({"id": "post", "nivel": "Alta", "t": "Beneficio concluido después de vender la máquina fuera de la ZTE",
-                    "items": it, "txt": f"En {n_dil} de {n_conf} ventas confirmadas por número de serie, la diligencia en destino se concluyó o la NCN se emitió después de la venta"
-                                        + (f"; se devolvieron S/ {total_ncn:,.0f} con NCN emitidas después de vender" if total_ncn else "")
-                                        + ". Revise cómo se verificó cada máquina y evalúe dejar sin efecto la conclusión, la liberación de la garantía o la NCN.",
-                    "filtro": {"mk": "post"}})
     if guias:
         con_gre = [c for c in casos if c["gre"]]
 
@@ -1653,7 +1596,7 @@ def main(a):
         pat.append({"id": "tras", "nivel": "Alta", "t": "Pocos traslados para tantas ventas con indicios de salida",
                     "txt": f"{len(alta_sal)} ventas de maquinaria con indicios de salida de la ZTE"
                            + (f" (sin contar {n_sb} de máquinas importadas sin beneficio)" if n_sb else "")
-                           + f" frente a {n_ts} traslados de maquinaria a la ZTC autorizados "
+                           + f" frente a {n_ts} solicitudes de traslado de maquinaria a la ZTC "
                            f"en el periodo ({sum(len(t['maqs']) or int(t['cant'] or 0) for t in tras_salida)} máquinas). "
                            f"{sum(c['nivel'] == 'Alta' for c in casos)} casos de nivel alto siguen sin un traslado que los respalde.",
                     "filtro": {"nivel": "Alta"}})
@@ -1672,16 +1615,6 @@ def main(a):
                     "txt": "«Por serie»: la factura (XML) lleva la serie de la máquina del traslado. «Probable»: propuesta por tipo de máquina y fecha "
                            "(días de la venta respecto del traslado), por confirmar con el XML.",
                     "filtro": {"mk": "tras"}})
-    sb = [c for c in casos if c["estado"].startswith(("Coherente: importada sin beneficio", "Importada sin beneficio"))]
-    if sb:
-        con_igv = [c for c in sb if (c["igv"] or 0) > 0]
-        sin_igv = [c for c in sb if not (c["igv"] or 0) > 0]
-        pat.append({"id": "sin_benef", "nivel": "Info", "t": "Máquinas importadas sin beneficio de la Amazonía",
-                    "txt": f"{pl(len(sb), 'venta enlazada por serie corresponde', 'ventas enlazadas por serie corresponden')} a máquinas importadas sin destino amazónico "
-                           f"(tributos pagados al importar): no hay riesgo aduanero de salida. {len(con_igv)} se vendieron con IGV (coherente)"
-                           + (f"; {len(sin_igv)} se vendieron sin IGV a compradores de fuera de la ZTE ("
-                              + ", ".join(sorted({c['cli'] for c in sin_igv})) + "): revisar el IGV de esas ventas (tributos internos)." if sin_igv else "."),
-                    "filtro": {"estado": sin_igv[0]["estado"] if sin_igv else con_igv[0]["estado"]}})
     mudos = [c for c in casos if "dom_ztc" in c["mot"]]
     if mudos:
         por_cli = {}
@@ -1698,7 +1631,7 @@ def main(a):
     if exps or any("nodom" in c["mot"] for c in casos):
         pat.append({"id": "exp", "nivel": "Info", "t": "Ventas al exterior: flujo coherente",
                     "txt": f"{len(exps)} ventas de maquinaria a no domiciliados tienen DAM de exportación en los 90 días siguientes"
-                           + (f"; {sum(1 for c in exps if c['tras_prob'] or c['tras'])} además con traslado a la ZTC autorizado días antes"
+                           + (f"; {sum(1 for c in exps if c['tras_prob'] or c['tras'])} además con solicitud de traslado a la ZTC días antes"
                               + (f" ({sum(1 for c in exps if c['tras'])} confirmados por la serie de la factura)" if any(c['tras'] for c in exps) else "")
                               if exps else "")
                            + (f". Sin exportación: {sum('nodom' in c['mot'] for c in casos)}." if any('nodom' in c['mot'] for c in casos) else ". Ninguna venta a no domiciliados quedó sin exportación."),
@@ -1742,9 +1675,8 @@ def main(a):
                  ("Coherente: importada por otro", "Importadas por otro importador sin beneficio y vendidas con IGV (según la consulta)"),
                  ("Guía de remisión a la ZTE", "Con guía de remisión a la ZTE (verificar que la máquina siga ahí)"),
                  ("Traslado probable", "Con traslado probable por confirmar"),
-                 ("Regularizada", "Regularizadas con traslado autorizado"),
-                 ("Coherente: importada sin beneficio", "Importadas sin beneficio y vendidas con IGV (coherente)"),
-                 ("Importada sin beneficio", "Importadas sin beneficio y vendidas sin IGV fuera de la ZTE"))
+                 ("Regularizada", "Regularizadas con solicitud de traslado"),
+                 ("Por confirmar: la DAM", "Con DAM de Tarapoto que no está en el cuaderno de control (completar el dato)"))
         cuenta = {}
         for c in con_serie:
             et = next((t for k, t in CATEG if c["estado"].startswith(k)), c["estado"])
@@ -1755,19 +1687,29 @@ def main(a):
                               for k in [t for _, t in CATEG] + [x for x in cuenta if x not in [t for _, t in CATEG]] if k in cuenta],
                     "txt": f"{pl(len(facturas), 'XML leído', 'XML leídos')}; {len(venta_maq)} ventas enlazadas con su DAM por la serie de la máquina o del motor.",
                     "filtro": {"mk": "traza"}})
-    pend_d = [k for k, c in ctl_cache.items() if c and c["reg"] == "Pendiente de regularización" and k in set(mq.dam)]
-    if pend_d:
-        mp = [x for x in maquinas if x["dam"] in set(pend_d)]
-        pat.append({"id": "pend", "nivel": "Info", "t": "Máquinas en DAM pendientes de regularización",
-                    "txt": f"{len(pend_d)} DAM con maquinaria siguen pendientes de regularización en el control de la IA ({len(mp)} series, "
-                           f"CIF USD {sum(x['cif'] for x in mp):,.0f}). Si una de ellas se vendió fuera de la ZTE, el beneficio no debe concluirse.",
-                    "maq": {"mk": "pend"}})
-    dnc = [k for k, c in ctl_cache.items() if c and c["res"] == "No conforme" and k in set(mq.dam)]
-    if dnc:
-        pat.append({"id": "dnc", "nivel": "Media", "t": "Diligencias no conformes en maquinaria",
-                    "txt": f"{len(dnc)} DAM con maquinaria tuvieron diligencia en destino no conforme: "
-                           + "; ".join(f"{k} ({', '.join(sorted({x['cat'].lower() + ' ' + x['modelo'] for x in maquinas if x['dam'] == k}))})" for k in dnc) + ".",
-                    "maq": {"mk": "dnc"}})
+    # Fuera del seguimiento: máquinas sin beneficio. Dato faltante: DAM de Tarapoto que no está en el cuaderno. Traslados sin serie.
+    dams_mq = set(mq.dam)
+    fuera_ctl = sorted(k for k, c in ctl_cache.items() if c and not c["benef"] and k in dams_mq)
+    fuera_conv = sorted({k.split("#")[0] for k in mq.key if conv_key.get(k) == "Sin beneficio"})
+    sin_reg_d = sorted({x["dam"] for x in maquinas if sin_reg(x["k"])})
+    tras_sin_serie = [{"exp": t["exp"], "f": t["f"], "tipo": t["tipo"], "merc": t["merc"], "dams": t["dams"], "cant": t["cant"]}
+                      for t in tras_todos if not t["pares"] and (t["f"] >= fstr(desde) or set(t["dams"]) & dams_periodo)]
+    if tras_sin_serie:
+        print(f"AVISO traslados: {len(tras_sin_serie)} expedientes no indican la serie (completar en el cuaderno): "
+              + ", ".join(t["exp"] for t in tras_sin_serie))
+    if fuera_ctl or fuera_conv:
+        n_fuera = int((~mq.key.map(con_beneficio)).sum())
+        pat.append({"id": "fuera", "nivel": "Info", "t": "Máquinas sin beneficio: fuera del seguimiento",
+                    "txt": f"{pl(n_fuera, 'serie de maquinaria no se sigue', 'series de maquinaria no se siguen')}: "
+                           + "; ".join(x for x in (
+                               pl(len(fuera_ctl), "DAM con solicitud improcedente o sin solicitud de reconocimiento", "DAM con solicitud improcedente o sin solicitud de reconocimiento") if fuera_ctl else "",
+                               pl(len(fuera_conv), "DAM importada sin beneficio (sin código liberatorio ni TPI)", "DAM importadas sin beneficio (sin código liberatorio ni TPI)") if fuera_conv else "") if x)
+                           + ". Nunca tuvieron el beneficio: pueden trasladarse o venderse a la ZTC sin riesgo aduanero."})
+    if sin_reg_d:
+        pat.append({"id": "sinreg", "nivel": "Media", "t": "DAM de Tarapoto que no están en el cuaderno de control",
+                    "txt": f"{pl(len(sin_reg_d), 'DAM con maquinaria y destino Tarapoto no está', 'DAM con maquinaria y destino Tarapoto no están')} en ConsolidadoT "
+                           f"ni en Ingreso de DAM: {', '.join(sin_reg_d[:12])}{'…' if len(sin_reg_d) > 12 else ''}. Completar el dato: sin él no se sabe si tienen el beneficio.",
+                    "maq": {"mk": "sinreg"}})
 
     # ---------- Calidad de los datos ----------
     ftxt = lambda x: fecha_txt(fstr(x))
@@ -1780,8 +1722,6 @@ def main(a):
     for d in facturas.values():
         est_xml.setdefault(d["id"].split("-")[0], set()).add(d["emisor"]["est"])
     multi_est = {k: sorted(v) for k, v in est_xml.items() if len(v) > 1}
-    g160 = [(k, c) for k, c in ctl_cache.items() if c and c["mon"] == "USD" and c["trib"]["igv"]]
-    g160_ok = sum(1 for k, c in g160 if abs(c["trib"]["igv"] / dec.set_index("dam").cif.get(k, float("nan")) - 0.16) < 0.005)
     nc_inf = [c for c in cadenas if c["via"] != "Baja"]
     ncs_anula = ncs[ncs.tipo_ref.isin(NC_ANULA)]
     sin_271 = sorted({x["dam"] for x in maquinas if x["dest"] != "271"})
@@ -1798,7 +1738,7 @@ def main(a):
     calidad = {
         "confiable": [
             {"t": "DAM de importación", "d": f"{dec.dam.nunique():,} DAM y {len(m):,} series del régimen 10 ({ftxt(m.f.min())} a {ftxt(m.f.max())}); "
-                                             f"{len(maquinas):,} series de maquinaria. Depósito ({dep70.dam.nunique()} DAM) y exportación ({exp40.dam.nunique()} DAM) solo para la historia de cada máquina."},
+                                             f"{len(mq):,} series de maquinaria, {len(maquinas):,} con beneficio (las que se siguen). Depósito ({dep70.dam.nunique()} DAM) y exportación ({exp40.dam.nunique()} DAM) solo para la historia de cada máquina."},
             {"t": "Comprobantes emitidos", "d": f"{len(e):,} CPE y {len(dl):,} ítems de detalle ({ftxt(e.f.min())} a {ftxt(e.f.max())}); {len(vm):,} de la serie de maquinaria."},
         ] + ([{"t": "Sede emisora", "d": "Según los XML, cada serie corresponde a una sede: " + "; ".join(f"{k} {lugar_sede(v)}" for k, v in sorted(sede_de.items())) + "."}]
              if sede_de else []) + ([{"t": "XML de los comprobantes", "d": f"{len(facturas)} comprobantes leídos (UBL 2.1): {pl(sum(d['tipo'] == '01' for d in facturas.values()), 'factura', 'facturas')}"
@@ -1810,8 +1750,10 @@ def main(a):
                   pl(len(cons["series"]), "serie ubicada", "series ubicadas") if cons["series"] else "",
                   pl(len(cons["pin"]), "PIN de DAM anteriores al periodo", "PIN de DAM anteriores al periodo") if cons["pin"] else "") if x) + "."}]
              if cons["dam"] or cons["series"] or cons["pin"] else [])
-          + ([{"t": "Cuaderno de control de la IA", "d": f"{sum(1 for k in ctl if k in dams_periodo)} DAM del periodo, {sum(len([n for n in x.get('ncn', []) if not n['anulada']]) for k, x in ctl.items() if k in dams_periodo)} NCN, "
-                                                          f"{len(tr)} expedientes de traslado y RI con su PDF."}] if ctl else [])
+          + ([{"t": "Cuaderno de control de la IA", "d": f"{sum(1 for k in ctl if k in dams_periodo)} DAM del periodo con solicitud de regularización "
+                                                          f"(ConsolidadoT e Ingreso de DAM): {sum(1 for k, c in ctl_cache.items() if c and c['benef'])} con beneficio y "
+                                                          f"{sum(1 for k, c in ctl_cache.items() if c and not c['benef'])} improcedentes o sin solicitud de reconocimiento; "
+                                                          f"{len(tr)} expedientes de traslado."}] if ctl else [])
           + ([{"t": "Guías de remisión (GRE)", "d": f"{len(guias):,} guías descargadas de SUNAT con el extractor de GRE ("
                                                     + "; ".join(f"{x['titulo']}, {fecha_txt(x['generado'])}" for x in gre_meta["archivos"]) + "). "
                                                     + f"{len({i for d_ in gre_venta.values() for i in d_})} enlazadas con {len(gre_venta)} ventas. Enlaces: "
@@ -1832,8 +1774,11 @@ def main(a):
                                                   f"(accesorios, implementos o pagos parciales) no forman casos."}] if n_menor else [])
           + ([{"t": "Control solo de destino Tarapoto", "d": f"El cuaderno cubre las DAM con destino 271. {len(sin_271)} DAM con maquinaria tienen otro destino "
                                                               f"(sobre todo Pucallpa) y no tienen datos de control aquí."}] if ctl else [])
-          + ([{"t": "Diligencias pendientes", "d": "Se muestran solo como «pendiente de regularización»: el estado y el plazo del reconocimiento físico suelen ser falta de registro."}] if ctl else [])
-          + ([{"t": "Moneda de los tributos", "d": f"DAM canceladas en soles (confirmado). Garantía 160 en dólares: {g160_ok} de {len(g160)} DAM tienen un IGV igual al 16 % del CIF en USD."}] if g160 else [])
+          + ([{"t": "DAM de Tarapoto sin registro en el cuaderno", "d": f"{pl(len(sin_reg_d), 'DAM con maquinaria', 'DAM con maquinaria')} no están en ConsolidadoT ni en "
+                                                                         f"Ingreso de DAM: {', '.join(sin_reg_d[:12])}{'…' if len(sin_reg_d) > 12 else ''}. Es un dato faltante; sus casos quedan «por confirmar»."}] if ctl and sin_reg_d else [])
+          + ([{"t": "Traslados sin serie", "d": f"{pl(len(tras_sin_serie), 'expediente no indica', 'expedientes no indican')} la serie de la DAM, así que no se enlazan con ninguna "
+                                                "máquina (el traslado vale solo para las series que cita): " + "; ".join(f"{t['exp']} ({', '.join(t['dams']) or 'sin DAM'})" for t in tras_sin_serie[:15])
+                                                + ("…" if len(tras_sin_serie) > 15 else "") + ". Completarlas en el cuaderno."}] if tras_sin_serie else [])
           + ([{"t": "Registros de traslado a revisar", "d": ". ".join(obs_tras) + "."}] if obs_tras else [])
           + ([{"t": "Guías de remisión", "d": f"Solo se consultaron los compradores de {pl(len(gre_meta['busquedas']), 'caso', 'casos')}, de pocos días antes a "
                                               "dos semanas después de la venta; " + f"{sum(1 for g in guias if not g['nb'])} guías no detallan los bienes. "
@@ -1847,7 +1792,10 @@ def main(a):
             {"t": "Valoración y clasificación arancelaria", "d": "Valores unitarios atípicos y números de parte en varias subpartidas: no apuntan a la salida de la zona y daban muchos falsos positivos."},
             {"t": "Repuestos y servicios", "d": f"Con IGV ({int(((e.tipo == '01') & (e.estado == '0') & (e.igv > 0) & e.linea.isin(['Repuestos', 'Servicio técnico'])).sum()):,} facturas) o a no domiciliados: montos bajos y operación normal."},
             {"t": "Volumen de compras", "d": "Un cliente con 3 o más máquinas no es un indicio por sí solo; el número de máquinas queda como dato en Clientes."},
-            {"t": "Maquinaria usada y diligencias pendientes como alertas", "d": "Pasan a ser indicadores de la máquina y de su DAM."},
+            {"t": "Maquinaria usada como alerta", "d": "Pasa a ser un indicador de la máquina."},
+            {"t": "Diligencia, reconocimiento físico, RI, NCN y tributos", "d": "No se usan: para el riesgo basta saber si la DAM tiene el beneficio "
+                                                                               "(solicitud de regularización, aunque la diligencia esté pendiente o sea no conforme) y si la serie tiene solicitud de traslado."},
+            {"t": "Máquinas sin beneficio", "d": "Importadas sin código liberatorio ni TPI, o con solicitud improcedente o sin solicitud de reconocimiento: no se siguen."},
             {"t": "Estadísticas generales", "d": "Canal de control, fletes, subpartidas, ventas de repuestos y servicios: no ayudan a seguir la máquina."},
         ],
     }
@@ -1877,10 +1825,11 @@ def main(a):
     for k in sorted(set(mq.dam)):
         d = dec[dec.dam == k].iloc[0]
         dams[k] = {"f": fstr(d.f), "ad": d.ad, "dest": d.dest, "canal": d.canal, "conv": d.conv, "series": int(d.series), "nmaq": int(d.nmaq),
-                   "cif": r2(d.cif), "ctl": ctl_cache.get(k), "maqs": mq[mq.dam == k].key.tolist()}
+                   "cif": r2(d.cif), "ctl": ctl_cache.get(k), "maqs": [x for x in mq[mq.dam == k].key if con_beneficio(x)]}
     vend_z = {z: int(sum(1 for d in vend.doc if zona_doc.get(d, "Sin dato") == z)) for z in ("ZTE", "ZTC", "Extranjero", "Sin dato")}
+    mqb = mq[mq.key.map(con_beneficio)]     # solo las máquinas con beneficio se siguen
     # Guías: solo las enlazadas con una venta o con una máquina; el resto queda en «claves» (el extractor no las vuelve a descargar)
-    usadas_g = sorted({x["i"] for c in casos for x in c["gre"]} | {i for idx in maq_gre.values() for i in idx})
+    usadas_g = sorted({x["i"] for c in casos for x in c["gre"]} | {i for k, idx in maq_gre.items() if k in maq_por_k for i in idx})
     nuevo_i = {i: n for n, i in enumerate(usadas_g)}
     for c in casos:
         for x in c["gre"]:
@@ -1899,19 +1848,20 @@ def main(a):
                  "generado": date.today().isoformat(), "portal": a.portal or "", "dam_hasta": fstr(m.f.max()), "cpe_hasta": fstr(e.f.max()),
                  "aduanas": ADUANAS, "destinos": DESTINOS, "canales": CANALES, "motivos": MOTIVOS_NC, "texto": TEXTO,
                  "padron": str(dom.fecha_padron.iloc[0]) if dom is not None and "fecha_padron" in dom and len(dom) else "", "xml_err": xml_err},
-        "kpi": {"maq_series": len(maquinas), "maq_uds": int(mq.CNT_COMER.sum()), "maq_cif": r2(mq.MTO_VALORADU.sum()), "maq_dams": int(mq.dam.nunique()),
-                "por_dest": [{"cod": k, "series": int((mq.dest == k).sum()), "dams": int(mq[mq.dest == k].dam.nunique()),
-                              "ctl": int(sum(1 for d in set(mq[mq.dest == k].dam) if ctl_cache.get(d)))} for k in mq.dest.value_counts().index],
+        "kpi": {"maq_series": len(maquinas), "maq_uds": int(mqb.CNT_COMER.sum()), "maq_cif": r2(mqb.MTO_VALORADU.sum()), "maq_dams": int(mqb.dam.nunique()),
+                "por_dest": [{"cod": k, "series": int((mqb.dest == k).sum()), "dams": int(mqb[mqb.dest == k].dam.nunique()),
+                              "ctl": int(sum(1 for d in set(mqb[mqb.dest == k].dam) if ctl_cache.get(d)))} for k in mqb.dest.value_counts().index],
                 "vend": int(len(vend)), "vend_z": vend_z, "vend_igv": int((vend.igv > 0).sum()), "anuladas": len(anulada_por), "bajas": len(bj),
                 "casos": {n: sum(c["nivel"] == n for c in casos) for n in ("Alta", "Media", "Baja")},
                 "alta_sin_xml": sum(1 for c in casos if c["nivel"] == "Alta" and not c["xml"]),
                 "tras_salida": n_ts, "tras_maq": sum(len(t["maqs"]) or int(t["cant"] or 0) for t in tras_salida),
-                "pend_dams": len(pend_d), "pend_series": sum(1 for x in maquinas if x["dam"] in set(pend_d)),
-                "ncn_total": r2(sum(c["ncn_total"] or 0 for c in ctl_cache.values() if c)),
-                "ncn_dams": sum(1 for c in ctl_cache.values() if c and c["ncn"]), "tc": r2(tc)},
+                "ben_dams": sum(1 for k, c in ctl_cache.items() if c and c["benef"] and k in dams_mq),
+                "fuera_dams": len(set(fuera_ctl) | set(fuera_conv)), "fuera_series": int((~mq.key.map(con_beneficio)).sum()),
+                "sinreg_dams": len(sin_reg_d), "tras_sin_serie": len(tras_sin_serie), "tc": r2(tc)},
         "maquinas": maquinas, "dams": dams, "traslados": tr, "casos": casos, "ventas": ventas, "cadenas": cadenas,
         "clientes": cli, "facturas": facturas, "patrones": pat, "calidad": calidad, "pendientes": pendientes,
-        "exportaciones": [x for x in exportaciones if x["maq"] or x["venta"]], "control": {"art2": meta_ctl.get("art2", []), "complejidad": meta_ctl.get("complejidad")},
+        "exportaciones": [x for x in exportaciones if x["maq"] or x["venta"]], "control": {"art2": meta_ctl.get("art2", []), "complejidad": meta_ctl.get("complejidad"), "tras_sin_serie": tras_sin_serie,
+                                                                               "sin_registro": sin_reg_d},
         "transportistas": leer_transportistas(a.transportistas),
         "guias": guias_out,
         # «claves»: guías que el extractor no vuelve a descargar. Solo las que tienen detalle: las no procesadas o con

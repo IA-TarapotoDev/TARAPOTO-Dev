@@ -16,14 +16,22 @@ La unidad de seguimiento es la **máquina** (DAM y serie). Cada venta de maquina
 |---|---|
 | Resumen | Casos por nivel, máquinas importadas, ventas por zona del comprador, control de la IA, **patrones**, comprobantes por descargar, **Excel de consultas a otras intendencias** y **calidad de los datos** (confiable, con límites, descartado) |
 | Alertas | Lista de casos con íconos, filtros y CSV, que se puede **agrupar** por comprador, máquina (serie), DAM, tipo de mercancía, tipo de máquina, departamento del comprador, traslado o estado. Cada fila se abre en una ficha con «Ver factura» (cuando hay XML), **«Buscar guías»** y los datos para buscar el comprobante en el portal del emisor. Arriba, la lista de comprobantes por descargar y las **listas de guías de remisión** para el extractor de GRE |
-| Máquinas | Traslados de maquinaria del periodo con su venta probable, y el registro de máquinas importadas. Agrupado por DAM, la cabecera de cada grupo muestra el control de la IA una sola vez (regularización, tributos, NCN y traslados) |
+| Máquinas | Solicitudes de traslado de maquinaria del periodo con su venta probable, las solicitudes de traslado sin serie (para completar en el cuaderno) y el registro de máquinas con beneficio. Agrupado por DAM, la cabecera de cada grupo muestra una sola vez su beneficio y sus solicitudes de traslado |
 | Clientes | Compradores de maquinaria: domicilio fiscal, actividad, máquinas compradas y casos; se agrupan por zona, departamento o tipo de comprador |
 
 La agrupación elegida en cada pestaña se recuerda en el navegador de quien la usa.
 
 ### Control de la DAM (cuaderno de la IA)
 
-Se muestra unificado por DAM y se hereda en cada máquina: modalidad (cancelada, en soles; garantía 160, en dólares), tributos, NCN, RI con su PDF, traslados y regularización. Una diligencia pendiente se muestra solo como **«pendiente de regularización»**: su estado y el plazo del reconocimiento físico suelen ser falta de registro. El cuaderno cubre las DAM con destino Tarapoto (271); las de otro destino aparecen sin control.
+Para el riesgo solo importa si la DAM tiene el beneficio y si la serie tiene solicitud de traslado. Se lee la hoja **ConsolidadoT** (las hojas de los especialistas repiten lo mismo) y la hoja **Ingreso de DAM**:
+
+| Estado | Cuándo | Qué hace el tablero |
+|---|---|---|
+| Con beneficio | La DAM tiene solicitud de regularización: «Resultado_solicitud» (columna AY) dice Procedente, No conforme (la diligencia no fue conforme, pero el beneficio se otorgó) o está vacío (en trámite), o la DAM está en Ingreso de DAM | Se siguen sus máquinas |
+| Sin beneficio | «Resultado_solicitud» dice Improcedente o «Sin solicitud de reconocimiento», o la serie se importó sin código liberatorio ni TPI | Sus máquinas no se siguen: no forman casos ni aparecen en Máquinas |
+| Sin registro | DAM con destino Tarapoto que no está en el cuaderno | Dato faltante: sus casos quedan «por confirmar» hasta completarlo |
+
+La diligencia, el reconocimiento físico, las RI, las NCN y los tributos no se usan. Una **solicitud de traslado** cuenta aunque esté en trámite, y vale solo para las series que cita (nunca para toda la DAM); las que no indican la serie se listan para completarlas en el cuaderno. «ZTE a ZTE pasando por ZTC» es tránsito, no salida. El cuaderno cubre las DAM con destino Tarapoto (271); las de otro destino aparecen sin registro (las controla esa intendencia).
 
 ### Guías de remisión (extractor de GRE)
 
@@ -49,7 +57,7 @@ La zona de la partida y de la llegada sale del ubigeo de cada dirección. En el 
 
 - **Llegada fuera de la ZTE** (guía vigente con llegada en la ZTC): es un indicio de salida por sí solo; si la máquina viene de una DAM con destino Tarapoto, el caso queda «Confirmada: guía de remisión con llegada fuera de la ZTE».
 - **Destino cambiado**: una guía a la ZTC se dio de baja y otra lleva la máquina a la ZTE. El caso no baja de nivel.
-- **Llegada en la ZTE** (todas las guías vigentes llegan a la ZTE y no hubo cambio de destino): un caso alto por ubicación (comprador de fuera, venta con IGV o reconocimiento físico o NCN después de la venta) pasa a medio, «Guía de remisión a la ZTE: verificar que la máquina siga ahí». No baja si hubo reemisión sin IGV, entrega fuera de la ZTE, venta a no domiciliado o traslado autorizado.
+- **Llegada en la ZTE** (todas las guías vigentes llegan a la ZTE y no hubo cambio de destino): un caso alto por ubicación (comprador de fuera o venta con IGV) pasa a medio, «Guía de remisión a la ZTE: verificar que la máquina siga ahí». No baja si hubo reemisión sin IGV, entrega fuera de la ZTE, venta a no domiciliado o solicitud de traslado.
 - Si la única guía con la máquina se dio de baja, la ficha lo dice y sugiere pedir la guía con la que el comprador la recibió.
 - **Regreso a la ZTE**: si después de una guía a la ZTC hay otra que trae la máquina de vuelta a la ZTE, la ficha sugiere vigilar la anulación de la venta, un pedido de devolución de lo pagado por el traslado o una nueva venta sin IGV.
 
@@ -59,9 +67,11 @@ La ficha de cada caso y de cada máquina muestra sus guías (partida y llegada c
 
 | Nivel | Cuándo |
 |---|---|
-| Alta | Venta de maquinaria con indicio de salida de la ZTE (comprador domiciliado en la ZTC, venta con IGV, reemisión sin IGV de una factura con IGV, entrega fuera de la ZTE o venta a no domiciliado sin DAM de exportación) sin traslado que la respalde. Estados: confirmada sin traslado (la serie del XML lleva a su DAM y la DAM no tiene traslado para esa serie), DAM de otro destino, serie fuera de las DAM del periodo, o por confirmar (falta el XML) |
+| Alta | Venta de una máquina con beneficio con indicio de salida de la ZTE (comprador domiciliado en la ZTC, venta con IGV, reemisión sin IGV de una factura con IGV, entrega fuera de la ZTE o venta a no domiciliado sin DAM de exportación) sin solicitud de traslado que la respalde. Estados: confirmada sin solicitud de traslado (la serie del XML lleva a su DAM y la serie no tiene solicitud de traslado), solo con traslado de tránsito, DAM de Tarapoto que falta en el cuaderno (por confirmar), DAM de otro destino, serie fuera de las DAM del periodo, o por confirmar (falta el XML) |
 | Media | Indicio de salida con **traslado probable** (por tipo de máquina y fecha, por confirmar con el XML); **guía de remisión a la ZTE** (verificar que la máquina siga ahí); comprador con RUC inscrito 180 días o menos antes de comprar; comprador no habido o con RUC no activo; anulación o reemisión cerca de un traslado de maquinaria |
-| Baja | Flujo coherente: venta a no domiciliado con DAM de exportación, o salida con traslado autorizado para la misma DAM y serie |
+| Baja | Flujo coherente: venta a no domiciliado con DAM de exportación, o salida con solicitud de traslado para la misma DAM y serie |
+
+Las ventas de máquinas sin beneficio (importadas sin código liberatorio ni TPI, o con solicitud improcedente o sin solicitud de reconocimiento) no forman casos: pueden trasladarse o venderse a la ZTC sin riesgo aduanero.
 
 Reglas de calidad:
 
@@ -122,7 +132,7 @@ Todas las opciones de `generar_datos.py` son opcionales salvo los tres archivos 
   ```
 - **Consulta múltiple de RUC** (`--consulta-ruc`, ZIP o TXT, hasta 100 RUC por consulta): actividad económica, fecha de inscripción y, si el padrón no lo trae, el domicilio. La consulta pública no muestra el domicilio de las personas naturales.
 - **XML de las facturas** (`--facturas-xml`, archivos, carpetas o ZIP, también ZIP dentro de ZIP; los 7z y RAR se descomprimen antes): se leen facturas y notas de crédito (UBL 2.1). De cada ítem se extraen la serie de la máquina y del motor, el modelo, el año y la afectación del IGV; la máquina se enlaza con su DAM y el caso se confirma o se descarta. La nota de crédito indica con exactitud la factura que anula. El comprobante completo se puede ver desde la ficha («Ver factura»).
-- **Cuaderno de control de la IA** (`--control-ia`, xlsx o xlsm): hojas ConsolidadoT y de los especialistas, Ingreso de DAM, NCN, Hoja1 (RI y PDF), Traslados (con las series de cada DAM), ConsolidadoA2 y Complejidad.
+- **Cuaderno de control de la IA** (`--control-ia`, xlsx o xlsm): hojas ConsolidadoT (con la columna «Resultado_solicitud»), Ingreso de DAM, Traslados (con las series de cada DAM), ConsolidadoA2 y Complejidad. Las hojas de los especialistas, NCN y Hoja1 ya no se leen.
 - **Transportistas vigilados** (`--transportistas`, TXT): un RUC por línea, opcionalmente seguido del nombre (`20123456789 TRANSPORTES EJEMPLO SAC`). Se ignoran las líneas vacías, las que empiezan con `#`, los repetidos y los RUC no válidos (se avisa el número de línea). Entran en la «Lista del día» de guías de remisión.
 - **Casos documentados a mano** (`--trazabilidad`, CSV con `cpe, serie_maquina, serie_motor, modelo, ubicacion_entrega, direccion_entrega, fuente, nota`; `ubicacion_entrega` como «DISTRITO, PROVINCIA, DEPARTAMENTO»): por ejemplo, la representación impresa de una factura con el lugar de entrega.
 
