@@ -556,9 +556,34 @@ def guias_xlsx(ruta):
     if not hojas.get("Guías"):
         return None
     bienes, docs, placas = {}, {}, {}
+    COL_BIEN = {"N° orden": "numOrden", "Código bien": "codBien", "Descripción bien": "desBien", "Cantidad": "numCantidad",
+                "Unidad medida": "codUniMedida", "Descripción unidad": "desUniMedida", "Código producto SUNAT": "codProductoSunat",
+                "Subpartida": "codSubPartida", "GTIN": "codGtin", "Bien regulado": "indBienRegulado", "Documento relacionado": "docRelacionado",
+                "Contenedor": "numContenedor", "Precinto": "numPrecinto"}
     for r in tabla("Bienes"):
         if txt(r.get("Descripción bien")):
-            bienes.setdefault(txt(r.get("Clave")), []).append({"desBien": txt(r.get("Descripción bien"))})
+            b = {api: txt(r.get(col)) for col, api in COL_BIEN.items() if txt(r.get(col))}
+            b.update({k[5:]: txt(v) for k, v in r.items() if k.startswith("bien.") and txt(v)})
+            bienes.setdefault(txt(r.get("Clave")), []).append(b)
+    # Para «Ver guía»: los campos del detalle que el Excel trae como columnas («emision.fecEmision», «traslado.…»)
+    # y las listas en hojas aparte (conductores, vehículos, proveedores…), con la misma ruta que en el JSON.
+    SIN_VER_X = ("id", "codCpe", "numRuc", "codTipoCpe", "numSerie", "numCpe", "codEstado", "desEstado", "desTipoCpe", "auditoria")
+    listas_ver = {}
+    for nombre in hojas:
+        filas_h = tabla(nombre)
+        if not filas_h or "Colección" not in filas_h[0] or nombre == "Bienes":
+            continue
+        base_h = {"Clave", "RUC emisor", "Serie", "Número", "Guía completa", "Fecha emisión", "Colección", "Índice", "Índice padre"}
+        for r in filas_h:
+            col = txt(r.get("Colección"))
+            if not col or col.split(".")[0].split("[")[0] in SIN_VER_X or col.startswith("traslado.bien"):
+                continue
+            # «traslado.vehiculo[].vehiculoSec» con índice padre «1» e índice «2» → «traslado.vehiculo[1].vehiculoSec[2]»
+            partes, padre = col.split("[]"), txt(r.get("Índice padre"))
+            idx = (padre.split("/") if padre else []) + [txt(r.get("Índice"))]
+            pre = "".join(f"{a}[{i}]" for a, i in zip(partes, idx)) if len(partes) == len(idx) else f"{col.replace('[]', '')}[{'/'.join(idx)}]"
+            listas_ver.setdefault(txt(r.get("Clave")), []).extend(
+                [f"{pre}.{k}", txt(v)[:300]] for k, v in r.items() if k not in base_h and txt(v) and not k.endswith("[cantidad]"))
     for r in tabla("Documentos relacionados"):
         docs.setdefault(txt(r.get("Clave")), []).append({k: txt(r.get(k)) for k in ("codTipoDocumento", "desTipoDocumento", "numRuc", "numSerie", "numDocumento")})
     for r in tabla("Vehículos"):
@@ -601,6 +626,8 @@ def guias_xlsx(ruta):
                                                "codUnidadMedidaPb": txt(r.get("Unidad peso")), "bien": bienes.get(clave, []),
                                                "vehiculo": placas.get(clave) or ([{"numPlaca": txt(r.get("Placa"))}] if txt(r.get("Placa")) else []),
                                                "partida": lugar("Partida", r), "llegada": lugar("Llegada", r)}},
+                      "ver_c": [[k, txt(v)[:300]] for k, v in r.items() if k[:1].islower() and txt(v) and not k.endswith("[cantidad]")
+                                and k.split(".")[0].split("[")[0] not in SIN_VER_X] + listas_ver.get(clave, []),
                       "busquedas": []})
     titulo = f"RUC {res.get('RUC consultados', '')} buscado como {res.get('Buscados como', '')}, {res.get('Periodos', '')}"
     if res.get("RUC consultados", "").isdigit() and int(res["RUC consultados"]) == 1:
@@ -623,7 +650,8 @@ def leer_guias(rutas, r_ubi):
 
     def persona(d):
         d = d or {}
-        return {"ruc": str(d.get("numDocIdentidad") or d.get("numRuc") or "").strip(), "nombre": limpio(d.get("desNombre") or d.get("desRuc"))}
+        return {"ruc": str(d.get("numDocIdentidad") or d.get("numRuc") or "").strip(),
+                "nombre": limpio(d.get("desNombre") or d.get("desNomRazonSocial") or d.get("desRazonSocial") or d.get("desRuc"))}
 
     def lugar(p):
         d = (p or {}).get("direccion") or {}
@@ -640,6 +668,39 @@ def leer_guias(rutas, r_ubi):
     def fecha_listado(x):
         m = re.match(r"(\d{2})/(\d{2})/(\d{4})", str(x or ""))
         return f"{m.group(3)}-{m.group(2)}-{m.group(1)}" if m else ""
+
+    # Datos para «Ver guía» en el tablero: el detalle completo en pares [ruta, valor] (sin la identificación, que va
+    # en la cabecera, ni la auditoría) y los bienes como tabla. Así se ve todo lo que trae SUNAT, aunque cambien sus campos.
+    def valor_ver(v):
+        if v is None:
+            return ""
+        if isinstance(v, bool):
+            return "Sí" if v else "No"
+        if isinstance(v, (int, float)):
+            return f"{v:g}"
+        return limpio(v)[:300]
+
+    def plano(obj, ruta=""):
+        if isinstance(obj, dict):
+            return [x for k, v in obj.items() for x in plano(v, f"{ruta}.{k}" if ruta else k)]
+        if isinstance(obj, list):
+            if obj and all(not isinstance(x, (dict, list)) for x in obj):
+                t = " | ".join(valor_ver(x) for x in obj if valor_ver(x))
+                return [[ruta, t[:300]]] if t else []
+            return [x for n, v in enumerate(obj, 1) for x in plano(v, f"{ruta}[{n}]")]
+        t = valor_ver(obj)
+        return [[ruta, t]] if t else []
+    SIN_VER = {"id", "codCpe", "numRuc", "codTipoCpe", "numSerie", "numCpe", "codEstado", "desEstado", "desTipoCpe", "auditoria"}
+    BIEN_TABLA = {"numOrden", "codBien", "desBien", "numCantidad", "codUniMedida", "desUniMedida"}
+
+    def ver_guia(de, campos_excel=None):
+        t = dict(de.get("traslado") or {})
+        bienes = [[valor_ver(b.get("numOrden")) or str(n), valor_ver(b.get("codBien")), limpio(b.get("desBien"))[:500],
+                   valor_ver(b.get("numCantidad")), valor_ver(b.get("desUniMedida") or b.get("codUniMedida")),
+                   [x for k, v in b.items() if k not in BIEN_TABLA for x in plano(v, k)]]
+                  for n, b in enumerate(t.pop("bien", None) or [], 1) if isinstance(b, dict)]
+        campos = campos_excel if campos_excel else plano({**{k: v for k, v in de.items() if k not in SIN_VER and k != "traslado"}, "traslado": t})
+        return {"c": campos[:400], "b": bienes}
     por, meta = {}, {"archivos": [], "busquedas": {}}
     for ruta in rutas:
         if ruta.lower().endswith((".xlsx", ".xlsm")):
@@ -702,7 +763,7 @@ def leer_guias(rutas, r_ubi):
                 "p": lugar(t.get("partida")), "l": lugar(t.get("llegada")), "bienes": bienes[:10], "nb": len(t.get("bien") or []),
                 "docs": docs, "placas": [str(v.get("numPlaca")) for v in t.get("vehiculo") or [] if v.get("numPlaca")],
                 "peso": f"{peso:g} {t.get('codUnidadMedidaPb') or ''}".strip() if isinstance(peso, (int, float)) else "",
-                "casos": casos, "_det": bool(de)}
+                "casos": casos, "_det": bool(de), **({"ver": ver_guia(de, g.get("ver_c"))} if de else {})}
     guias = sorted(por.values(), key=lambda g: (g["f"], g["clave"]))
     for g in guias:
         for c in g["casos"]:
