@@ -374,7 +374,8 @@ def leer_control_ia(ruta, ruc):
         ct = hoja(nombre)
         if not len(ct) or "Num_DAM" not in ct or "RUC_Importador" not in ct:
             continue
-        col_res = next((c for c in ct.columns if re.sub(r"[^A-Z]", "", norm(c)) == "RESULTADOSOLICITUD"), None)
+        # «Resultado_solicitud» (columna AY); en el cuaderno real la cabecera dice «Resultado_Solicud»
+        col_res = next((c for c in ct.columns if re.sub(r"[^A-Z]", "", norm(c)).startswith("RESULTADOSOLIC")), None)
         if nombre == "ConsolidadoT" and not col_res:
             print("AVISO control IA: ConsolidadoT no tiene la columna «Resultado_solicitud»: todas sus DAM se toman con beneficio")
         for _, r in del_ruc(ct, "RUC_Importador").iterrows():
@@ -1699,7 +1700,12 @@ def main(a):
               + ", ".join(t["exp"] for t in tras_sin_serie))
     if fuera_ctl or fuera_conv:
         n_fuera = int((~mq.key.map(con_beneficio)).sum())
+        # No forman casos, pero se deja anotado lo que es materia de tributos internos: venta sin IGV a un comprador de la ZTC
+        sin_igv_ztc = [v for _, v in vend.sort_values("f").iterrows() if venta_maq.get(v.cpe) and not any(con_beneficio(k) for k in venta_maq[v.cpe])
+                       and not v.igv > 0 and zona_doc.get(v.doc) == "ZTC"]
         pat.append({"id": "fuera", "nivel": "Info", "t": "Máquinas sin beneficio: fuera del seguimiento",
+                    **({"items": [f"Vendidas sin IGV a compradores de fuera de la ZTE (tributos internos, no aduaneros): "
+                                  + "; ".join(f"{v.cpe[3:]} {v.nombre[:30].strip()} ({fecha_txt(fstr(v.f))})" for v in sin_igv_ztc)]} if sin_igv_ztc else {}),
                     "txt": f"{pl(n_fuera, 'serie de maquinaria no se sigue', 'series de maquinaria no se siguen')}: "
                            + "; ".join(x for x in (
                                pl(len(fuera_ctl), "DAM con solicitud improcedente o sin solicitud de reconocimiento", "DAM con solicitud improcedente o sin solicitud de reconocimiento") if fuera_ctl else "",

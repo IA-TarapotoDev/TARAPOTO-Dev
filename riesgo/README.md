@@ -71,7 +71,7 @@ La ficha de cada caso y de cada máquina muestra sus guías (partida y llegada c
 | Media | Indicio de salida con **traslado probable** (por tipo de máquina y fecha, por confirmar con el XML); **guía de remisión a la ZTE** (verificar que la máquina siga ahí); comprador con RUC inscrito 180 días o menos antes de comprar; comprador no habido o con RUC no activo; anulación o reemisión cerca de un traslado de maquinaria |
 | Baja | Flujo coherente: venta a no domiciliado con DAM de exportación, o salida con solicitud de traslado para la misma DAM y serie |
 
-Las ventas de máquinas sin beneficio (importadas sin código liberatorio ni TPI, o con solicitud improcedente o sin solicitud de reconocimiento) no forman casos: pueden trasladarse o venderse a la ZTC sin riesgo aduanero.
+Las ventas de máquinas sin beneficio (importadas sin código liberatorio ni TPI, o con solicitud improcedente o sin solicitud de reconocimiento) no forman casos: pueden trasladarse o venderse a la ZTC sin riesgo aduanero. Las que se vendieron sin IGV a un comprador de la ZTC quedan anotadas en el patrón «Máquinas sin beneficio» (tributos internos).
 
 Reglas de calidad:
 
@@ -132,7 +132,7 @@ Todas las opciones de `generar_datos.py` son opcionales salvo los tres archivos 
   ```
 - **Consulta múltiple de RUC** (`--consulta-ruc`, ZIP o TXT, hasta 100 RUC por consulta): actividad económica, fecha de inscripción y, si el padrón no lo trae, el domicilio. La consulta pública no muestra el domicilio de las personas naturales.
 - **XML de las facturas** (`--facturas-xml`, archivos, carpetas o ZIP, también ZIP dentro de ZIP; los 7z y RAR se descomprimen antes): se leen facturas y notas de crédito (UBL 2.1). De cada ítem se extraen la serie de la máquina y del motor, el modelo, el año y la afectación del IGV; la máquina se enlaza con su DAM y el caso se confirma o se descarta. La nota de crédito indica con exactitud la factura que anula. El comprobante completo se puede ver desde la ficha («Ver factura»).
-- **Cuaderno de control de la IA** (`--control-ia`, xlsx o xlsm): hojas ConsolidadoT (con la columna «Resultado_solicitud»), Ingreso de DAM, Traslados (con las series de cada DAM), ConsolidadoA2 y Complejidad. Las hojas de los especialistas, NCN y Hoja1 ya no se leen.
+- **Cuaderno de control de la IA** (`--control-ia`, xlsx o xlsm): hojas ConsolidadoT (con la columna «Resultado_solicitud», que en el cuaderno actual se llama «Resultado_Solicud»), Ingreso de DAM, Traslados (con las series de cada DAM), ConsolidadoA2 y Complejidad. Las hojas de los especialistas, NCN y Hoja1 ya no se leen.
 - **Transportistas vigilados** (`--transportistas`, TXT): un RUC por línea, opcionalmente seguido del nombre (`20123456789 TRANSPORTES EJEMPLO SAC`). Se ignoran las líneas vacías, las que empiezan con `#`, los repetidos y los RUC no válidos (se avisa el número de línea). Entran en la «Lista del día» de guías de remisión.
 - **Casos documentados a mano** (`--trazabilidad`, CSV con `cpe, serie_maquina, serie_motor, modelo, ubicacion_entrega, direccion_entrega, fuente, nota`; `ubicacion_entrega` como «DISTRITO, PROVINCIA, DEPARTAMENTO»): por ejemplo, la representación impresa de una factura con el lugar de entrega.
 
